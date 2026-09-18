@@ -20,16 +20,56 @@ CONFIGURATION="${CONFIGURATION:-Debug}"
 APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
 EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 FRAMEWORKS="$APP/Contents/Frameworks"
-DATA_DIR="$REPO_ROOT/build/cef-data"
+# Verification runs use their own browser data directory: Chromium encrypts
+# stored cookies and passwords with a "Chromium Safe Storage" keychain item, so
+# reusing a profile written by an earlier build makes macOS ask for keychain
+# access on launch and blocks CEF's main thread until it is answered.
+DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
 fail() { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+# Always pass the pattern with -e: a checked string may start with "-" and would
+# otherwise be read as a grep option.
 check_contains() {
-  if grep -qF "$2" "$3" 2>/dev/null; then pass "$1"; else fail "$1 (missing: $2)"; fi
+  if grep -qF -e "$2" "$3" 2>/dev/null; then pass "$1"; else fail "$1 (missing: $2)"; fi
 }
 
+# Runs a command with a hard deadline so a CEF call blocked on an unanswered
+# system dialog fails the run instead of hanging it.
+# Runs a command with a hard deadline.
+#
+# The command is started in the foreground (through caffeinate, which is
+# otherwise a no-op) rather than with "&": a GUI application launched into the
+# background from a non-interactive shell is not guaranteed to be given a
+# window by the window server, which made the application checks flaky. The
+# deadline is enforced by a watchdog that kills the process group.
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  local caffeinate=""
+  if command -v caffeinate >/dev/null 2>&1; then
+    caffeinate="caffeinate -i"
+  fi
+  $caffeinate "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$seconds" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
+if [ -n "${RESET_DATA_DIR:-}" ]; then
+  rm -rf "$DATA_DIR"
+fi
 mkdir -p "$DATA_DIR" "$WORK_DIR"
 
 if [ ! -x "$EXECUTABLE" ]; then
@@ -44,7 +84,8 @@ echo
 # ---------------------------------------------------------------------------
 echo "1-3. headless CEF lifecycle (--cef-self-test)"
 SELF_TEST_LOG="$WORK_DIR/self-test.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" "$EXECUTABLE" --cef-self-test > "$SELF_TEST_LOG" 2>&1
+NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout 60 "$EXECUTABLE" --cef-self-test \
+  > "$SELF_TEST_LOG" 2>&1
 SELF_TEST_STATUS=$?
 if [ "$SELF_TEST_STATUS" -eq 0 ]; then
   pass "CEF initialized and shut down cleanly (exit 0)"
@@ -56,9 +97,16 @@ check_contains "CEF message loop was pumped" "cef:message-pump-started" "$SELF_T
 check_contains "CEF shut down cleanly" "cef:shutdown(clean: true)" "$SELF_TEST_LOG"
 
 echo
-echo "1-2. application launch, AppKit/SwiftUI boundary and clean termination (--quit-after=5)"
+# The window has to be allowed to come up before the app is asked to quit: the
+# first launch into a fresh data directory spends a moment building the Chromium
+# profile, and terminating before the SwiftUI window exists would test nothing.
+LAUNCH_TIMEOUT=15
+echo "1-2. application launch, AppKit/SwiftUI boundary and clean termination"
+echo "     (waits for the window, then --quit-after=${LAUNCH_TIMEOUT})"
 GUI_LOG="$WORK_DIR/launch.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" "$EXECUTABLE" --quit-after=5 > "$GUI_LOG" 2>&1
+rm -rf "$DATA_DIR/launch"
+NATIVEBROWSER_DATA_DIR="$DATA_DIR/launch" run_with_timeout 60 "$EXECUTABLE" \
+  --wait-for-window --quit-after=$LAUNCH_TIMEOUT > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 if [ "$GUI_STATUS" -eq 0 ]; then
   pass "application launched and terminated with exit 0"

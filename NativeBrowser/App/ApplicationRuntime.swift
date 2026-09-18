@@ -86,9 +86,18 @@ final class ApplicationRuntime: ObservableObject {
   }
 
   func record(_ milestone: String) {
+    if milestone == "swiftui:main-window-appeared" {
+      didAppearInWindow = true
+    }
     guard isTracingEnabled else { return }
     lifecycleTrace.append(milestone)
   }
+
+  /// True once the SwiftUI window has reported that it appeared.
+  ///
+  /// Recorded whether or not the lifecycle trace is enabled, so the tooling
+  /// hooks can wait for the window instead of guessing how long launch takes.
+  private(set) var didAppearInWindow = false
 
   /// Prints the recorded milestones to standard output. Used by
   /// Scripts/verify_milestone0.sh; it is not the app's observability mechanism
@@ -174,6 +183,18 @@ final class ApplicationRuntime: ObservableObject {
   }
 
   // MARK: - Browser sessions
+
+  /// Registers an additional live session so termination closes it too.
+  ///
+  /// Milestone 3 replaces this with a session manager keyed by tab identifier;
+  /// until then the only caller is the navigation self-test, which opens a
+  /// second browser to check that a freshly created one is destroyed cleanly.
+  func registerLiveSession(_ session: BrowserSession) {
+    liveSessions.append(session)
+    session.onLifecycleEvent = { [weak self] event in
+      self?.record(event)
+    }
+  }
 
   /// Closes every live browser and pumps CEF until Chromium reports them
   /// destroyed, so that CefShutdown() never runs with a browser still alive.

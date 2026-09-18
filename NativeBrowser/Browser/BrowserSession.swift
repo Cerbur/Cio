@@ -10,9 +10,31 @@
 //
 //  This class owns no CEF type: everything goes through BrowserBridge.
 //
+//  Milestone 2 adds the UI-facing navigation state (section 20 of
+//  ARCHITECTURE.md) and the address-field editing state. The editing flag lives
+//  on the session on purpose: the "do not overwrite what the user is typing"
+//  rule is stated once, in BrowserSession.updateNavigationState, instead of
+//  being split between the toolbar and the bridge.
+//
 
 import AppKit
 import Foundation
+
+/// A snapshot of everything the navigation UI needs (ARCHITECTURE.md section
+/// 20). Produced from the CEF callbacks; never derived from a Swift-side
+/// history counter.
+struct NavigationState: Equatable {
+  /// URL of the main frame.
+  var url: URL?
+  var title = ""
+
+  var isLoading = false
+  /// 0...1 while loading; `nil` when Chromium has not reported a value.
+  var loadingProgress: Double?
+
+  var canGoBack = false
+  var canGoForward = false
+}
 
 @MainActor
 final class BrowserSession: NSObject, ObservableObject, Identifiable {
@@ -36,6 +58,27 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// True after the first load finished (successfully or not).
   private(set) var hasFinishedFirstLoad = false
 
+  /// How many Chromium browsers this session has created. Must stay at 1 for a
+  /// session's lifetime: navigation, resizing and SwiftUI re-renders must never
+  /// build a second browser (Milestone 2, section 20).
+  private(set) var browserCreationCount = 0
+
+  /// Incremented every time Chromium reports a different main-frame URL. Used
+  /// by the integration self-test to prove that a navigation actually happened
+  /// rather than merely finishing a cached load before it could be observed.
+  private(set) var mainFrameURLChangeCount = 0
+
+  /// Incremented every time Chromium starts loading. A reload does not change
+  /// the main-frame URL, so this is what proves that a reload reached Chromium.
+  private(set) var loadStartCount = 0
+
+  /// Editing state of the native address field.
+  let addressField = AddressFieldModel()
+
+  /// True while the native address field owns the keyboard. Used to keep the
+  /// toolbar's focus handling from fighting Chromium for first responder.
+  private(set) var isEditingAddressField = false
+
   /// Lifecycle milestones, for logging and the verification tooling.
   var onLifecycleEvent: ((String) -> Void)?
 
@@ -46,6 +89,20 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   init(initialURL: URL) {
     self.initialURL = initialURL
     super.init()
+  }
+
+  // MARK: - Navigation state
+
+  /// The state the navigation UI renders. Chromium is the source of truth for
+  /// every field.
+  var navigationState: NavigationState {
+    NavigationState(
+      url: url,
+      title: title,
+      isLoading: isLoading,
+      loadingProgress: loadingProgress,
+      canGoBack: canGoBack,
+      canGoForward: canGoForward)
   }
 
   // MARK: - View attachment
@@ -82,23 +139,53 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   // MARK: - Navigation
 
   func load(_ url: URL) {
+    guard !isClosed else { return }
+    AppLog.navigation.info("load \(url.absoluteString, privacy: .public)")
+    onLifecycleEvent?("navigation:load(\(url.absoluteString))")
     bridge?.loadURL(url.absoluteString)
   }
 
   func goBack() {
+    guard canGoBack else {
+      AppLog.navigation.debug("back ignored: no history entry")
+      return
+    }
+    AppLog.navigation.info("back")
+    onLifecycleEvent?("navigation:back")
     bridge?.goBack()
   }
 
   func goForward() {
+    guard canGoForward else {
+      AppLog.navigation.debug("forward ignored: no forward entry")
+      return
+    }
+    AppLog.navigation.info("forward")
+    onLifecycleEvent?("navigation:forward")
     bridge?.goForward()
   }
 
   func reload() {
+    AppLog.navigation.info("reload")
+    onLifecycleEvent?("navigation:reload")
     bridge?.reload()
   }
 
   func stop() {
+    AppLog.navigation.info("stop")
+    onLifecycleEvent?("navigation:stop")
     bridge?.stopLoading()
+  }
+
+  /// Reload when the page is idle, stop when it is loading (Milestone 2,
+  /// section 11). The decision comes from CEF's loading state, never from a
+  /// timer.
+  func reloadOrStop() {
+    if isLoading {
+      stop()
+    } else {
+      reload()
+    }
   }
 
   func focus() {
@@ -120,9 +207,68 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge.close()
   }
 
+  /// Records that the native address field gained or lost the keyboard.
+  ///
+  /// Lives here rather than in BrowserSession+Commands.swift because it mutates
+  /// a private(set) property; the command layer calls it.
+  func setAddressFieldFocused(_ focused: Bool) {
+    isEditingAddressField = focused
+    if focused {
+      // Chromium must not keep focus at the same time: otherwise both the field
+      // editor and the Chromium view believe they own the keyboard, and typing
+      // can reach the page while the caret sits in the address bar.
+      blur()
+    } else {
+      addressField.endEditing()
+    }
+  }
+
+  /// Returns the keyboard to Chromium.
+  ///
+  /// The main-queue hop matters: this is normally called from a control action
+  /// while AppKit is still completing its own focus change, and a re-entrant
+  /// first-responder change is ignored. One hop lets that settle; it is the
+  /// native way to defer to the end of the event, not a delay.
+  func focusPage() {
+    if let view = containerView {
+      view.window?.makeFirstResponder(view)
+    }
+    DispatchQueue.main.async { [weak self] in
+      guard let self, !self.isClosed else { return }
+      self.focus()
+    }
+  }
+
   private func emit(_ event: String) {
     AppLog.browser.debug("\(event, privacy: .public)")
     onLifecycleEvent?(event)
+  }
+
+  /// Applies a Chromium navigation callback to the published state.
+  ///
+  /// This is the single place where CEF state becomes UI state, so the
+  /// main-frame URL can never move the text the user is editing: the address
+  /// model only mirrors the committed URL while the field is not being edited
+  /// (Milestone 2, section 6).
+  private func updateNavigationState(
+    isLoading: Bool,
+    canGoBack: Bool,
+    canGoForward: Bool
+  ) {
+    self.isLoading = isLoading
+    self.canGoBack = canGoBack
+    self.canGoForward = canGoForward
+    if isLoading {
+      didStartLoading = true
+      loadStartCount += 1
+      loadingProgress = 0
+    } else {
+      loadingProgress = 1
+      if didStartLoading, !hasFinishedFirstLoad {
+        hasFinishedFirstLoad = true
+        emit("browser:first-load-finished(title=\(self.title), url=\(self.url?.absoluteString ?? ""))")
+      }
+    }
   }
 }
 
@@ -143,20 +289,32 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 
 extension BrowserSession: BrowserBridgeDelegate {
   func browserBridgeDidCreateBrowser(_ bridge: BrowserBridge) {
+    browserCreationCount += 1
     hasBrowser = true
     containerView?.setBrowserAttached(true)
-    emit("browser:created")
+    emit("browser:created(count=\(browserCreationCount))")
     // Clicking and typing must reach the page without an extra click first
     // (ARCHITECTURE.md section 18). CEF takes focus from there on.
     bridge.setFocus(true)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateTitle title: String) {
+    guard self.title != title else { return }
     self.title = title
+    AppLog.navigation.debug("title changed: \(title, privacy: .public)")
+    onLifecycleEvent?("navigation:title(\(title))")
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
-    self.url = URL(string: url)
+    let value = URL(string: url)
+    // Chromium repeats the main-frame URL on several events; only act when it
+    // actually changed so the log and the address field stay quiet.
+    guard value != self.url else { return }
+    self.url = value
+    mainFrameURLChangeCount += 1
+    addressField.applyBrowserURL(value)
+    AppLog.navigation.debug("main-frame URL changed: \(url, privacy: .public)")
+    onLifecycleEvent?("navigation:url(\(url))")
   }
 
   func browserBridge(
@@ -165,19 +323,8 @@ extension BrowserSession: BrowserBridgeDelegate {
     canGoBack: Bool,
     canGoForward: Bool
   ) {
-    self.isLoading = isLoading
-    self.canGoBack = canGoBack
-    self.canGoForward = canGoForward
-    if isLoading {
-      didStartLoading = true
-      loadingProgress = 0
-    } else {
-      loadingProgress = 1
-      if didStartLoading, !hasFinishedFirstLoad {
-        hasFinishedFirstLoad = true
-        emit("browser:first-load-finished(title=\(self.title), url=\(self.url?.absoluteString ?? ""))")
-      }
-    }
+    updateNavigationState(
+      isLoading: isLoading, canGoBack: canGoBack, canGoForward: canGoForward)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateLoadingProgress progress: Double) {

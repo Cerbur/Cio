@@ -19,6 +19,10 @@ if [ ! -f "$REPO_ROOT/ThirdParty/CEF/include/cef_app.h" ]; then
 fi
 
 xcodegen generate
+# XcodeGen's generated scheme has no TestAction, so the shared scheme from
+# SchemeTemplates/ (which includes the Milestone 2 unit tests) is installed
+# before xcodebuild reads it.
+"$REPO_ROOT/Scripts/sync_scheme.sh"
 
 xcodebuild \
   -project "$REPO_ROOT/NativeBrowser.xcodeproj" \

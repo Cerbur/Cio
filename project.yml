@@ -50,6 +50,9 @@ targets:
         excludes:
           - "Resources/Info.plist"
           - "Helper/**"
+          # The unit tests are their own target (NavigationInput.swift is
+          # compiled into both).
+          - "Tests/**"
     settings:
       base:
         PRODUCT_NAME: NativeBrowser
@@ -68,6 +71,9 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
     scheme:
       configVariants: []
+      # The scheme is committed as a template (SchemeTemplates/) because the
+      # Milestone 2 unit tests need a TestAction; XcodeGen's generated scheme
+      # has none, and a build phase refreshes the copy after every generate.
     dependencies:
       # Build ordering only: the helper executable is copied into the
       # "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh,
@@ -82,6 +88,23 @@ targets:
       - name: "Package CEF runtime (framework + helper applications)"
         path: Scripts/package_cef_runtime.sh
         basedOnDependencyAnalysis: false
+
+  # Milestone 2 unit tests. NavigationInput.swift is compiled into this target
+  # directly (see its "Keep this file dependency free" note), so the tests do
+  # not need the application, do not link CEF and never start Chromium. The
+  # target deliberately has no TEST_HOST: it is a standalone logic test bundle.
+  NativeBrowserTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: NativeBrowser/Tests
+      - path: NativeBrowser/Browser/NavigationInput.swift
+    settings:
+      base:
+        PRODUCT_NAME: NativeBrowserTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowserTests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
 
   # Chromium sub-process entry point. The binary produced here is copied into
   # the "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh.

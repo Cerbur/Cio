@@ -67,16 +67,40 @@ CefScopedLibraryLoader *gLibraryLoader = nullptr;
 std::vector<std::string> gArguments;
 std::vector<char *> gArgumentPointers;
 
+/// Chromium switch that keeps the browser process away from the login
+/// keychain.
+///
+/// Chromium stores the key it uses for cookie and password encryption in a
+/// "Chromium Safe Storage" item in the login keychain. Development builds here
+/// are ad-hoc signed (CODE_SIGN_IDENTITY "-"), so every rebuild produces a
+/// binary with a different code signature; macOS then treats the lookup as a
+/// request from a new application and shows a keychain authorization dialog.
+/// That dialog is modal to the *process*: it blocks CEF's main thread, so the
+/// application cannot create its window or pump its message loop until someone
+/// answers it, which silently hangs both manual runs and the milestone
+/// verification scripts.
+///
+/// With this switch Chromium uses an in-memory key instead, so no keychain item
+/// is read or written and the dialog never appears. Nothing is lost for the
+/// current milestones: CefSettings already sets persist_session_cookies = false,
+/// and password storage / account sync are explicitly out of scope
+/// (ARCHITECTURE.md section 2). Revisit when the browser is properly signed for
+/// distribution (section 34) or before saved passwords are implemented.
+constexpr char kMockKeychainSwitch[] = "use-mock-keychain";
+
 void BuildMainArgs() {
   if (!gArgumentPointers.empty()) {
     return;
   }
   NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
-  gArguments.reserve(arguments.count);
+  gArguments.reserve(arguments.count + 1);
   for (NSString *argument in arguments) {
     const char *utf8 = argument.UTF8String;
     gArguments.emplace_back(utf8 != nullptr ? utf8 : "");
   }
+  // Appended rather than replaced: a switch already present on the command line
+  // wins, because Chromium keeps the last occurrence of a switch.
+  gArguments.emplace_back(std::string("--") + kMockKeychainSwitch);
   gArgumentPointers.reserve(gArguments.size());
   for (std::string &argument : gArguments) {
     gArgumentPointers.push_back(argument.data());

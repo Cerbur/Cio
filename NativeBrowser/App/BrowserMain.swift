@@ -24,6 +24,12 @@ enum BrowserMain {
       exit(subprocessExitCode)
     }
 
+    // The address-field parser needs neither CEF nor a run loop, so it is
+    // answered before Chromium is initialized.
+    if NavigationInputProbe.isRequested() {
+      NavigationInputProbe.run()
+    }
+
     let runtime = ApplicationRuntime.shared
     if isVerificationRun {
       // Records the startup/shutdown milestones that Scripts/verify_milestone0.sh
@@ -38,8 +44,12 @@ enum BrowserMain {
     if runBrowserSelfTestIfRequested(runtime: runtime) {
       return
     }
+    if CommandLine.arguments.contains("--navigation-self-test") {
+      // Milestone 2 integration check. The result is this process's exit code.
+      exit(NavigationSelfTest.run(runtime: runtime))
+    }
 
-    scheduleAutomaticTerminationIfRequested()
+    scheduleToolingHooksIfRequested(runtime: runtime)
 
     // Runs the NSApplication run loop until the app terminates.
     NativeBrowserApp.main()
@@ -52,7 +62,11 @@ enum BrowserMain {
   private static var isVerificationRun: Bool {
     CommandLine.arguments.contains("--cef-self-test")
       || CommandLine.arguments.contains("--browser-self-test")
+      || CommandLine.arguments.contains("--navigation-self-test")
+      || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
+      || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }
+      || CommandLine.arguments.contains("--wait-for-window")
   }
 
   /// Milestone 1 integration check: builds the real window and container, loads
@@ -130,22 +144,116 @@ enum BrowserMain {
     exit(loaded && closed ? 0 : 2)
   }
 
-  /// Test hook: "--quit-after=<seconds>" terminates the application through the
-  /// normal AppKit termination path, which exercises the CEF shutdown sequence.
-  private static func scheduleAutomaticTerminationIfRequested() {
-    let prefix = "--quit-after="
+  // MARK: - Tooling hooks
+  //
+  // The milestone scripts drive the real application instead of a synthetic
+  // window, so they need to be able to wait for something to *happen* rather
+  // than guess a delay. These switches are inert unless they are passed:
+  //
+  //   --wait-for-window    do not start the --quit-after countdown until the
+  //                        SwiftUI window exists (the first launch into a fresh
+  //                        data directory spends a moment building Chromium's
+  //                        profile)
+  //   --navigate-after=N   navigate the live browser (BrowserBridge -loadURL: ->
+  //                        CefFrame::LoadURL) N seconds later
+  //   --navigate-wait      do not start the countdown until that navigation has
+  //                        been requested
+
+  /// What the tooling hook sequence is waiting for. Held in a static because
+  /// the run loop timer that drives it must not capture @MainActor state
+  /// (Swift 6 rejects sending it into the timer's closure).
+  private enum ToolingPhase {
+    /// Waiting for the SwiftUI window before the countdown starts.
+    case waitingForWindow
+    /// Waiting out --navigate-after before navigating.
+    case waitingToNavigate
+    /// The navigation has been requested; waiting out --quit-after.
+    case waitingForQuitAfterNavigation
+    /// No navigation requested; waiting out --quit-after.
+    case countingDownToQuit
+    case done
+  }
+
+  private static var toolingPhase = ToolingPhase.done
+  private static var toolingNavigateDelay: TimeInterval?
+  private static var toolingQuitDelay: TimeInterval = 0
+  private static var toolingDeadline = Date.distantPast
+
+  private static func scheduleToolingHooksIfRequested(runtime: ApplicationRuntime) {
+    let quitPrefix = "--quit-after="
     guard
-      let argument = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }),
-      let seconds = TimeInterval(argument.dropFirst(prefix.count)), seconds > 0
+      let quitArgument = CommandLine.arguments.first(where: { $0.hasPrefix(quitPrefix) }),
+      let quitDelay = TimeInterval(quitArgument.dropFirst(quitPrefix.count)), quitDelay > 0
     else { return }
 
-    AppLog.app.info("scheduling automatic termination in \(seconds, privacy: .public)s")
-    let timer = Timer(timeInterval: seconds, repeats: false) { _ in
+    let navigatePrefix = "--navigate-after="
+    toolingNavigateDelay = CommandLine.arguments
+      .first { $0.hasPrefix(navigatePrefix) }
+      .flatMap { TimeInterval($0.dropFirst(navigatePrefix.count)) }
+    toolingQuitDelay = quitDelay
+    toolingDeadline = Date.distantPast
+
+    let waitForWindow = CommandLine.arguments.contains("--wait-for-window")
+    if waitForWindow {
+      toolingPhase = .waitingForWindow
+      AppLog.app.info("tooling: waiting for the SwiftUI window before starting the countdown")
+    } else if let delay = toolingNavigateDelay {
+      toolingPhase = .waitingToNavigate
+      toolingDeadline = Date().addingTimeInterval(delay)
+    } else {
+      toolingPhase = .countingDownToQuit
+      toolingDeadline = Date().addingTimeInterval(toolingQuitDelay)
+    }
+
+    // One repeating timer drives the whole sequence: wait for the window, then
+    // for the navigation, then terminate. A repeating timer is used instead of
+    // chained one-shot timers so that no @MainActor timer has to be captured by
+    // another closure.
+    let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
       MainActor.assumeIsolated {
-        NSApp.terminate(nil)
+        toolingTick(runtime: runtime)
       }
     }
     RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private static func toolingTick(runtime: ApplicationRuntime) {
+    switch toolingPhase {
+    case .done:
+      return
+
+    case .waitingForWindow:
+      guard runtime.didAppearInWindow else { return }
+      AppLog.app.info("tooling: the SwiftUI window appeared")
+      if let delay = toolingNavigateDelay {
+        toolingPhase = .waitingToNavigate
+        toolingDeadline = Date().addingTimeInterval(delay)
+      } else {
+        toolingPhase = .countingDownToQuit
+        toolingDeadline = Date().addingTimeInterval(toolingQuitDelay)
+      }
+
+    case .waitingToNavigate:
+      guard Date() >= toolingDeadline else { return }
+      navigateForTooling(runtime: runtime)
+      toolingPhase = .waitingForQuitAfterNavigation
+      toolingDeadline = Date().addingTimeInterval(toolingQuitDelay)
+
+    case .waitingForQuitAfterNavigation, .countingDownToQuit:
+      guard Date() >= toolingDeadline else { return }
+      toolingPhase = .done
+      AppLog.app.info("tooling: terminating the application")
+      NSApp.terminate(nil)
+    }
+  }
+
+  /// Performs a real main-frame navigation in the running application
+  /// (BrowserBridge -loadURL: -> CefFrame::LoadURL), so the quit path can be
+  /// exercised on a browser that has actually navigated.
+  private static func navigateForTooling(runtime: ApplicationRuntime) {
+    guard let url = URL(string: "https://example.com/") else { return }
+    AppLog.navigation.info("tooling: navigating the live application")
+    runtime.browserSession.load(url)
   }
 
   /// Headless CEF lifecycle check used by tooling. Running

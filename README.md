@@ -3,8 +3,9 @@
 A macOS-only Chromium browser shell: **SwiftUI + AppKit + Objective-C++ + CEF**
 (Chromium Embedded Framework). No Electron, no WKWebView, no Chromium fork.
 
-This repository currently implements **Milestone 0 — Project Bootstrapping**
-and **Milestone 1 — One Chromium Tab** from `ARCHITECTURE.md`:
+This repository currently implements **Milestone 0 — Project Bootstrapping**,
+**Milestone 1 — One Chromium Tab** and **Milestone 2 — Navigation UI** from
+`ARCHITECTURE.md`:
 
 Milestone 0:
 
@@ -24,8 +25,21 @@ Milestone 1:
 - page receives mouse and keyboard focus (clicking and typing work in the page)
 - closing the application destroys the browser before CEF shuts down
 
-Tabs, sidebar, command bar, history, downloads and spaces are **not** part of
-these milestones.
+Milestone 2:
+
+- native navigation toolbar: Back, Forward, Reload/Stop and an address field
+- address/search parser (`NavigationInput.swift`) with a Google search fallback
+- main-frame URL and page title synchronisation from CEF
+- `canGoBack` / `canGoForward` taken from CEF, driving button enablement
+- one control that reloads while idle and stops while loading
+- ⌘L (focus address field, select all), ⌘R (reload), ⌘[ / ⌘] (back/forward)
+- separate committed-URL and edit-buffer state, so a URL callback can never
+  overwrite what the user is typing
+- Chinese IME works in the address field (native `NSTextField`, no custom key
+  interception)
+
+Tabs, sidebar, Spaces, history, downloads, session restore and the Liquid Glass
+styling are **not** part of these milestones.
 
 ---
 
@@ -66,7 +80,25 @@ open NativeBrowser.xcodeproj
 ```bash
 Scripts/verify_milestone0.sh    # CEF lifecycle, framework, helpers, signature
 Scripts/verify_milestone1.sh    # browser content, callbacks, resize, clean quit
+Scripts/verify_milestone2.sh    # parser, navigation state, shortcuts, navigation, clean quit
 ```
+
+Milestone 2 is checked end to end:
+
+1. the parser unit tests run through `xcodebuild test` (they never start CEF),
+2. `NativeBrowser --parse-navigation-input=...` checks the parser inside the
+   shipped binary, without initializing Chromium,
+3. `NativeBrowser --navigation-self-test` drives the real navigation stack:
+   Google loads, a Chinese query is submitted through the session's address-field
+   path, a direct URL navigation updates the address field, Back / Forward /
+   Reload / Stop reach CEF, `canGoBack` / `canGoForward` come from Chromium, and
+   the browser is created exactly once and destroyed before CEF shuts down,
+4. `NativeBrowser --quit-after=10` confirms the real application still quits
+   cleanly with the toolbar in place.
+
+Everything that needs a human at the keyboard (⌘L focus, select-all, IME
+composition, button enablement as drawn, Escape, resize feel) is printed by the
+script as **REQUIRES MANUAL VERIFICATION** and is not claimed as tested.
 
 Milestone 1 is checked end to end:
 
@@ -85,10 +117,24 @@ Manual verification:
 open build/DerivedData/Build/Products/Debug/NativeBrowser.app
 ```
 
-Expected: a 1280x800 window showing google.com with a thin status line (page
-title, URL, loading state) below it. Scrolling, clicking and typing work in the
-page; resizing the window re-lays out the page; ⌘Q quits immediately and
-cleanly.
+Expected: a 1280x800 window showing google.com with a native navigation
+toolbar (← → ↻/× and the address field) above it and a thin title line below it.
+The address field shows the main-frame URL; Back and Forward are enabled once
+there is somewhere to go; the third control reloads while idle and stops while
+loading. ⌘L focuses the address field and selects all of it, ⌘R reloads, ⌘[ and
+⌘] go back and forward, Return navigates or searches, Escape cancels an edit.
+Scrolling, clicking and typing work in the page; resizing the window re-lays out
+the page below the toolbar; ⌘Q quits immediately and cleanly.
+
+The Milestone 2 manual checklist (startup, direct URL, search, Chinese IME,
+Back/Forward, reload, stop, focus, redirects, resize, shutdown) is printed by
+`Scripts/verify_milestone2.sh` as **REQUIRES MANUAL VERIFICATION**; those items
+were not automated.
+
+> Note on `xcodebuild test`: this sandbox cannot give the test runner a pseudo
+> terminal, so `Scripts/verify_milestone2.sh` falls back to
+> `xcodebuild build-for-testing` plus `xcrun xctest` on the produced bundle.
+> That runs the same XCTest bundle, just without Xcode's launcher.
 
 The Milestone 0 script checks the CEF lifecycle, framework and helpers:
 
@@ -114,6 +160,9 @@ NativeBrowser/
     AppDelegate.swift          # AppKit lifecycle, message pump start/stop
     ApplicationRuntime.swift   # app-scoped CEF runtime state and message pump
     Logging.swift              # OSLog categories
+    AppCommands.swift          # browser menu commands: command-L / R / [ / ]
+    NavigationSelfTest.swift   # Milestone 2 integration self-test (--navigation-self-test)
+    NavigationInputProbe.swift # parser probe in the shipped binary (--parse-navigation-input=)
   Bridge/
     CEFProcessHost.h/.mm       # Objective-C++ CEF lifecycle boundary (no C++ types leak to Swift)
     BrowserBridge.h/.mm        # Objective-C++ boundary around one Chromium browser
@@ -122,22 +171,35 @@ NativeBrowser/
     NativeBrowser-Bridging-Header.h
   Browser/
     BrowserSession.swift       # runtime session for one browser (not persisted)
+    BrowserSession+Commands.swift # address-field submit/cancel and focus hand-off
+    NavigationInput.swift      # address/search parser (Foundation only, unit tested)
     ChromiumView.swift         # NSViewRepresentable wrapper
     ChromiumContainerView.swift# AppKit container that hosts the Chromium view
   Helper/
     HelperMain.mm              # main() of the Chromium helper processes
-  UI/Main/
-    MainWindowView.swift       # Chromium view + read-only status line
+  Tests/
+    NavigationInputTests.swift # parser unit tests (no CEF, no app host)
+  UI/
+    Main/MainWindowView.swift  # toolbar + Chromium view + title line
+    CommandBar/
+      BrowserToolbarView.swift # Back / Forward / Reload-Stop / address field
+      AddressField.swift       # native NSTextField bridge (IME + focus + select-all)
+      AddressFieldModel.swift  # committed URL vs. edit buffer
+      BrowserCommandNotifications.swift # command-L focus plumbing
   Resources/
     Info.plist
+SchemeTemplates/
+  NativeBrowser.xcscheme       # shared scheme with the unit-test TestAction
 Scripts/
   fetch_cef.sh                 # download + checksum + extract CEF
   build_cef_wrapper.sh         # build libcef_dll_wrapper.a from libcef_dll sources
   compile_cef_wrapper_source.sh# per-file wrapper compile (driven by xargs -P)
   package_cef_runtime.sh       # Xcode build phase: framework + helper apps + nested signing
   build.sh                     # xcodegen + xcodebuild
+  sync_scheme.sh               # install SchemeTemplates/ into the generated project
   verify_milestone0.sh         # Milestone 0 acceptance checks
   verify_milestone1.sh         # Milestone 1 acceptance checks
+  verify_milestone2.sh         # Milestone 2 acceptance checks
 project.yml                    # XcodeGen project definition (source of truth)
 ```
 
@@ -215,6 +277,68 @@ project.yml                    # XcodeGen project definition (source of truth)
     `OnBeforePopup` loads the target URL in the existing browser instead.
     Milestone 3 routes popups to a new tab (ARCHITECTURE.md section 21).
 
+### Milestone 2
+
+14. **Navigation state is a snapshot, not a second source of truth.**
+    `BrowserSession.navigationState` builds a `NavigationState` value from the
+    CEF callbacks; the toolbar renders that and calls the session's methods.
+    Nothing in the UI keeps its own history or loading state, so `canGoBack` /
+    `canGoForward` are always what Chromium reported.
+
+15. **The address field separates the committed URL from the edit buffer.**
+    `AddressFieldModel` holds `committedURL` (last main-frame URL from CEF) and
+    `editText` (what the user is typing). A URL callback may only write
+    `editText` while `isEditing == false`. That is the whole rule — a flag, not
+    a timer — so an unrelated callback can never move the text under the
+    cursor, and cancelling or submitting returns the field to browser state.
+
+16. **The address field is AppKit (`NSTextField`), not a SwiftUI `TextField`.**
+    AppKit's field editor is where macOS handles IME composition (marked text,
+    candidate window, commit), and it can be made first responder and
+    select-all'ed from outside SwiftUI — both of which ⌘L and Chinese input
+    need. No key events are intercepted anywhere in the application.
+
+17. **Browser shortcuts are menu key equivalents.** ⌘L / ⌘R / ⌘[ / ⌘] are items
+    in the main menu, which `NSMenu` matches *before* the first responder sees
+    the event. That is what makes them work while Chromium owns the keyboard,
+    without polling for key events. The shell therefore owns these chords and
+    Chromium's own accelerators never see them.
+
+18. **The Chromium view is never rebuilt.** `ChromiumView` is keyed by the
+    session and holds no changing inputs; URL, title, loading and address-text
+    updates only mutate `@Published` state. `BrowserSession.browserCreationCount`
+    exists so the integration test can assert that navigations create exactly
+    one browser.
+
+19. **The parser is dependency free and unit tested.**
+    `NavigationInput.swift` imports Foundation only and is compiled into both
+    the app and the test target, so `xcodebuild build-for-testing` produces a
+    test bundle that never starts CEF. `NativeBrowser
+    --parse-navigation-input=...` re-checks the same parser inside the shipped
+    binary, without initializing Chromium.
+
+### Troubleshooting: the "Chromium Safe Storage" keychain prompt
+
+CEF/Chromium encrypts stored cookies and passwords through a
+`Chromium Safe Storage` item in the login keychain. Because development builds
+are ad-hoc signed (`CODE_SIGN_IDENTITY: "-"`), every rebuild produces a binary
+with a different signature, and macOS treats the request as coming from a new
+application: it shows an authorization dialog whose answer **blocks CEF's main
+thread** until it is answered. While it is on screen the app cannot create its
+window, the CEF message pump cannot run, and any verification run appears to
+hang.
+
+Deal with it once, in either of these ways:
+
+- click **Always Allow** the first time the dialog appears, which adds the
+  binary to the item's ACL, or
+- delete the stale item so Chromium creates a fresh one:
+  `security delete-generic-password -s "Chromium Safe Storage"`.
+
+The verification scripts guard against the hang (they run the app under a hard
+timeout and use their own data directory) but they cannot dismiss a system
+dialog. If a run fails with everything timing out, look for that dialog first.
+
 14. **Development-only sandbox setting.** The helper applications are not built
     with `CEF_USE_SANDBOX`, so `CefSettings.no_sandbox` is set to true, matching
     CEF's own `-DUSE_SANDBOX=OFF` builds: a sandboxed child expects a bootstrap
@@ -236,7 +360,7 @@ so it does not need to be edited for a version bump.
 
 ## Not implemented yet
 
-Tabs, sidebar, spaces, command bar (back/forward/reload UI, ⌘L), history,
-downloads, session restore, Liquid Glass styling — see `ARCHITECTURE.md`
-milestones 2-8. The status line below the browser view is a read-only
-placeholder for the Milestone 2 command bar.
+Tabs, sidebar, Spaces, history, downloads, session restore and Liquid Glass
+styling — see `ARCHITECTURE.md` milestones 3-8. The title line below the
+browser view stays until Milestone 3 gives each tab its own title; the toolbar
+is deliberately plain until Milestone 5.
