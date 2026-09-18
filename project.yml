@@ -1,0 +1,101 @@
+# XcodeGen specification for NativeBrowser.
+#
+#   xcodegen generate          # (re)create NativeBrowser.xcodeproj
+#   Scripts/fetch_cef.sh       # download the CEF distribution (once)
+#   xcodebuild -project NativeBrowser.xcodeproj -scheme NativeBrowser build
+#
+# The generated .xcodeproj is not committed; project.yml is the source of truth.
+#
+# CEF integration notes:
+#   * The app does NOT link "Chromium Embedded Framework.framework" directly.
+#     On macOS the framework is loaded at runtime from the app bundle by
+#     CefScopedLibraryLoader, which is required by the Chromium sandbox and is
+#     how the CEF binary distribution expects clients to start up.
+#   * Only libcef_dll_wrapper.a (built by Scripts/build_cef_wrapper.sh) is linked.
+#   * The bundle layout (framework + "NativeBrowser Helper*.app") is assembled by
+#     Scripts/package_cef_runtime.sh after the app is linked and before Xcode
+#     signs it.
+name: NativeBrowser
+
+options:
+  bundleIdPrefix: com.example
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  groupSortPosition: top
+  deploymentTarget:
+    macOS: "26.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CLANG_CXX_LANGUAGE_STANDARD: "c++20"
+    CLANG_CXX_LIBRARY: "libc++"
+    CLANG_ENABLE_OBJC_ARC: YES
+    GCC_C_LANGUAGE_STANDARD: "gnu17"
+    # The CEF wrapper build and the bundle packaging steps write outside the
+    # target's build directory, so script sandboxing stays off.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    DEAD_CODE_STRIPPING: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+
+targets:
+  NativeBrowser:
+    type: application
+    platform: macOS
+    sources:
+      - path: NativeBrowser
+        excludes:
+          - "Resources/Info.plist"
+          - "Helper/**"
+    settings:
+      base:
+        PRODUCT_NAME: NativeBrowser
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowser
+        INFOPLIST_FILE: NativeBrowser/Resources/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: NativeBrowser/Bridge/NativeBrowser-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/ThirdParty/CEF"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/ThirdParty"
+        OTHER_LDFLAGS:
+          - "-lcef_dll_wrapper"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+        COMBINE_HIDPI_IMAGES: YES
+    scheme:
+      configVariants: []
+    dependencies:
+      # Build ordering only: the helper executable is copied into the
+      # "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh,
+      # so it must not be embedded into the app's Resources.
+      - target: NativeBrowserHelper
+        embed: false
+    preBuildScripts:
+      - name: "Build libcef_dll_wrapper"
+        path: Scripts/build_cef_wrapper.sh
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - name: "Package CEF runtime (framework + helper applications)"
+        path: Scripts/package_cef_runtime.sh
+        basedOnDependencyAnalysis: false
+
+  # Chromium sub-process entry point. The binary produced here is copied into
+  # the "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh.
+  NativeBrowserHelper:
+    type: tool
+    platform: macOS
+    sources:
+      - path: NativeBrowser/Helper
+    settings:
+      base:
+        PRODUCT_NAME: NativeBrowserHelper
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/ThirdParty/CEF"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/ThirdParty"
+        OTHER_LDFLAGS:
+          - "-lcef_dll_wrapper"

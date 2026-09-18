@@ -1,0 +1,1996 @@
+# Native Chromium Browser for macOS — Codex Implementation Spec
+
+> Goal: Build a macOS-only Chromium browser shell using Apple native UI, with an Arc-like sidebar layout and Apple Liquid Glass visual language.
+>
+> Primary stack: **SwiftUI + AppKit + Objective-C++ + CEF (Chromium Embedded Framework)**.
+>
+> This document is intended to be directly consumed by Codex as an implementation specification.
+
+---
+
+## 1. Product Goal
+
+Build a usable macOS desktop browser with:
+
+- Native Apple UI
+- Liquid Glass visual style
+- Arc-like vertical sidebar
+- Chromium rendering engine via CEF
+- Multiple tabs
+- Spaces / tab groups
+- Native keyboard shortcuts
+- Navigation controls
+- Basic history
+- Downloads
+- Session restore
+- macOS-native window behavior
+
+The browser should feel like a native macOS application instead of an Electron application.
+
+The first milestone is **not** intended to replace Chrome completely.
+
+---
+
+## 2. Non-Goals for MVP
+
+Do **not** implement these in the first version:
+
+- Chrome Web Store extensions
+- Chrome account login
+- Chrome Sync
+- Password manager
+- Full browser profile management UI
+- Ad blocker
+- Arc Boost
+- Vertical split view
+- Tab suspension
+- AI assistant
+- Browser automation / agent
+- Custom Chromium fork
+- Off-screen rendering (OSR)
+- Cross-platform support
+
+These may be added later.
+
+---
+
+## 3. Target Platform
+
+### Minimum target
+
+- macOS 26+
+- Apple Silicon first
+- Xcode latest stable
+- Swift latest stable
+- SwiftUI + AppKit interoperability
+
+Intel support is optional.
+
+---
+
+## 4. Architecture
+
+Use the following high-level architecture:
+
+```text
+┌─────────────────────────────────────────────┐
+│                SwiftUI UI                   │
+│                                             │
+│ Sidebar / Spaces / Tabs / Command Bar       │
+│ Settings / History / Downloads              │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│                 AppKit                      │
+│                                             │
+│ NSWindow / NSView / focus / keyboard        │
+│ browser container / native event handling   │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│          Objective-C++ Bridge               │
+│                                             │
+│ BrowserBridge.mm                            │
+│ CEF lifecycle adapter                       │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────┐
+│                   CEF                       │
+│                                             │
+│ Chromium / Blink / V8 / Network / GPU       │
+└─────────────────────────────────────────────┘
+```
+
+### Key architecture rule
+
+Swift code must **not** directly own or expose CEF C++ objects.
+
+Do not expose these types into Swift:
+
+```cpp
+CefBrowser
+CefClient
+CefFrame
+CefRequest
+CefBrowserHost
+```
+
+All CEF access must go through an Objective-C compatible abstraction layer.
+
+---
+
+## 5. Recommended Project Structure
+
+Use a structure similar to:
+
+```text
+NativeBrowser/
+├── App/
+│   ├── NativeBrowserApp.swift
+│   ├── AppDelegate.swift
+│   └── AppEnvironment.swift
+│
+├── Domain/
+│   ├── Models/
+│   │   ├── BrowserTab.swift
+│   │   ├── BrowserSpace.swift
+│   │   ├── NavigationState.swift
+│   │   └── DownloadItem.swift
+│   │
+│   ├── Services/
+│   │   ├── TabService.swift
+│   │   ├── SpaceService.swift
+│   │   ├── HistoryService.swift
+│   │   └── SessionService.swift
+│
+├── Browser/
+│   ├── BrowserController.swift
+│   ├── BrowserSession.swift
+│   ├── ChromiumView.swift
+│   ├── ChromiumContainerView.swift
+│   └── BrowserEvent.swift
+│
+├── Bridge/
+│   ├── BrowserBridge.h
+│   ├── BrowserBridge.mm
+│   ├── CEFAppDelegate.h
+│   ├── CEFAppDelegate.mm
+│   ├── CEFClientHandler.h
+│   └── CEFClientHandler.mm
+│
+├── UI/
+│   ├── Main/
+│   │   ├── MainWindowView.swift
+│   │   └── BrowserContentView.swift
+│   │
+│   ├── Sidebar/
+│   │   ├── SidebarView.swift
+│   │   ├── TabRowView.swift
+│   │   └── SpaceSwitcherView.swift
+│   │
+│   ├── CommandBar/
+│   │   ├── CommandBarView.swift
+│   │   └── AddressField.swift
+│   │
+│   ├── History/
+│   ├── Downloads/
+│   └── Settings/
+│
+├── Persistence/
+│   ├── PersistenceController.swift
+│   ├── HistoryStore.swift
+│   └── SessionStore.swift
+│
+├── Resources/
+│
+└── Frameworks/
+    └── Chromium Embedded Framework.framework
+```
+
+The exact file names may differ, but keep these responsibilities separate.
+
+---
+
+## 6. Domain Model
+
+CEF browser instances must not be the application domain model.
+
+Define an independent tab model.
+
+Example:
+
+```swift
+struct BrowserTab: Identifiable, Codable, Equatable {
+    let id: UUID
+
+    var title: String
+    var url: URL?
+    var faviconURL: URL?
+
+    var isLoading: Bool
+    var loadingProgress: Double
+
+    var canGoBack: Bool
+    var canGoForward: Bool
+
+    var createdAt: Date
+    var lastActivatedAt: Date
+}
+```
+
+Space model:
+
+```swift
+struct BrowserSpace: Identifiable, Codable, Equatable {
+    let id: UUID
+
+    var name: String
+    var tabIDs: [UUID]
+    var selectedTabID: UUID?
+}
+```
+
+Runtime CEF objects belong in a separate layer:
+
+```text
+BrowserTab
+    │
+    ▼
+BrowserSession
+    │
+    ▼
+CEF Browser
+```
+
+`BrowserSession` is runtime-only and should not be Codable.
+
+---
+
+## 7. Browser Session Model
+
+Create one runtime browser session for each active Chromium tab.
+
+Example interface:
+
+```swift
+final class BrowserSession: ObservableObject {
+    let tabID: UUID
+
+    @Published private(set) var url: URL?
+    @Published private(set) var title: String = ""
+    @Published private(set) var isLoading = false
+    @Published private(set) var loadingProgress: Double = 0
+
+    func attach(to view: NSView)
+
+    func load(_ url: URL)
+
+    func goBack()
+    func goForward()
+    func reload()
+    func stop()
+
+    func focus()
+    func blur()
+
+    func close()
+}
+```
+
+The actual implementation may internally delegate to `BrowserBridge`.
+
+---
+
+## 8. Swift / Objective-C++ Bridge
+
+Implement a narrow Objective-C compatible interface.
+
+Example:
+
+```objc
+typedef NS_ENUM(NSInteger, BrowserNavigationEventType) {
+    BrowserNavigationEventTypeDidStart,
+    BrowserNavigationEventTypeDidFinish,
+    BrowserNavigationEventTypeDidFail
+};
+
+@protocol BrowserBridgeDelegate <NSObject>
+
+- (void)browserDidUpdateTitle:(NSString *)title;
+- (void)browserDidUpdateURL:(NSString *)url;
+
+- (void)browserDidUpdateLoadingState:(BOOL)isLoading
+                          canGoBack:(BOOL)canGoBack
+                       canGoForward:(BOOL)canGoForward;
+
+- (void)browserDidUpdateLoadingProgress:(double)progress;
+
+@end
+
+@interface BrowserBridge : NSObject
+
+@property(nonatomic, weak) id<BrowserBridgeDelegate> delegate;
+
+- (instancetype)initWithParentView:(NSView *)view;
+
+- (void)loadURL:(NSString *)url;
+
+- (void)goBack;
+- (void)goForward;
+- (void)reload;
+- (void)stop;
+
+- (void)setFocus:(BOOL)focused;
+
+- (void)resizeToBounds:(NSRect)bounds;
+
+- (void)close;
+
+@end
+```
+
+Implementation lives in:
+
+```text
+BrowserBridge.mm
+```
+
+and owns CEF C++ types.
+
+### Bridge rules
+
+1. Swift must not import CEF headers.
+2. CEF callbacks should be transformed into Objective-C delegate events.
+3. UI-facing state updates must return to the main thread.
+4. Avoid exposing raw pointers.
+5. Closing a tab must correctly release the corresponding CEF browser.
+
+---
+
+## 9. CEF Integration Strategy
+
+Use **native windowed rendering**, not OSR.
+
+Expected hierarchy:
+
+```text
+SwiftUI
+  ↓
+NSViewRepresentable
+  ↓
+NSView
+  ↓
+CEF browser view
+```
+
+Example SwiftUI wrapper:
+
+```swift
+struct ChromiumView: NSViewRepresentable {
+
+    let session: BrowserSession
+
+    func makeNSView(context: Context) -> ChromiumContainerView {
+        let view = ChromiumContainerView()
+        session.attach(to: view)
+        return view
+    }
+
+    func updateNSView(
+        _ nsView: ChromiumContainerView,
+        context: Context
+    ) {
+        session.attach(to: nsView)
+    }
+}
+```
+
+The container must react correctly to resize.
+
+Prefer AppKit autoresizing or explicit resize callbacks rather than excessive SwiftUI layout hacks.
+
+---
+
+## 10. CEF Process Model
+
+Expect Chromium to use helper processes including:
+
+- Renderer
+- GPU
+- Network-related processes
+- Utility processes
+
+The final `.app` bundle must contain the CEF framework and helper apps in the layout required by CEF.
+
+Account for:
+
+```text
+NativeBrowser.app
+Contents/
+├── MacOS/
+│   └── NativeBrowser
+│
+└── Frameworks/
+    ├── Chromium Embedded Framework.framework
+    ├── NativeBrowser Helper.app
+    ├── NativeBrowser Helper (GPU).app
+    ├── NativeBrowser Helper (Renderer).app
+    └── NativeBrowser Helper (Plugin).app
+```
+
+Exact helper requirements depend on the CEF build used.
+
+Do not hard-code assumptions that prevent future CEF upgrades.
+
+---
+
+## 11. CEF Lifecycle
+
+Implement application initialization early in process startup.
+
+High-level startup sequence:
+
+```text
+Process starts
+    │
+    ├── detect CEF subprocess
+    │
+    ├── execute CEF subprocess entry if needed
+    │
+    └── otherwise continue main app
+            │
+            ▼
+        initialize CEF
+            │
+            ▼
+        initialize SwiftUI application
+```
+
+Shutdown sequence:
+
+```text
+SwiftUI app termination
+    │
+    ▼
+close browser instances
+    │
+    ▼
+wait for browser shutdown
+    │
+    ▼
+shutdown CEF
+```
+
+Shutdown correctness is important.
+
+Avoid crashes caused by terminating the process while Chromium objects still exist.
+
+---
+
+## 12. Main Window Layout
+
+Target layout:
+
+```text
+┌────────────────────────────────────────────────┐
+│                                                │
+│ ┌───────────────┐ ┌──────────────────────────┐ │
+│ │               │ │                          │ │
+│ │   Sidebar     │ │       Chromium           │ │
+│ │               │ │                          │ │
+│ │   Space A     │ │                          │ │
+│ │    Tab 1      │ │                          │ │
+│ │    Tab 2      │ │                          │ │
+│ │               │ │                          │ │
+│ │   Space B     │ │                          │ │
+│ │               │ │                          │ │
+│ └───────────────┘ └──────────────────────────┘ │
+│                                                │
+└────────────────────────────────────────────────┘
+```
+
+Recommended initial dimensions:
+
+```text
+Window width: 1280
+Window height: 800
+
+Sidebar:
+  min: 220
+  default: 260
+  max: 360
+```
+
+Allow the sidebar to collapse later, but it is not required for the first milestone.
+
+---
+
+## 13. Liquid Glass UI
+
+Use Apple native visual APIs.
+
+Do not manually reproduce the appearance using custom blur stacks if the system API provides the desired result.
+
+Use Liquid Glass for:
+
+- sidebar
+- command bar
+- floating controls
+- compact overlays
+
+Do **not** apply heavy glass effects directly over the browser rendering surface.
+
+Concept:
+
+```text
+ZStack
+├── Chromium content
+└── Native UI chrome
+    ├── glass sidebar
+    ├── floating command bar
+    └── contextual controls
+```
+
+Example:
+
+```swift
+VStack {
+    sidebarContent
+}
+.padding(8)
+.glassEffect(
+    .regular,
+    in: RoundedRectangle(
+        cornerRadius: 20,
+        style: .continuous
+    )
+)
+```
+
+Use `GlassEffectContainer` where grouping multiple glass controls improves visual behavior.
+
+---
+
+## 14. Sidebar
+
+Sidebar responsibilities:
+
+- show current space
+- display tab list
+- select tab
+- add tab
+- close tab
+- rename space
+- switch spaces
+
+Suggested design:
+
+```text
+[ Space selector ]
+
+Pinned / regular tabs
+
+  Google
+  GitHub
+  ChatGPT
+  Reddit
+
+[ + New Tab ]
+
+-----------------
+
+Downloads
+History
+Settings
+```
+
+Each tab row should show:
+
+- favicon
+- title
+- loading indicator if needed
+- close button on hover
+
+Avoid implementing complex pinning behavior in MVP unless straightforward.
+
+---
+
+## 15. Command Bar
+
+The command bar combines:
+
+- URL entry
+- search query entry
+- command launcher
+
+First version only needs URL/search behavior.
+
+Shortcut:
+
+```text
+⌘L
+```
+
+Behavior:
+
+1. Focus command bar.
+2. Select existing contents.
+3. User types text.
+4. If valid URL-like input, navigate directly.
+5. Otherwise, use configured search engine.
+
+Default search URL:
+
+```text
+https://www.google.com/search?q=<query>
+```
+
+Keep search-engine resolution isolated behind:
+
+```swift
+protocol SearchEngine {
+    func searchURL(for query: String) -> URL
+}
+```
+
+---
+
+## 16. Input Parsing
+
+Create:
+
+```swift
+enum NavigationInput {
+    case url(URL)
+    case search(String)
+}
+```
+
+Provide:
+
+```swift
+func parseNavigationInput(_ input: String) -> NavigationInput
+```
+
+Rules:
+
+Treat these as URLs:
+
+```text
+https://example.com
+http://example.com
+localhost:8080
+example.com
+192.168.1.10
+```
+
+Treat normal text as search query.
+
+Do not over-engineer URL parsing.
+
+---
+
+## 17. Keyboard Shortcuts
+
+Implement at minimum:
+
+```text
+⌘L    Focus address bar
+
+⌘T    New tab
+
+⌘W    Close current tab
+
+⌘R    Reload
+
+⌘[    Back
+
+⌘]    Forward
+
+⌘1-9  Select tab by position if convenient
+
+⌘Shift+T
+      Restore recently closed tab
+```
+
+Keyboard handling should remain reliable while Chromium owns focus.
+
+If SwiftUI shortcut handling becomes unreliable, implement command handling through AppKit:
+
+- `NSResponder`
+- `NSMenuItem`
+- application command routing
+
+Do not let Chromium swallow browser-shell shortcuts that belong to the application.
+
+---
+
+## 18. Focus Management
+
+Focus handling is a critical requirement.
+
+There are three focus systems:
+
+```text
+SwiftUI FocusState
+AppKit firstResponder
+CEF / Chromium focus
+```
+
+Required behaviors:
+
+### Browser focus
+
+When user clicks page content:
+
+```text
+NSWindow firstResponder
+    ↓
+CEF browser view
+```
+
+### Address bar focus
+
+When user presses `⌘L`:
+
+```text
+CEF loses keyboard focus
+    ↓
+address field becomes first responder
+```
+
+### Returning to browser
+
+On Enter after navigation:
+
+```text
+address field resigns focus
+    ↓
+CEF browser receives focus
+```
+
+Test with:
+
+- English keyboard
+- Chinese IME
+- contenteditable
+- text inputs
+- keyboard navigation
+- switching tabs
+
+---
+
+## 19. Chinese IME
+
+Chinese input must work in:
+
+- address bar
+- web text fields
+- contenteditable pages
+
+Validate:
+
+- candidate popup placement
+- composition state
+- Enter selection
+- Escape cancellation
+- switching between command bar and page
+
+Do not ship an implementation that works only for ASCII keyboard input.
+
+---
+
+## 20. Navigation State
+
+CEF callbacks should update:
+
+```swift
+struct NavigationState {
+    var url: URL?
+    var title: String
+
+    var isLoading: Bool
+    var progress: Double
+
+    var canGoBack: Bool
+    var canGoForward: Bool
+}
+```
+
+UI must react to this state.
+
+Examples:
+
+- disable Back when `canGoBack == false`
+- disable Forward when `canGoForward == false`
+- show reload vs stop depending on loading state
+- display page title in sidebar
+
+---
+
+## 21. New Windows and Popups
+
+Handle:
+
+```javascript
+window.open(...)
+```
+
+and target:
+
+```html
+<a target="_blank">
+```
+
+Default policy:
+
+### Normal web popup
+
+Open as a new browser tab.
+
+### OAuth / payment popup
+
+For the first version, either:
+
+- create a separate native browser window, or
+- open in a tab
+
+Prefer correctness over mimicking Arc exactly.
+
+Do not silently block popups required for login flows.
+
+Create a policy abstraction:
+
+```swift
+enum PopupDisposition {
+    case newTab
+    case newWindow
+    case block
+}
+```
+
+---
+
+## 22. Downloads
+
+Minimum download manager functionality:
+
+- detect download start
+- ask CEF to save into Downloads directory
+- show active download
+- show progress
+- show completed state
+- open downloaded file in Finder
+
+Model:
+
+```swift
+struct DownloadItem: Identifiable {
+    let id: UUID
+
+    var fileName: String
+    var sourceURL: URL
+    var destinationURL: URL?
+
+    var receivedBytes: Int64
+    var totalBytes: Int64?
+
+    var state: DownloadState
+}
+```
+
+States:
+
+```swift
+enum DownloadState {
+    case pending
+    case downloading
+    case completed
+    case failed
+    case cancelled
+}
+```
+
+---
+
+## 23. History
+
+Store basic browsing history.
+
+Record:
+
+```text
+URL
+title
+timestamp
+visit count
+```
+
+Suggested model:
+
+```swift
+struct HistoryEntry: Identifiable, Codable {
+    let id: UUID
+    let url: URL
+    var title: String
+    var visitCount: Int
+    var lastVisitedAt: Date
+}
+```
+
+Persistence options:
+
+Preferred:
+
+```text
+SQLite
+```
+
+Acceptable for MVP:
+
+```text
+SwiftData
+```
+
+Do not store full page content.
+
+---
+
+## 24. Session Restore
+
+On application exit, persist:
+
+```text
+spaces
+tab order
+selected space
+selected tab
+tab URLs
+```
+
+Do not persist live Chromium objects.
+
+Persist only domain state.
+
+Example JSON-like state:
+
+```json
+{
+  "spaces": [
+    {
+      "name": "Main",
+      "selectedTabID": "...",
+      "tabs": [
+        {
+          "url": "https://github.com",
+          "title": "GitHub"
+        }
+      ]
+    }
+  ]
+}
+```
+
+On startup:
+
+1. restore domain model
+2. create selected tab first
+3. lazily create other tab browser sessions
+
+Avoid initializing dozens of Chromium instances at startup.
+
+---
+
+## 25. Lazy Tab Instantiation
+
+Do not create every CEF browser immediately.
+
+Recommended behavior:
+
+```text
+Restored tab model
+    │
+    ├── selected tab
+    │      └── create BrowserSession now
+    │
+    └── background tab
+           └── create BrowserSession on first activation
+```
+
+Benefits:
+
+- lower startup latency
+- lower RAM usage
+- fewer Chromium renderer processes
+
+---
+
+## 26. Tab Closing
+
+Closing a tab must:
+
+1. update domain model
+2. detach CEF browser view
+3. request Chromium browser close
+4. release browser session
+5. select adjacent tab if needed
+
+Do not merely hide the NSView.
+
+Verify with repeated creation / closing of tabs and watch memory usage.
+
+---
+
+## 27. Multi-Space Behavior
+
+A Space is a logical tab group.
+
+Example:
+
+```text
+Space: Work
+├── GitHub
+├── Linear
+└── ChatGPT
+
+Space: Personal
+├── YouTube
+└── Reddit
+```
+
+Switching spaces should switch the visible selected tab.
+
+Do not destroy Chromium sessions simply because a Space becomes inactive.
+
+Future optimization can add tab suspension.
+
+---
+
+## 28. Browser View Visibility
+
+Only one browser view per window is normally visible.
+
+Recommended:
+
+```text
+active tab session
+    ↓
+attach / show browser NSView
+
+inactive sessions
+    ↓
+hidden or detached depending on CEF behavior
+```
+
+Choose the approach that does not accidentally recreate browser instances.
+
+Do not rebuild the entire Chromium NSView on every SwiftUI render.
+
+---
+
+## 29. SwiftUI State Management
+
+Avoid putting browser lifecycle directly inside SwiftUI Views.
+
+Recommended:
+
+```text
+MainWindowView
+    ↓
+BrowserWorkspaceStore
+    ├── SpaceService
+    ├── TabService
+    ├── SessionManager
+    ├── HistoryService
+    └── DownloadService
+```
+
+Possible top-level store:
+
+```swift
+@MainActor
+final class BrowserWorkspaceStore: ObservableObject {
+
+    @Published var spaces: [BrowserSpace] = []
+    @Published var selectedSpaceID: UUID?
+
+    let sessionManager: BrowserSessionManager
+
+    func createTab()
+    func closeTab(_ id: UUID)
+    func selectTab(_ id: UUID)
+}
+```
+
+Keep side effects in services/controllers rather than views.
+
+---
+
+## 30. Threading Rules
+
+CEF callbacks may arrive from CEF-managed threads.
+
+All SwiftUI-observed state mutations must happen on the main actor.
+
+Example:
+
+```swift
+DispatchQueue.main.async {
+    self.title = title
+}
+```
+
+or bridge into an `@MainActor` object.
+
+Do not accidentally access AppKit views from arbitrary CEF threads.
+
+---
+
+## 31. Error Handling
+
+Display a native error state if navigation fails.
+
+Example error page can show:
+
+```text
+Unable to load page
+
+ERR_CONNECTION_REFUSED
+
+[ Retry ]
+```
+
+Do not crash for normal network errors.
+
+Capture at least:
+
+- DNS failures
+- connection refused
+- TLS failures
+- invalid URLs
+- renderer crashes if exposed through CEF callbacks
+
+---
+
+## 32. DevTools
+
+For development builds, support opening Chromium DevTools.
+
+Shortcut suggestion:
+
+```text
+⌥⌘I
+```
+
+Allow:
+
+```text
+browser.showDevTools()
+```
+
+Do not expose internal bridge code into page JavaScript.
+
+Remote debugging may be enabled in Debug configuration only.
+
+---
+
+## 33. Security Rules
+
+MVP must still respect baseline browser safety.
+
+Do not:
+
+- disable TLS verification globally
+- disable Chromium sandbox without a clear development-only reason
+- inject arbitrary native bridge APIs into every webpage
+- enable unrestricted remote debugging in production
+- expose filesystem APIs to page JS
+
+If local browser-agent functionality is added later, isolate it behind explicit permissions.
+
+---
+
+## 34. Code Signing / Distribution
+
+Design the application so that:
+
+```text
+Main app
+CEF framework
+CEF helper apps
+```
+
+can all be correctly signed.
+
+Production requirements eventually include:
+
+- Hardened Runtime
+- code signing
+- notarization
+- correct helper entitlements
+- stable bundle identifiers
+
+Suggested identifiers:
+
+```text
+com.example.NativeBrowser
+com.example.NativeBrowser.helper
+com.example.NativeBrowser.helper.renderer
+com.example.NativeBrowser.helper.gpu
+```
+
+Exact identifiers should be configured in project settings.
+
+Do not block MVP implementation on public distribution, but do not design the bundle in a way that makes signing impossible.
+
+---
+
+## 35. Logging
+
+Add structured logging for:
+
+```text
+app lifecycle
+CEF init / shutdown
+browser creation
+browser destruction
+navigation
+tab creation / close
+popup
+download
+renderer termination
+fatal bridge errors
+```
+
+Use Apple unified logging:
+
+```swift
+import OSLog
+```
+
+Example categories:
+
+```text
+app
+cef
+browser
+navigation
+download
+session
+```
+
+Avoid `print()` as the primary observability mechanism.
+
+---
+
+## 36. Performance Metrics
+
+Capture basic metrics:
+
+```text
+app launch time
+time to first browser view
+time to first page navigation
+tab creation latency
+memory after 1 tab
+memory after 10 tabs
+```
+
+MVP does not need telemetry upload.
+
+Local logging is enough.
+
+---
+
+## 37. Testing Strategy
+
+### Unit Tests
+
+Test:
+
+- navigation input parsing
+- tab ordering
+- space switching
+- session serialization
+- session restore
+- history storage
+- recently closed tabs
+
+### Integration Tests
+
+Test:
+
+- CEF initializes
+- page loads
+- title changes
+- URL changes
+- back/forward
+- reload
+- tab close
+- popup
+- download
+- app termination
+
+### Manual Tests
+
+Test at minimum:
+
+```text
+https://google.com
+https://github.com
+https://youtube.com
+https://chatgpt.com
+```
+
+Also test:
+
+- localhost
+- invalid domains
+- offline mode
+- large pages
+- WebGL page
+- HTML5 video
+- login popup
+- file download
+- Chinese IME
+
+---
+
+## 38. MVP Milestones
+
+Implement in this order.
+
+---
+
+### Milestone 0 — Project Bootstrapping
+
+Deliverables:
+
+- macOS SwiftUI app launches
+- AppDelegate available
+- AppKit interoperability works
+- CEF framework integrated into build
+- helper process targets configured
+
+Acceptance:
+
+```text
+App launches without Chromium browser view.
+CEF can initialize and shutdown cleanly.
+```
+
+---
+
+### Milestone 1 — One Chromium Tab
+
+Deliverables:
+
+- one `ChromiumView`
+- load hard-coded URL
+- resize with window
+- navigation callbacks
+- title callback
+- URL callback
+
+Acceptance:
+
+```text
+Open app
+→ google.com renders
+→ resize works
+→ typing/clicking works
+→ closing app does not crash
+```
+
+---
+
+### Milestone 2 — Navigation UI
+
+Deliverables:
+
+- Back
+- Forward
+- Reload
+- Stop
+- address bar
+- `⌘L`
+
+Acceptance:
+
+```text
+Navigate to multiple URLs.
+Back/forward state is correct.
+Address field updates after page navigation.
+```
+
+---
+
+### Milestone 3 — Tabs
+
+Deliverables:
+
+- browser domain tab model
+- multiple `BrowserSession`s
+- sidebar tab list
+- create tab
+- close tab
+- select tab
+- `⌘T`
+- `⌘W`
+
+Acceptance:
+
+```text
+Open 10 tabs.
+Switch repeatedly.
+Close repeatedly.
+No crashes.
+No obvious browser-session leaks.
+```
+
+---
+
+### Milestone 4 — Spaces
+
+Deliverables:
+
+- create default Space
+- multiple Spaces
+- switch Space
+- tabs belong to Space
+
+Acceptance:
+
+```text
+Tabs remain associated with their Space.
+Switching Spaces updates selected browser correctly.
+```
+
+---
+
+### Milestone 5 — Liquid Glass UI
+
+Deliverables:
+
+- native Liquid Glass sidebar
+- native floating address bar or toolbar treatment
+- polished spacing
+- native window styling
+
+Acceptance:
+
+```text
+UI follows modern Apple macOS visual conventions.
+No custom fake-glass rendering unless required.
+Browser content remains performant.
+```
+
+---
+
+### Milestone 6 — Session Restore
+
+Deliverables:
+
+- persist tabs
+- persist Spaces
+- persist selected state
+- restore on launch
+- lazy initialize background tabs
+
+Acceptance:
+
+```text
+Open 10 tabs.
+Quit app.
+Reopen.
+Workspace returns.
+Only active browser session initializes immediately.
+```
+
+---
+
+### Milestone 7 — History + Downloads
+
+Deliverables:
+
+- history store
+- history UI
+- download callback
+- download list
+- Finder reveal
+
+Acceptance:
+
+```text
+Visited pages appear in history.
+Normal file download completes successfully.
+```
+
+---
+
+### Milestone 8 — Stability Pass
+
+Focus on:
+
+- CEF lifecycle
+- app quit
+- repeated tab creation
+- keyboard focus
+- IME
+- popups
+- renderer crashes
+- memory
+
+Acceptance:
+
+```text
+30+ minute browsing session
+20+ tab create/close cycles
+multiple videos/pages
+Chinese IME works
+no known deterministic crash
+```
+
+---
+
+## 39. Acceptance Criteria for MVP
+
+The MVP is complete only when all of the following work:
+
+- [ ] Native macOS application
+- [ ] Chromium via CEF
+- [ ] Web page rendering
+- [ ] Browser resizing
+- [ ] URL navigation
+- [ ] Google search fallback
+- [ ] Back
+- [ ] Forward
+- [ ] Reload
+- [ ] Stop loading
+- [ ] Multiple tabs
+- [ ] Sidebar tab UI
+- [ ] Multiple Spaces
+- [ ] `⌘L`
+- [ ] `⌘T`
+- [ ] `⌘W`
+- [ ] `⌘R`
+- [ ] Browser focus handling
+- [ ] Chinese IME
+- [ ] Page title update
+- [ ] URL state update
+- [ ] Popup handling
+- [ ] Downloads
+- [ ] History
+- [ ] Session restore
+- [ ] Lazy creation of restored background tabs
+- [ ] DevTools in development build
+- [ ] Clean app shutdown
+- [ ] CEF helper processes included correctly
+- [ ] App can be signed in principle
+- [ ] No deterministic crash during normal browsing
+
+---
+
+## 40. Important Engineering Constraints
+
+Codex must obey these constraints.
+
+### Constraint 1
+
+Do not replace CEF with WKWebView.
+
+The product requirement is Chromium.
+
+### Constraint 2
+
+Do not replace native UI with Electron.
+
+The shell must remain SwiftUI/AppKit.
+
+### Constraint 3
+
+Do not fork Chromium.
+
+Use CEF binary distribution unless a later requirement explicitly requires custom Chromium changes.
+
+### Constraint 4
+
+Do not implement OSR in MVP.
+
+Use native windowed CEF rendering.
+
+### Constraint 5
+
+Do not let SwiftUI directly own C++ Chromium types.
+
+Use Objective-C++ bridge.
+
+### Constraint 6
+
+Do not couple persisted tab state to CEF browser instances.
+
+Persistence uses domain models only.
+
+### Constraint 7
+
+Do not eagerly instantiate all restored tabs.
+
+Background restored tabs must support lazy browser-session creation.
+
+### Constraint 8
+
+Do not put CEF lifecycle logic inside individual SwiftUI views.
+
+CEF initialization/shutdown must be application-scoped.
+
+---
+
+## 41. Suggested Core Interfaces
+
+### BrowserSessionManager
+
+```swift
+@MainActor
+protocol BrowserSessionManaging {
+
+    func session(for tabID: UUID) -> BrowserSession?
+
+    func createSession(
+        for tabID: UUID,
+        initialURL: URL?
+    ) -> BrowserSession
+
+    func closeSession(for tabID: UUID)
+}
+```
+
+### Tab service
+
+```swift
+@MainActor
+protocol TabManaging {
+
+    var tabs: [BrowserTab] { get }
+
+    func createTab(
+        in spaceID: UUID,
+        url: URL?
+    ) -> BrowserTab
+
+    func closeTab(_ id: UUID)
+
+    func selectTab(_ id: UUID)
+}
+```
+
+### Session persistence
+
+```swift
+protocol WorkspacePersisting {
+
+    func load() throws -> WorkspaceSnapshot?
+
+    func save(_ snapshot: WorkspaceSnapshot) throws
+}
+```
+
+### History
+
+```swift
+protocol HistoryManaging {
+
+    func recordVisit(
+        url: URL,
+        title: String
+    ) async throws
+
+    func recentEntries(
+        limit: Int
+    ) async throws -> [HistoryEntry]
+}
+```
+
+---
+
+## 42. Recently Closed Tabs
+
+Maintain an in-memory or persisted stack:
+
+```swift
+struct ClosedTabSnapshot {
+    let url: URL?
+    let title: String
+    let spaceID: UUID
+}
+```
+
+Shortcut:
+
+```text
+⌘Shift+T
+```
+
+Restores the most recently closed tab.
+
+CEF navigation history restoration is not required in MVP.
+
+---
+
+## 43. Browser Crash Recovery
+
+If a renderer terminates unexpectedly:
+
+- do not crash the entire application
+- mark affected tab as crashed
+- show reload option
+
+Example:
+
+```text
+This page stopped responding.
+
+[ Reload ]
+```
+
+Log renderer termination reason when available.
+
+---
+
+## 44. UI Style Guidelines
+
+Design principles:
+
+- native macOS spacing
+- subtle animation
+- avoid excessive borders
+- sidebar-first navigation
+- support dark and light appearance
+- Liquid Glass only where semantically appropriate
+- browser content gets maximum visual priority
+- controls should not constantly obscure page content
+
+Suggested corner radius:
+
+```text
+sidebar container: 18–24
+floating command bar: capsule or 16–20
+tab rows: 8–12
+```
+
+Do not hard-code colors that break system appearance.
+
+Prefer semantic colors.
+
+---
+
+## 45. Future Architecture Extensions
+
+Do not implement now, but preserve room for:
+
+### Tab suspension
+
+```text
+BrowserTab
+    ↓
+BrowserSession
+    ↓
+SuspendedSessionSnapshot
+```
+
+Possible suspension policy:
+
+```text
+inactive for N minutes
+AND
+not playing audio
+AND
+not pinned
+AND
+not downloading
+```
+
+---
+
+### Browser Agent
+
+Future architecture:
+
+```text
+BrowserSession
+    │
+    ├── DOM / page extraction
+    ├── screenshot
+    ├── CDP
+    └── AgentController
+```
+
+Potential actions:
+
+```text
+navigate
+read page
+query DOM
+click
+type
+scroll
+extract structured data
+```
+
+Do not expose this in MVP.
+
+---
+
+### Semantic History
+
+Possible future flow:
+
+```text
+Visited page
+    ↓
+text extraction
+    ↓
+embedding
+    ↓
+local vector index
+```
+
+This can support:
+
+```text
+"找我上周看过的 Redis 那篇文章"
+```
+
+Do not implement now.
+
+---
+
+## 46. Recommended Codex Working Method
+
+Codex should proceed incrementally.
+
+For each milestone:
+
+1. inspect current project state
+2. make smallest coherent implementation
+3. build project
+4. fix compile errors
+5. run tests if present
+6. verify architecture constraints
+7. summarize changes
+
+Do not attempt to implement the entire browser in one patch.
+
+Do not introduce speculative abstractions unless they serve the current milestone or a clearly defined upcoming milestone.
+
+---
+
+## 47. First Codex Task
+
+Start with:
+
+> Implement Milestone 0 and Milestone 1 only.
+
+Expected result:
+
+```text
+macOS application
+    +
+CEF initialized
+    +
+single Chromium browser view
+    +
+https://www.google.com loads
+    +
+view resizes with window
+    +
+clean shutdown
+```
+
+Do not build tabs, history, downloads, or Spaces yet.
+
+Once Milestone 1 is stable, proceed to Milestone 2.
+
+---
+
+## 48. Definition of Done for Every Milestone
+
+Before considering a milestone complete:
+
+- code compiles
+- application launches
+- no obvious runtime crash
+- relevant feature manually works
+- no TODO replacing core behavior
+- no architecture constraint violated
+- lifecycle cleanup exists
+- logging exists for new lifecycle-sensitive paths
+
+---
+
+## 49. Engineering Priorities
+
+When tradeoffs arise, prioritize in this order:
+
+```text
+1. Correct CEF lifecycle
+2. Browser stability
+3. Input/focus correctness
+4. Native macOS behavior
+5. Performance
+6. Architecture clarity
+7. Visual polish
+8. Extra features
+```
+
+Do not sacrifice browser lifecycle correctness for animations or UI polish.
+
+---
+
+## 50. Final Technical Direction
+
+The implementation should converge on:
+
+```text
+SwiftUI
+    │
+    │ app state / Liquid Glass / sidebar / toolbar
+    ▼
+AppKit
+    │
+    │ window / responder chain / NSView container
+    ▼
+Objective-C++
+    │
+    │ safe boundary
+    ▼
+CEF
+    │
+    ▼
+Chromium
+```
+
+This boundary is intentional.
+
+The product should look and behave like a native macOS application while Chromium remains an embedded rendering engine behind a narrow bridge.
+
+---
+
+# Codex Bootstrap Prompt
+
+Use the following prompt together with this document:
+
+```text
+Read ARCHITECTURE.md completely before modifying the repository.
+
+We are building a macOS-only native Chromium browser.
+
+The required architecture is:
+
+SwiftUI + AppKit + Objective-C++ + CEF.
+
+Do not use Electron.
+Do not replace Chromium with WKWebView.
+Do not fork Chromium.
+Do not use CEF OSR for the MVP.
+Do not expose CEF C++ types directly to Swift.
+
+Work milestone by milestone.
+
+Begin with Milestone 0 and Milestone 1 from ARCHITECTURE.md.
+
+Before changing code:
+1. inspect the repository,
+2. identify the existing macOS project structure,
+3. propose the minimum changes needed for the current milestone.
+
+Then implement the changes, build the project, fix compile errors, and report:
+- files changed,
+- architecture decisions,
+- remaining blockers,
+- exact manual verification steps.
+
+Do not proceed to the next milestone until the current milestone builds and its acceptance criteria are satisfied.
+```
