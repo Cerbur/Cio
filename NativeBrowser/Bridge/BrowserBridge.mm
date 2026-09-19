@@ -267,9 +267,16 @@ constexpr int kInitialHeight = 800;
   CefBrowserSettings settings;
   settings.background_color = CefColorSetARGB(255, 255, 255, 255);
 
+  // Chromium receives the original, complete URL.
   CefBrowserHost::CreateBrowser(windowInfo, _client, std::string(url.UTF8String),
                                 settings, nullptr, nullptr);
-  NSLog(@"[browser] creating Chromium browser for %@", url);
+  // The URL is deliberately absent here: a browser URL may carry a token or an
+  // OAuth code, and this NSLog goes to the unified log and to standard error,
+  // both of which are captured by the verification scripts. The same load is
+  // reported by BrowserSession through AppLog in sanitized form
+  // (NativeBrowser/App/URLLogSanitizer.swift), so no diagnostic is lost by not
+  // formatting the URL a second time in Objective-C++.
+  NSLog(@"[browser] creating Chromium browser");
 }
 
 #pragma mark - Events from the CEF layer

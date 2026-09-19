@@ -89,16 +89,18 @@ targets:
         path: Scripts/package_cef_runtime.sh
         basedOnDependencyAnalysis: false
 
-  # Milestone 2 unit tests. NavigationInput.swift is compiled into this target
-  # directly (see its "Keep this file dependency free" note), so the tests do
-  # not need the application, do not link CEF and never start Chromium. The
-  # target deliberately has no TEST_HOST: it is a standalone logic test bundle.
+  # Milestone 2 unit tests. NavigationInput.swift and URLLogSanitizer.swift are
+  # compiled into this target directly (see their "keep this file dependency
+  # free" notes), so the tests do not need the application, do not link CEF and
+  # never start Chromium. The target deliberately has no TEST_HOST: it is a
+  # standalone logic test bundle.
   NativeBrowserTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: NativeBrowser/Tests
       - path: NativeBrowser/Browser/NavigationInput.swift
+      - path: NativeBrowser/App/URLLogSanitizer.swift
     settings:
       base:
         PRODUCT_NAME: NativeBrowserTests

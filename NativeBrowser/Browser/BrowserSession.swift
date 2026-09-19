@@ -133,15 +133,26 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     let bridge = BrowserBridge(parentView: view)
     bridge.delegate = self
     self.bridge = bridge
+    // The initial load does not go through load(_:), so it is logged here; the
+    // URL is sanitized like every other URL that reaches a log (the
+    // Objective-C++ bridge deliberately does not log it at all).
+    AppLog.navigation.info("load \(URLLogSanitizer.sanitized(self.initialURL), privacy: .public)")
     bridge.loadURL(initialURL.absoluteString)
   }
 
   // MARK: - Navigation
 
+  /// Loads `url` in Chromium.
+  ///
+  /// The URL handed to the bridge is the original, complete URL; only the two
+  /// observability strings below are sanitized (see URLLogSanitizer). A browser
+  /// URL may carry a token, an OAuth code or a signature, so it must never reach
+  /// a log or a lifecycle trace in full.
   func load(_ url: URL) {
     guard !isClosed else { return }
-    AppLog.navigation.info("load \(url.absoluteString, privacy: .public)")
-    onLifecycleEvent?("navigation:load(\(url.absoluteString))")
+    let loggedURL = URLLogSanitizer.sanitized(url)
+    AppLog.navigation.info("load \(loggedURL, privacy: .public)")
+    onLifecycleEvent?("navigation:load(\(loggedURL))")
     bridge?.loadURL(url.absoluteString)
   }
 
@@ -274,7 +285,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       loadingProgress = 1
       if didStartLoading, !hasFinishedFirstLoad {
         hasFinishedFirstLoad = true
-        emit("browser:first-load-finished(title=\(self.title), url=\(self.url?.absoluteString ?? ""))")
+        emit(
+          "browser:first-load-finished(title=\(self.title), url=\(URLLogSanitizer.sanitized(self.url)))"
+        )
       }
     }
   }
@@ -321,8 +334,11 @@ extension BrowserSession: BrowserBridgeDelegate {
     self.url = value
     mainFrameURLChangeCount += 1
     addressField.applyBrowserURL(value)
-    AppLog.navigation.debug("main-frame URL changed: \(url, privacy: .public)")
-    onLifecycleEvent?("navigation:url(\(url))")
+    // The session keeps the complete URL (the address field mirrors it); only
+    // the log line and the trace event are redacted.
+    let loggedURL = URLLogSanitizer.sanitized(url)
+    AppLog.navigation.debug("main-frame URL changed: \(loggedURL, privacy: .public)")
+    onLifecycleEvent?("navigation:url(\(loggedURL))")
   }
 
   func browserBridge(
@@ -346,9 +362,12 @@ extension BrowserSession: BrowserBridgeDelegate {
     failedURL: String
   ) {
     lastErrorCode = errorCode
-    emit("navigation:failed(code=\(errorCode), url=\(failedURL), text=\(errorText))")
+    // The error code and text are the diagnostics; the failing URL is written
+    // out only through the sanitizer (section 5 of the security fix).
+    let loggedURL = URLLogSanitizer.sanitized(failedURL)
+    emit("navigation:failed(code=\(errorCode), url=\(loggedURL), text=\(errorText))")
     AppLog.navigation.error(
-      "load failed: \(errorText, privacy: .public) (\(errorCode, privacy: .public)) for \(failedURL, privacy: .public)"
+      "load failed: \(errorText, privacy: .public) (\(errorCode, privacy: .public)) url=\(loggedURL, privacy: .public)"
     )
     if !hasFinishedFirstLoad {
       hasFinishedFirstLoad = true

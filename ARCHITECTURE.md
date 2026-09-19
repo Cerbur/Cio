@@ -1264,6 +1264,40 @@ session
 
 Avoid `print()` as the primary observability mechanism.
 
+### URL redaction
+
+Never write a browser URL to a log or a trace verbatim. A URL can carry a
+session token (`?token=...`), an OAuth code, a signature, or credentials in its
+user-info or fragment, and the lifecycle trace is written to standard output and
+captured into log files by the verification scripts.
+
+One helper owns the policy: `URLLogSanitizer`
+(`NativeBrowser/App/URLLogSanitizer.swift`).
+
+```text
+kept:     scheme, host, port, path, query parameter names
+redacted: user name, password, every query value, the whole fragment
+
+http://127.0.0.1:3080/?token=abcdef
+    -> http://127.0.0.1:3080/?token=<redacted>
+https://example.com/callback?code=secret&state=abc#private
+    -> https://example.com/callback?code=<redacted>&state=<redacted>#<redacted>
+https://user:password@example.com/path
+    -> https://<redacted>@example.com/path
+```
+
+Rules that go with it:
+
+- Raw address-field text is never logged or traced. A search query is as
+  sensitive as a URL, so the event is `navigation:parsed-as-search` with no
+  query text, and the parser probe prints sanitized URLs only.
+- OSLog `.public` is used only for values that have already been sanitized; it
+  is never used to publish a complete URL.
+- Redaction is an observability rule, not a navigation rule. `BrowserSession`,
+  `BrowserBridge -loadURL:`, `CefFrame::LoadURL` and the address/search parser
+  all receive the original, complete URL.
+- Error logs keep the error code, the error text and a sanitized URL.
+
 ---
 
 ## 36. Performance Metrics

@@ -36,6 +36,10 @@ enum NavigationSelfTest {
     var failures = 0
     var checks = 0
 
+    /// Reports one check. The detail is captured into a log file by
+    /// Scripts/verify_milestone2.sh, so every URL it echoes is passed through
+    /// URLLogSanitizer by the caller: the self-test drives the real browser and
+    /// a navigation can end up anywhere.
     func report(_ name: String, _ passed: Bool, _ detail: String) {
       checks += 1
       if !passed { failures += 1 }
@@ -65,12 +69,12 @@ enum NavigationSelfTest {
     let initialLoaded = wait(until: { session.hasFinishedFirstLoad }, timeout: 45)
     report(
       "initial-load", initialLoaded && session.lastErrorCode == nil,
-      "url=\(session.url?.absoluteString ?? "nil") title=\(session.title)")
+      "url=\(URLLogSanitizer.sanitized(session.url)) title=\(session.title)")
 
     let initialURL = session.url?.absoluteString ?? ""
     report(
       "initial-url-is-main-frame", initialURL.contains("google.com"),
-      "url=\(initialURL)")
+      "url=\(URLLogSanitizer.sanitized(initialURL))")
 
     let title = session.title
     report("initial-title", !title.isEmpty, "title=\(title)")
@@ -89,7 +93,7 @@ enum NavigationSelfTest {
       until: { session.url?.absoluteString == expectedSearchURL }, timeout: 45)
     report(
       "chinese-query-search", searched,
-      "expected=\(expectedSearchURL) actual=\(session.url?.absoluteString ?? "nil")")
+      "expected=\(URLLogSanitizer.sanitized(expectedSearchURL)) actual=\(URLLogSanitizer.sanitized(session.url))")
 
     // 3. Direct URL navigation updates the address field, not just the session.
     session.load(secondURL)
@@ -99,11 +103,11 @@ enum NavigationSelfTest {
       }, timeout: 45)
     report(
       "url-navigation", secondLoaded,
-      "url=\(session.url?.absoluteString ?? "nil") title=\(session.title)")
+      "url=\(URLLogSanitizer.sanitized(session.url)) title=\(session.title)")
     report(
       "address-field-tracks-url",
       session.addressField.editText == secondURL.absoluteString,
-      "field=\(session.addressField.editText)")
+      "field=\(URLLogSanitizer.sanitized(session.addressField.editText))")
     report(
       "back-available-after-navigation", session.canGoBack,
       "canGoBack=\(session.canGoBack)")
@@ -116,7 +120,7 @@ enum NavigationSelfTest {
         session.url?.absoluteString == thirdURL.absoluteString && !session.isLoading
       }, timeout: 45)
     report(
-      "second-navigation", thirdLoaded, "url=\(session.url?.absoluteString ?? "nil")")
+      "second-navigation", thirdLoaded, "url=\(URLLogSanitizer.sanitized(session.url))")
 
     // 5. Back.
     session.goBack()
@@ -124,7 +128,7 @@ enum NavigationSelfTest {
       until: { session.url?.absoluteString == secondURL.absoluteString && !session.isLoading },
       timeout: 30)
     report(
-      "back-navigates", wentBack, "url=\(session.url?.absoluteString ?? "nil")")
+      "back-navigates", wentBack, "url=\(URLLogSanitizer.sanitized(session.url))")
     report(
       "forward-available-after-back", session.canGoForward,
       "canGoForward=\(session.canGoForward)")
@@ -135,7 +139,7 @@ enum NavigationSelfTest {
       until: { session.url?.absoluteString == thirdURL.absoluteString && !session.isLoading },
       timeout: 30)
     report(
-      "forward-navigates", wentForward, "url=\(session.url?.absoluteString ?? "nil")")
+      "forward-navigates", wentForward, "url=\(URLLogSanitizer.sanitized(session.url))")
 
     // 7. Stop. A fresh navigation is started and cancelled while Chromium is
     //    still loading.
@@ -168,7 +172,7 @@ enum NavigationSelfTest {
       "loads=\(session.loadStartCount - loadsBeforeReload)")
     report(
       "reload", reloadStarted && reloadFinished,
-      "url=\(session.url?.absoluteString ?? "nil") error=\(session.lastErrorCode.map(String.init) ?? "none")")
+      "url=\(URLLogSanitizer.sanitized(session.url)) error=\(session.lastErrorCode.map(String.init) ?? "none")")
 
     // 9. Navigation must never have built a second Chromium browser.
     report(
@@ -201,7 +205,7 @@ enum NavigationSelfTest {
     let freshLoaded = wait(until: { freshSession.hasFinishedFirstLoad }, timeout: 30)
     report(
       "fresh-browser-loads", freshLoaded,
-      "url=\(freshSession.url?.absoluteString ?? "nil")")
+      "url=\(URLLogSanitizer.sanitized(freshSession.url))")
 
     // Pumped exactly the way ApplicationRuntime.closeBrowserSessions() pumps
     // during application termination, because that is the path this check

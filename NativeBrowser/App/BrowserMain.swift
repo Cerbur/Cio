@@ -122,8 +122,10 @@ enum BrowserMain {
     }
 
     let loaded = session.hasFinishedFirstLoad && session.lastErrorCode == nil
+    // Self-test output is a trace that ends up in a log file, so the URL is
+    // reported in its sanitized form (see URLLogSanitizer).
     print(
-      "browser-self-test: loaded=\(loaded) title=\(session.title) url=\(session.url?.absoluteString ?? "")"
+      "browser-self-test: loaded=\(loaded) title=\(session.title) url=\(URLLogSanitizer.sanitized(session.url))"
     )
     runtime.record("selftest:loaded=\(loaded)")
 

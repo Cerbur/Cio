@@ -44,13 +44,16 @@ extension BrowserSession {
 
     switch input {
     case .url(let url):
-      logAddressSubmission("URL", url.absoluteString)
-      onLifecycleEvent?("navigation:parsed-as-url(\(url.absoluteString))")
+      logAddressSubmission("URL", URLLogSanitizer.sanitized(url))
+      onLifecycleEvent?("navigation:parsed-as-url(\(URLLogSanitizer.sanitized(url)))")
       load(url)
     case .search(let query):
       let url = GoogleSearchEngine().searchURL(for: query)
-      logAddressSubmission("search", url.absoluteString)
-      onLifecycleEvent?("navigation:parsed-as-search(\(query))")
+      logAddressSubmission("search", URLLogSanitizer.sanitized(url))
+      // The query itself is never traced: a search for a token, a private
+      // document or a name is as sensitive as a URL, and this trace is written
+      // to standard output by the verification tooling.
+      onLifecycleEvent?("navigation:parsed-as-search")
       load(url)
     }
     focusPage()
@@ -58,8 +61,13 @@ extension BrowserSession {
 
   /// OSLog interpolates its argument, so the composed message is passed as one
   /// interpolated value rather than concatenated.
-  private func logAddressSubmission(_ kind: String, _ url: String) {
-    AppLog.navigation.info("address parsed as \(kind, privacy: .public): \(url, privacy: .public)")
+  ///
+  /// The parameter is named `sanitizedURL` because the caller must have put the
+  /// URL through URLLogSanitizer first; this is the address-field path's only
+  /// URL log site.
+  private func logAddressSubmission(_ kind: String, _ sanitizedURL: String) {
+    AppLog.navigation.info(
+      "address parsed as \(kind, privacy: .public): \(sanitizedURL, privacy: .public)")
   }
 
   /// Escape while editing: drop the unsubmitted edit, restore the committed URL

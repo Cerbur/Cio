@@ -81,6 +81,7 @@ open NativeBrowser.xcodeproj
 Scripts/verify_milestone0.sh    # CEF lifecycle, framework, helpers, signature
 Scripts/verify_milestone1.sh    # browser content, callbacks, resize, clean quit
 Scripts/verify_milestone2.sh    # parser, navigation state, shortcuts, navigation, clean quit
+Scripts/check_no_secrets.sh     # credential scan of tracked files and git history
 ```
 
 Milestone 2 is checked end to end:
@@ -160,6 +161,7 @@ NativeBrowser/
     AppDelegate.swift          # AppKit lifecycle, message pump start/stop
     ApplicationRuntime.swift   # app-scoped CEF runtime state and message pump
     Logging.swift              # OSLog categories
+    URLLogSanitizer.swift      # the one URL redaction policy for logs and traces
     AppCommands.swift          # browser menu commands: command-L / R / [ / ]
     NavigationSelfTest.swift   # Milestone 2 integration self-test (--navigation-self-test)
     NavigationInputProbe.swift # parser probe in the shipped binary (--parse-navigation-input=)
@@ -179,6 +181,8 @@ NativeBrowser/
     HelperMain.mm              # main() of the Chromium helper processes
   Tests/
     NavigationInputTests.swift # parser unit tests (no CEF, no app host)
+    URLLogSanitizerTests.swift # URL log redaction policy tests
+    NavigationURLPreservationTests.swift # explicit URLs keep query + fragment
   UI/
     Main/MainWindowView.swift  # toolbar + Chromium view + title line
     CommandBar/
@@ -200,6 +204,7 @@ Scripts/
   verify_milestone0.sh         # Milestone 0 acceptance checks
   verify_milestone1.sh         # Milestone 1 acceptance checks
   verify_milestone2.sh         # Milestone 2 acceptance checks
+  check_no_secrets.sh          # credential scan (tracked files + git history)
 project.yml                    # XcodeGen project definition (source of truth)
 ```
 
@@ -372,6 +377,42 @@ project.yml                    # XcodeGen project definition (source of truth)
     requires ordered T0–T7 phases, one CEF shutdown, no fallback, and a quit
     budget of 1000 ms (optional third argument overrides it). It validates a
     recording; it does not itself press Cmd+Q.
+
+### Pre-Milestone-3 security fix: URL redaction
+
+23. **One redaction policy for every URL that is logged.** A browser URL can
+    carry a session token (`?token=...`), an OAuth code, a signature, or
+    credentials in its user-info or fragment, so no URL is formatted into a log
+    by hand. `URLLogSanitizer` (`NativeBrowser/App/URLLogSanitizer.swift`) is
+    the single policy:
+
+    ```text
+    kept:     scheme, host, port, path, query parameter names
+    redacted: user name, password, every query value, the whole fragment
+
+    http://127.0.0.1:3080/?token=abcdef
+        -> http://127.0.0.1:3080/?token=<redacted>
+    https://example.com/callback?code=x&state=y#z
+        -> https://example.com/callback?code=<redacted>&state=<redacted>#<redacted>
+    https://user:password@example.com/path
+        -> https://<redacted>@example.com/path
+    ```
+
+    It is applied to OSLog messages, to the lifecycle trace (which the
+    verification scripts capture into log files), to the self-test reports and to
+    the parser probe. The Objective-C++ bridge never formats a URL for a log:
+    `BrowserBridge -loadURL:`'s argument is only ever handed to
+    `CefFrame::LoadURL`, so the policy stays in one place. Raw address-field
+    text is never traced either: the search event is
+    `navigation:parsed-as-search` with no query text, and
+    `NavigationInputProbe` prints sanitized URLs only.
+
+    Redaction is an observability rule, not a navigation rule: `BrowserSession`,
+    `BrowserBridge -loadURL:` and `CefFrame::LoadURL` still receive the
+    original, complete URL. OSLog values are marked `.public` only once they
+    have been sanitized. `URLLogSanitizerTests` pins the policy down, and
+    `Scripts/verify_milestone2.sh` checks it in the shipped binary and in a real
+    run's lifecycle trace.
 
 ### Troubleshooting: the "Chromium Safe Storage" keychain prompt
 

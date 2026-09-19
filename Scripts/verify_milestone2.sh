@@ -11,6 +11,9 @@
 #   4. navigation shortcuts and the navigation UI source structure
 #   5. the runtime navigation stack (--navigation-self-test)
 #   6. clean shutdown after navigation (--quit-after)
+#   7. programmatic termination ordering (--terminate-in-pump-after)
+#   8. URL redaction in the lifecycle trace and logs (security fix)
+#   9. repository secret check (security fix)
 #
 # Anything that needs a human at the keyboard is listed at the end as REQUIRES
 # MANUAL VERIFICATION; nothing here claims to have tested it.
@@ -142,6 +145,20 @@ else
   else
     fail "NavigationInputTests suite did not pass"
   fi
+  # The URL log redaction policy is asserted by its own suite (security fix).
+  if grep -q "Test Suite 'URLLogSanitizerTests' passed" "$TEST_RUN_LOG" 2>/dev/null; then
+    pass "URLLogSanitizerTests suite passed"
+  else
+    fail "URLLogSanitizerTests suite did not pass"
+  fi
+  # The probe no longer echoes the query, so the parser's percent-encoding rules
+  # are asserted here through the unit tests that cover them.
+  check_contains "percent-encoded spaces are asserted by the unit tests" \
+    "testSearchURLPercentEncodesSpaces]' passed" "$TEST_RUN_LOG"
+  check_contains "percent-encoded UTF-8 is asserted by the unit tests" \
+    "testSearchURLPercentEncodesUTF8]' passed" "$TEST_RUN_LOG"
+  check_contains "query separators are asserted by the unit tests" \
+    "testSearchURLPercentEncodesQuerySeparators]' passed" "$TEST_RUN_LOG"
 fi
 
 # The same parser, exercised through the shipped binary (no CEF, no window).
@@ -161,17 +178,31 @@ check_parsed "127.0.0.1 becomes http" \
   "parsed-as-url http://127.0.0.1" "127.0.0.1"
 check_parsed "127.0.0.1:8080 becomes http" \
   "parsed-as-url http://127.0.0.1:8080" "127.0.0.1:8080"
-check_parsed "words become a Google search with encoded spaces" \
-  "parsed-as-search https://www.google.com/search?q=swift%20objective-c%2B%2B%20cef query=swift objective-c++ cef" \
-  "swift objective-c++ cef"
-check_parsed "a sentence becomes a search" \
-  "parsed-as-search https://www.google.com/search?q=how%20does%20chromium%20work query=how does chromium work" \
-  "how does chromium work"
-check_parsed "a Chinese query is percent-encoded UTF-8" \
-  "parsed-as-search https://www.google.com/search?q=%E6%B5%8F%E8%A7%88%E5%99%A8%20Chromium%20CEF query=浏览器 Chromium CEF" \
-  "浏览器 Chromium CEF"
+# The probe prints URLs in sanitized form (URLLogSanitizer): the query value
+# never appears in its output, and neither does the raw query text.
+check_parsed "words become a Google search with the query value redacted" \
+  "parsed-as-search https://www.google.com/search?q=<redacted>" "swift objective-c++ cef"
+check_parsed "a sentence becomes a search with the query value redacted" \
+  "parsed-as-search https://www.google.com/search?q=<redacted>" "how does chromium work"
+check_parsed "a Chinese query becomes a search with the query value redacted" \
+  "parsed-as-search https://www.google.com/search?q=<redacted>" "浏览器 Chromium CEF"
+check_parsed "a token URL keeps its parameter name and redacts the value" \
+  "parsed-as-url http://127.0.0.1:3080/?token=<redacted>" \
+  "http://127.0.0.1:3080/?token=test-token_123-abc"
+check_parsed "a fragment is redacted" \
+  "parsed-as-url https://example.com/callback#<redacted>" \
+  "https://example.com/callback#test-fragment"
 check_parsed "empty input does not navigate" "parsed-as-empty" ""
 check_parsed "whitespace-only input does not navigate" "parsed-as-empty" "   "
+
+# The probe output is a trace consumed by this script, so the raw query text and
+# its encoded form must not appear in it at all.
+PROBE_LOG="$WORK_DIR/m2-probe-search.log"
+"$EXECUTABLE" "--parse-navigation-input=swift objective-c++ cef" > "$PROBE_LOG" 2>/dev/null
+check_absent "the probe output does not echo the raw query" \
+  "swift objective-c++ cef" "$PROBE_LOG"
+check_absent "the probe output does not echo the percent-encoded query" \
+  "q=swift%20objective-c%2B%2B%20cef" "$PROBE_LOG"
 
 # ---------------------------------------------------------------------------
 echo
@@ -432,6 +463,45 @@ if [ -z "$(find ~/Library/Logs/DiagnosticReports -name 'NativeBrowser*' -newermt
 else
   fail "a NativeBrowser crash report was written during this run"
 fi
+
+# ---------------------------------------------------------------------------
+echo
+echo "8. URL redaction in the lifecycle trace and logs"
+# The lifecycle trace is written to standard output and captured into a log
+# file, so exactly the same redaction rules apply to it as to OSLog (security
+# fix). The token below is a throwaway value - never a real credential.
+REDACT_LOG="$WORK_DIR/m2-redaction.log"
+REDACT_TOKEN="test-token_123-abc"
+REDACT_URL="https://example.com/?token=$REDACT_TOKEN"
+rm -rf "$DATA_DIR/redaction"
+NATIVEBROWSER_DATA_DIR="$DATA_DIR/redaction" run_with_timeout 90 "$EXECUTABLE" \
+  --home-url="$REDACT_URL" --wait-for-window --quit-after=12 > "$REDACT_LOG" 2>&1
+REDACT_STATUS=$?
+if [ "$REDACT_STATUS" -eq 0 ]; then
+  pass "the redaction run launched and quit with exit 0"
+else
+  fail "the redaction run exited with $REDACT_STATUS"
+fi
+check_contains "the lifecycle trace reports the URL with its query value redacted" \
+  "navigation:url(https://example.com/?token=<redacted>)" "$REDACT_LOG"
+check_absent "the raw query value is absent from the whole run log" \
+  "$REDACT_TOKEN" "$REDACT_LOG"
+
+# ---------------------------------------------------------------------------
+echo
+echo "9. repository secret check"
+# The fix must not have introduced a credential, and one that was used earlier
+# must not be sitting in the tree or in the history. The checker prints only
+# categories and locations, never a matched value.
+SECRET_LOG="$WORK_DIR/m2-secret-check.log"
+if "$REPO_ROOT/Scripts/check_no_secrets.sh" > "$SECRET_LOG" 2>&1; then
+  pass "no credential-shaped value in tracked files or git history"
+else
+  fail "the secret check found a credential-shaped value; see $SECRET_LOG"
+fi
+while IFS= read -r line; do
+  printf '  %s\n' "$line"
+done < <(grep -E '\[FAIL\]' "$SECRET_LOG" 2>/dev/null)
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
