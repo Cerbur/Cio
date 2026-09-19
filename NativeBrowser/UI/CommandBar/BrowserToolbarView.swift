@@ -95,16 +95,21 @@ struct BrowserToolbarView: View {
 /// This is a modifier on the toolbar rather than logic inside AddressField so
 /// that the field itself stays a plain text field and the request is observed
 /// once per command.
+///
+/// Milestone 3 mounts exactly one toolbar, but the two identity checks here are
+/// what keep that from being load-bearing: the request is only accepted for
+/// *this* session, and it is forwarded with the session's AddressFieldModel as
+/// the object, so a mounted field can only ever react to its own session's ⌘L
+/// (section 15).
 private struct AddressFieldFocusListener: ViewModifier {
   let session: BrowserSession
 
   func body(content: Content) -> some View {
     content.onReceive(NotificationCenter.default.publisher(for: .browserFocusAddressField)) {
       notification in
-      // The application currently has one window; the identity check keeps the
-      // behaviour correct once Milestone 3 adds more.
       guard notification.object as AnyObject? === session else { return }
-      NotificationCenter.default.post(name: .browserAddressFieldShouldFocus, object: session)
+      NotificationCenter.default.post(
+        name: .browserAddressFieldShouldFocus, object: session.addressField)
     }
   }
 }

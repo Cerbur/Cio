@@ -22,6 +22,22 @@ namespace {
 constexpr int kInitialWidth = 1280;
 constexpr int kInitialHeight = 800;
 
+/// YES when `responder` is `view` or lives inside its subtree.
+///
+/// The window's shared field editor is deliberately not treated as part of any
+/// browser view: AppKit reuses one NSTextView for every text field in the
+/// window, so a browser teardown must never mistake the address field's editor
+/// for its own (Milestone 3 section 17).
+BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
+  if (responder == nil || view == nil) {
+    return NO;
+  }
+  if ([responder isKindOfClass:[NSView class]]) {
+    return [(NSView *)responder isDescendantOf:view];
+  }
+  return NO;
+}
+
 }  // namespace
 
 @implementation BrowserBridge {
@@ -35,6 +51,10 @@ constexpr int kInitialHeight = 800;
   /// is not safe: the first release is what destroys the browser, so a second
   /// pass would run against a browser that is already being torn down.
   BOOL _viewReleased;
+  /// YES when this close is part of application termination, in which case the
+  /// window's first responder is released unconditionally (the Milestone 2
+  /// Cmd+Q fix). See -closeForApplicationTermination:.
+  BOOL _releasesFirstResponderOnClose;
   NSSize _lastReportedSize;
 }
 
@@ -57,6 +77,11 @@ constexpr int kInitialHeight = 800;
 
 - (BOOL)isClosed {
   return _closed;
+}
+
+- (int)browserIdentifier {
+  CefRefPtr<CefBrowser> browser = _client->browser();
+  return browser ? browser->GetIdentifier() : -1;
 }
 
 #pragma mark - Navigation
@@ -117,7 +142,10 @@ constexpr int kInitialHeight = 800;
     if (focused) {
       // Chromium only receives key events when its view is first responder.
       [browserView.window makeFirstResponder:browserView];
-    } else if (browserView.window.firstResponder == browserView) {
+    } else if (NBResponderBelongsToView(browserView.window.firstResponder, browserView)) {
+      // Only this browser's own responder is cleared. Releasing focus from a
+      // tab that is being switched away from must not disturb the native
+      // address field, whose field editor is the window's first responder.
       [browserView.window makeFirstResponder:nil];
     }
   }
@@ -182,11 +210,12 @@ constexpr int kInitialHeight = 800;
 
 #pragma mark - Lifecycle
 
-- (void)close {
+- (void)closeForApplicationTermination:(BOOL)applicationTerminating {
   if (_closed || _closeRequested) {
     return;
   }
   _closeRequested = YES;
+  _releasesFirstResponderOnClose = applicationTerminating;
 
   CefRefPtr<CefBrowser> browser = _client->browser();
   if (!browser) {
@@ -236,12 +265,36 @@ constexpr int kInitialHeight = 800;
   @autoreleasepool {
     NSView *browserView =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
-    // Resign the native responder before detaching the host view. Chromium's
-    // focused content and AppKit's input context can otherwise retain it.
+    // The browser being closed always releases its own CEF focus, so two
+    // Chromium browsers never both believe they own the keyboard.
     browser->GetHost()->SetFocus(false);
-    [browserView.window makeFirstResponder:nil];
+    [self releaseFirstResponderIfOwnedByView:browserView];
     [browserView removeFromSuperview];
     browserView = nil;
+  }
+}
+
+/// Clears AppKit's first responder, but only when that belongs to this close.
+///
+/// Milestone 2 cleared it unconditionally, because during Cmd+Q the whole
+/// application is going away and Chromium's focused content (and AppKit's input
+/// context) can otherwise retain the host view and stall teardown. That fix is
+/// preserved through `_releasesFirstResponderOnClose`, which the application
+/// termination path sets.
+///
+/// With several browsers in one window the unconditional clear is no longer
+/// always right: closing a *background* tab must not take the keyboard away from
+/// the active tab, and it must not disturb the native address field, whose field
+/// editor is the window's first responder. Outside termination the responder is
+/// therefore only cleared when it actually belongs to the view being destroyed.
+- (void)releaseFirstResponderIfOwnedByView:(NSView *)browserView {
+  NSWindow *window = browserView.window;
+  if (window == nil) {
+    return;
+  }
+  if (_releasesFirstResponderOnClose ||
+      NBResponderBelongsToView(window.firstResponder, browserView)) {
+    [window makeFirstResponder:nil];
   }
 }
 
@@ -326,6 +379,15 @@ constexpr int kInitialHeight = 800;
           didFailLoadWithError:errorText
                      errorCode:errorCode
                      failedURL:failedURL];
+}
+
+- (void)browserDidRequestPopup:(NSString *)url {
+  if (_closed || _closeRequested || url.length == 0) {
+    return;
+  }
+  // Deliberately no logging here: a popup URL can carry an OAuth code. The
+  // runtime owner reports the sanitized form.
+  [self.delegate browserBridge:self didRequestNewTabWithURL:url];
 }
 
 - (void)browserDidClose {

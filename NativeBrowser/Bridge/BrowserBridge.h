@@ -37,6 +37,15 @@ NS_SWIFT_UI_ACTOR
     didFailLoadWithError:(NSString *)errorText
                errorCode:(NSInteger)errorCode
                failedURL:(NSString *)failedURL;
+
+/// Chromium requested a popup (`target=_blank`, `window.open`).
+///
+/// The unmanaged native CEF window has already been cancelled; `url` is the
+/// target the runtime owner should open as a managed tab instead (Milestone 3
+/// section 26). The URL is NOT logged here: it routinely carries an OAuth code
+/// or a signature, and the owner reports it through URLLogSanitizer.
+- (void)browserBridge:(BrowserBridge *)bridge didRequestNewTabWithURL:(NSString *)url;
+
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 
 @end
@@ -51,6 +60,10 @@ NS_SWIFT_UI_ACTOR
 /// YES when the underlying Chromium browser no longer exists, i.e. after
 /// CefLifeSpanHandler::OnBeforeClose. A closed bridge cannot be reused.
 @property(nonatomic, readonly, getter=isClosed) BOOL closed;
+
+/// Chromium's identifier for the browser this bridge owns, or -1 before the
+/// browser exists. Two live bridges must never report the same value.
+@property(nonatomic, readonly) int browserIdentifier;
 
 /// Creates a bridge that renders into `view`. The Chromium browser itself is
 /// created by the first -loadURL: call, because the parent view must be in a
@@ -78,7 +91,17 @@ NS_SWIFT_UI_ACTOR
 
 /// Requests browser destruction. -browserBridgeDidClose: is delivered once
 /// Chromium has finished tearing the browser down.
-- (void)close;
+///
+/// `applicationTerminating` additionally releases the window's first responder
+/// unconditionally while the browser view is detached. That unconditional
+/// release is the Milestone 2 Cmd+Q fix and stays correct while the whole
+/// application is quitting. It must NOT run for an ordinary background-tab
+/// close: with several browsers in one window it would take the keyboard away
+/// from the active tab or from the native address field (Milestone 3 section
+/// 17). Either way the closed browser always releases its own CEF focus, and the
+/// window's first responder is cleared when it belonged to the view being
+/// destroyed.
+- (void)closeForApplicationTermination:(BOOL)applicationTerminating;
 
 /// Releases the Chromium view, which is what actually destroys the browser.
 ///
@@ -104,6 +127,7 @@ NS_SWIFT_UI_ACTOR
 - (void)browserDidFailLoadWithError:(NSString *)errorText
                           errorCode:(NSInteger)errorCode
                           failedURL:(NSString *)failedURL;
+- (void)browserDidRequestPopup:(NSString *)url;
 - (void)browserDidClose;
 
 @end

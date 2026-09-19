@@ -10,6 +10,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     AppLog.app.info("application did finish launching")
     ApplicationRuntime.shared.record("appkit:did-finish-launching")
+    // Command-W must close the selected tab, not the window (Milestone 3
+    // section 21). The scene installs AppKit's standard window Close item, which
+    // claims the same key equivalent; it is removed here rather than shadowed,
+    // because two items with one key equivalent resolve by menu order.
+    MainMenuDump.claimCloseTabShortcut()
+    if CommandLine.arguments.contains("--dump-main-menu") {
+      MainMenuDump.printMainMenu("launch")
+    }
     ApplicationRuntime.shared.startMessagePump()
   }
 
@@ -53,6 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // with live browsers from this second entry point.
     if !runtime.hasLiveBrowsers {
       runtime.shutdownCEF()
+    }
+    // The late dump is what proves the Command-W conflict stayed resolved for
+    // the whole run, not only at launch.
+    if CommandLine.arguments.contains("--dump-main-menu") {
+      MainMenuDump.printMainMenu("will-terminate")
     }
     runtime.emitLifecycleTrace()
   }

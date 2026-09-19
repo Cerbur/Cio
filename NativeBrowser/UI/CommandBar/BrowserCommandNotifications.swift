@@ -20,8 +20,11 @@ extension Notification.Name {
   static let browserFocusAddressField = Notification.Name("NativeBrowser.focusAddressField")
 
   /// Posted by the toolbar once it has matched a focus request to its session.
-  /// The notification's object is the BrowserSession; the address field of that
-  /// session becomes first responder and selects all.
+  ///
+  /// The notification's object is that session's AddressFieldModel, not the
+  /// session: the address field registers for its own model only, so with more
+  /// than one field mounted a request can never focus the wrong one (Milestone 3
+  /// section 15).
   static let browserAddressFieldShouldFocus = Notification.Name(
     "NativeBrowser.addressFieldShouldFocus")
 }

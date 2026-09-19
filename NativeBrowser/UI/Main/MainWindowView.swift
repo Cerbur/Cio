@@ -2,15 +2,16 @@
 //  MainWindowView.swift
 //  NativeBrowser
 //
-//  Milestone 2 window content: the native navigation toolbar (Back, Forward,
-//  Reload/Stop, address field) above the Chromium content, and a slim status
-//  line showing the page title from CEF. Tabs, the sidebar and the Liquid Glass
-//  treatment belong to later milestones (ARCHITECTURE.md sections 12-15).
+//  The Milestone 3 window: a vertical tab sidebar, one navigation toolbar bound
+//  to the selected tab, and one Chromium surface host holding every live
+//  browser. The Liquid Glass treatment belongs to Milestone 5 (ARCHITECTURE.md
+//  sections 12-15).
 //
-//  The Chromium view is created once and never rebuilt: everything the toolbar
-//  pushes through (URL, title, loading state, address text) only changes
-//  @Published state on BrowserSession, and ChromiumView is keyed by the session
-//  so SwiftUI keeps the same AppKit container (Milestone 2, section 20).
+//  There is deliberately one toolbar and one address field for the whole
+//  window, not one per tab (Milestone 3 section 14). It is bound to
+//  `manager.selectedSession`, so switching tabs switches the toolbar with it,
+//  while a background tab's callbacks can only reach that tab's own session and
+//  its own AddressFieldModel.
 //
 
 import SwiftUI
@@ -19,40 +20,68 @@ struct MainWindowView: View {
   @EnvironmentObject private var runtime: ApplicationRuntime
 
   var body: some View {
-    BrowserContentView(session: runtime.browserSession)
-      .frame(minWidth: 640, minHeight: 400)
-      .onAppear { runtime.record("swiftui:main-window-appeared") }
+    BrowserWorkspaceView(manager: runtime.sessionManager)
+      .frame(minWidth: 900, minHeight: 500)
+      .onAppear { runtime.noteMainWindowAppeared() }
   }
 }
 
-private struct BrowserContentView: View {
-  @ObservedObject var session: BrowserSession
+private struct BrowserWorkspaceView: View {
+  @ObservedObject var manager: BrowserSessionManager
 
   var body: some View {
-    VStack(spacing: 0) {
-      BrowserToolbarView(session: session)
-        .addressFieldFocusListener(session: session)
+    HStack(spacing: 0) {
+      TabSidebarView(manager: manager)
 
-      ChromiumView(session: session)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      Divider()
 
-      statusBar
+      VStack(spacing: 0) {
+        if let session = manager.selectedSession {
+          BrowserToolbarView(session: session)
+            .addressFieldFocusListener(session: session)
+        } else {
+          Color.clear.frame(height: 44)
+        }
+
+        // One stable host for every live Chromium view. Switching tabs changes
+        // which container is visible and nothing else, so no CefBrowser is
+        // created or destroyed by a selection change (sections 11 and 12).
+        BrowserSurfaceView(manager: manager)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        statusBar
+      }
     }
   }
 
-  /// Keeps the page title visible, which Milestone 3 needs per tab. The command
-  /// bar itself is above the content.
+  private var selectedTab: BrowserTab? {
+    manager.tabs.first { $0.id == manager.selectedTabID }
+  }
+
+  /// Keeps the selected page's title and the tab counts visible, which is what
+  /// the multi-tab manual checks need; the sidebar carries the per-tab titles.
   private var statusBar: some View {
     HStack(spacing: 8) {
-      Image(systemName: session.lastErrorCode == nil ? "globe" : "exclamationmark.triangle")
-        .foregroundStyle(.secondary)
-      Text(session.title.isEmpty ? "Loading…" : session.title)
+      Image(
+        systemName: (manager.selectedSession?.lastErrorCode == nil)
+          ? "globe" : "exclamationmark.triangle"
+      )
+      .foregroundStyle(.secondary)
+
+      Text(selectedStatusText)
         .lineLimit(1)
         .truncationMode(.tail)
+
       Spacer(minLength: 12)
-      if session.isClosed {
-        Text("closed")
+
+      if manager.liveSessionCount > manager.tabs.count {
+        // A tab that has left the sidebar but whose browser has not reached
+        // OnBeforeClose yet still counts as live (section 8).
+        Text("closing \(manager.liveSessionCount - manager.tabs.count)")
       }
+
+      Text(manager.tabs.count == 1 ? "1 tab" : "\(manager.tabs.count) tabs")
+        .monospacedDigit()
     }
     .font(.caption)
     .padding(.horizontal, 12)
@@ -61,5 +90,14 @@ private struct BrowserContentView: View {
     .overlay(alignment: .top) {
       Divider()
     }
+  }
+
+  private var selectedStatusText: String {
+    guard let tab = selectedTab else { return "No tab" }
+    if let session = manager.selectedSession, session.lastErrorCode != nil {
+      return "Unable to load page"
+    }
+    if tab.title.isEmpty && tab.url == nil { return "Loading…" }
+    return tab.displayTitle
   }
 }

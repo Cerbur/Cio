@@ -6,15 +6,22 @@
 //  (ARCHITECTURE.md section 7).
 //
 //  Deliberately not Codable and never persisted: the persisted domain model is
-//  a separate type that arrives with tabs in Milestone 3 (section 6).
+//  the separate BrowserTab type, which contains no CEF object and no session.
 //
 //  This class owns no CEF type: everything goes through BrowserBridge.
 //
-//  Milestone 2 adds the UI-facing navigation state (section 20 of
-//  ARCHITECTURE.md) and the address-field editing state. The editing flag lives
-//  on the session on purpose: the "do not overwrite what the user is typing"
-//  rule is stated once, in BrowserSession.updateNavigationState, instead of
-//  being split between the toolbar and the bridge.
+//  Milestone 2 added the UI-facing navigation state (section 20 of
+//  ARCHITECTURE.md) and the address-field editing state. Milestone 3 adds the
+//  tab identity, the typed close notification the session manager waits on, and
+//  the per-session metadata notification that keeps one browser's callbacks from
+//  touching another tab.
+//
+//  The editing flag lives on the session on purpose: the "do not overwrite what
+//  the user is typing" rule is stated once, in
+//  BrowserSession.updateNavigationState / AddressFieldModel.applyBrowserURL,
+//  instead of being split between the toolbar and the bridge. Because every
+//  session owns its own AddressFieldModel, a background tab's URL callback
+//  cannot reach the address field of the selected tab at all.
 //
 
 import AppKit
@@ -38,7 +45,14 @@ struct NavigationState: Equatable {
 
 @MainActor
 final class BrowserSession: NSObject, ObservableObject, Identifiable {
+  /// Runtime identity of this session, distinct from the tab identifier: a tab
+  /// can be reopened and its runtime replaced, and the log has to be able to
+  /// tell those two apart.
   let id = UUID()
+
+  /// The BrowserTab this session renders. Stable for the session's lifetime and
+  /// the key the manager files the session under.
+  let tabID: UUID
 
   /// URL the session opens when its browser is first created.
   let initialURL: URL
@@ -59,9 +73,17 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private(set) var hasFinishedFirstLoad = false
 
   /// How many Chromium browsers this session has created. Must stay at 1 for a
-  /// session's lifetime: navigation, resizing and SwiftUI re-renders must never
-  /// build a second browser (Milestone 2, section 20).
+  /// session's lifetime: navigation, resizing, SwiftUI re-renders and - in
+  /// Milestone 3 - tab switching must never build a second browser.
   private(set) var browserCreationCount = 0
+
+  /// Chromium's identifier for this session's browser, or nil before it exists.
+  /// Used by the multi-tab integration test to prove that two tabs really do own
+  /// two distinct browsers.
+  var browserIdentifier: Int? {
+    guard let bridge, bridge.browserIdentifier >= 0 else { return nil }
+    return Int(bridge.browserIdentifier)
+  }
 
   /// Incremented every time Chromium reports a different main-frame URL. Used
   /// by the integration self-test to prove that a navigation actually happened
@@ -72,21 +94,41 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// the main-frame URL, so this is what proves that a reload reached Chromium.
   private(set) var loadStartCount = 0
 
-  /// Editing state of the native address field.
+  /// Editing state of the native address field. One per session, so a background
+  /// tab's navigation callbacks can never move the selected tab's text.
   let addressField = AddressFieldModel()
 
   /// True while the native address field owns the keyboard. Used to keep the
   /// toolbar's focus handling from fighting Chromium for first responder.
   private(set) var isEditingAddressField = false
 
-  /// Lifecycle milestones, for logging and the verification tooling.
+  /// Lifecycle milestones, for logging and the verification tooling. Diagnostics
+  /// only: BrowserSessionManager never derives ownership from these strings.
   var onLifecycleEvent: ((String) -> Void)?
+
+  /// Typed close notification (Milestone 3 section 7).
+  ///
+  /// Delivered exactly once, after Chromium reported OnBeforeClose. The manager
+  /// releases the runtime container here and nowhere else, so a session cannot
+  /// be discarded before CEF has finished with it.
+  var onClosed: ((BrowserSession) -> Void)?
+
+  /// Typed notification that a Chromium callback changed state the tab list
+  /// shows. Carries this session, so one browser's callback can only ever update
+  /// its own tab (Milestone 3 section 13).
+  var onTabMetadataChanged: ((BrowserSession) -> Void)?
+
+  /// Typed notification that Chromium asked for a popup (`target=_blank`,
+  /// `window.open`). The bridge has already cancelled the unmanaged native
+  /// window; the manager decides where the URL opens (Milestone 3 section 26).
+  var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
 
   private var bridge: BrowserBridge?
   private weak var containerView: ChromiumContainerView?
   private var didStartLoading = false
 
-  init(initialURL: URL) {
+  init(tabID: UUID, initialURL: URL) {
+    self.tabID = tabID
     self.initialURL = initialURL
     super.init()
   }
@@ -114,8 +156,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       return
     }
     if let existing = containerView, existing !== view, bridge != nil {
-      // SwiftUI re-created the representable's view: move the existing browser
-      // instead of creating a second one (section 28).
+      // The manager moved this session's surface to another container (for
+      // example because SwiftUI re-created the representable's view): move the
+      // existing browser instead of creating a second one.
       containerView = view
       view.delegate = self
       bridge?.reparent(to: view)
@@ -138,6 +181,20 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     // Objective-C++ bridge deliberately does not log it at all).
     AppLog.navigation.info("load \(URLLogSanitizer.sanitized(self.initialURL), privacy: .public)")
     bridge.loadURL(initialURL.absoluteString)
+  }
+
+  /// True while AppKit's keyboard focus is inside this session's Chromium
+  /// surface. A tab switch only moves the keyboard when the page had it, so a
+  /// switch never pulls focus out of the native address field.
+  var holdsAppKitKeyboardFocus: Bool {
+    guard let view = containerView, let window = view.window,
+      let responder = window.firstResponder
+    else { return false }
+    if responder === view { return true }
+    if let responderView = responder as? NSView {
+      return responderView.isDescendant(of: view)
+    }
+    return false
   }
 
   // MARK: - Navigation
@@ -216,14 +273,24 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   /// Requests browser destruction. Safe to call more than once.
-  func close() {
+  ///
+  /// `terminating` is passed through to the bridge: while the whole application
+  /// is quitting, releasing AppKit's first responder unconditionally is correct
+  /// (it is the Milestone 2 Cmd+Q fix). For an ordinary background-tab close it
+  /// is not - it would take the keyboard away from the active tab or from the
+  /// native address field.
+  func close(terminating: Bool = false) {
     guard !isClosed else { return }
     guard let bridge else {
       isClosed = true
+      // Reported before the typed callback below so the lifecycle trace keeps
+      // the "browser:closed" -> "termination:browsers-closed" order the
+      // Milestone 2 verification checks.
       onLifecycleEvent?("browser:closed(before-creation)")
+      onClosed?(self)
       return
     }
-    bridge.close()
+    bridge.close(forApplicationTermination: terminating)
   }
 
   /// Records that the native address field gained or lost the keyboard.
@@ -290,18 +357,28 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
         )
       }
     }
+    onTabMetadataChanged?(self)
   }
 }
 
 // MARK: - ChromiumContainerViewDelegate
 
 extension BrowserSession: ChromiumContainerViewDelegate {
-  func containerViewDidMoveToWindow(_ view: ChromiumContainerView) {
+  func containerViewDidAddToWindow(_ view: ChromiumContainerView) {
     createBrowserIfPossible()
   }
 
   func containerViewDidResize(_ view: ChromiumContainerView) {
     guard view.window != nil else { return }
+    bridge?.resize(toBounds: view.bounds)
+  }
+
+  func containerViewDidChangeVisibility(_ view: ChromiumContainerView, isVisible: Bool) {
+    // Hiding a container must not suspend its browser (Milestone 3 section 34):
+    // the view stays in the hierarchy and Chromium keeps running. Coming back,
+    // the browser is simply told its geometry again so the first frame after the
+    // switch matches the container.
+    guard isVisible, view.window != nil else { return }
     bridge?.resize(toBounds: view.bounds)
   }
 }
@@ -317,6 +394,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     // Clicking and typing must reach the page without an extra click first
     // (ARCHITECTURE.md section 18). CEF takes focus from there on.
     bridge.setFocus(true)
+    onTabMetadataChanged?(self)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateTitle title: String) {
@@ -324,6 +402,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     self.title = title
     AppLog.navigation.debug("title changed: \(title, privacy: .public)")
     onLifecycleEvent?("navigation:title(\(title))")
+    onTabMetadataChanged?(self)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
@@ -339,6 +418,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     let loggedURL = URLLogSanitizer.sanitized(url)
     AppLog.navigation.debug("main-frame URL changed: \(loggedURL, privacy: .public)")
     onLifecycleEvent?("navigation:url(\(loggedURL))")
+    onTabMetadataChanged?(self)
   }
 
   func browserBridge(
@@ -374,10 +454,21 @@ extension BrowserSession: BrowserBridgeDelegate {
     }
   }
 
+  /// Chromium asked for a popup. The bridge already cancelled the unmanaged
+  /// native CEF window; the URL is handed to the runtime owner so it can open as
+  /// a managed tab instead (Milestone 3 section 26).
+  func browserBridge(_ bridge: BrowserBridge, didRequestNewTabWithURL url: String) {
+    guard !isClosed else { return }
+    onOpenNewTabRequest?(self, url)
+  }
+
   func browserBridgeDidClose(_ bridge: BrowserBridge) {
     guard !isClosed else { return }
     isClosed = true
     hasBrowser = false
+    // Order matters: the diagnostic trace first, then the typed ownership
+    // callback the manager releases this session from.
     emit("browser:closed")
+    onClosed?(self)
   }
 }

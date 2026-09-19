@@ -82,17 +82,27 @@ bool CEFClientHandler::OnBeforePopup(
     CefBrowserSettings &settings,
     CefRefPtr<CefDictionaryValue> &extra_info,
     bool *no_javascript_access) {
-  // Milestone 1 hosts exactly one browser, so allowing a popup would create a
-  // window this application does not manage. Navigate the existing browser
-  // instead; Milestone 3 (tabs) routes popups to a new tab instead
-  // (ARCHITECTURE.md section 21).
+  // The unmanaged CEF popup is always cancelled: this application hosts its
+  // browsers in its own view hierarchy, so a native CEF child window would not
+  // be owned or closed by anything.
+  //
+  // The target URL is handed to the runtime owner instead, which opens it as a
+  // managed tab (Milestone 3 section 26). It is deliberately not formatted into
+  // any log here - a popup URL routinely carries an OAuth code or a signature,
+  // and the owner reports it through URLLogSanitizer.
+  //
+  // Explicitly deferred: window.opener identity, JavaScript popup object
+  // identity, OAuth child-window scripting and custom popup dimensions. Only
+  // ordinary target=_blank / window.open navigation is routed to a tab.
   const std::string url = target_url.ToString();
   if (!url.empty()) {
-    if (CefRefPtr<CefFrame> main_frame = browser->GetMainFrame()) {
-      main_frame->LoadURL(url);
-    }
+    NSString *value = NSStringFromCefString(target_url);
+    __weak BrowserBridge *bridge = bridge_;
+    OnMainThread(^{
+      [bridge browserDidRequestPopup:value];
+    });
   }
-  return true;  // Cancel the popup.
+  return true;  // Cancel the unmanaged popup.
 }
 
 void CEFClientHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {

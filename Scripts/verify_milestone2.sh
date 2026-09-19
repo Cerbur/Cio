@@ -279,8 +279,11 @@ check_file_contains "optional command-[ back shortcut" \
   "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "keyboardShortcut(\"[\", modifiers: .command)"
 check_file_contains "optional command-] forward shortcut" \
   "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "keyboardShortcut(\"]\", modifiers: .command)"
+# Milestone 3 replaced the single captured session with the runtime owner of the
+# tabs; the commands are still attached to the scene, and the check still fails
+# if that attachment is removed.
 check_file_contains "the commands are attached to the scene" \
-  "$REPO_ROOT/NativeBrowser/App/NativeBrowserApp.swift" "BrowserCommands(session: runtime.browserSession)"
+  "$REPO_ROOT/NativeBrowser/App/NativeBrowserApp.swift" "BrowserCommands(manager: runtime.sessionManager)"
 check_file_contains "the toolbar renders Back" \
   "$REPO_ROOT/NativeBrowser/UI/CommandBar/BrowserToolbarView.swift" "systemImage: \"chevron.backward\""
 check_file_contains "the toolbar renders Forward" \
@@ -291,12 +294,15 @@ check_file_contains "the toolbar hosts the address field" \
   "$REPO_ROOT/NativeBrowser/UI/CommandBar/BrowserToolbarView.swift" "AddressField("
 check_file_contains "the toolbar sits above the Chromium view" \
   "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "BrowserToolbarView(session: session)"
-check_file_contains "the Chromium view still fills the window" \
-  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "ChromiumView(session: session)"
+# Milestone 3 replaced the single per-window ChromiumView with one stable surface
+# host that keeps every live Chromium container mounted; the content still fills
+# the window, and a forced identity change on it is still checked for.
+check_file_contains "the Chromium surface still fills the window" \
+  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "BrowserSurfaceView(manager: manager)"
 check_file_contains "the Chromium view is not rebuilt by UI state" \
   "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" ".frame(maxWidth: .infinity, maxHeight: .infinity)"
-check_absent "no forced identity change on the Chromium view" \
-  "ChromiumView(session: session).id(" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"
+check_absent "no forced identity change on the Chromium surface" \
+  "BrowserSurfaceView(manager: manager).id(" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"
 check_file_contains "focus requests reach the field through the responder chain" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSession+Commands.swift" "NotificationCenter.default.post(name: .browserFocusAddressField"
 check_file_contains "the field becomes first responder with select-all" \

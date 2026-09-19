@@ -53,12 +53,15 @@ struct AddressField: NSViewRepresentable {
     // substitution belong to the field editor and are turned off in
     // -configureFieldEditor once AppKit hands the editor over.
     field.isAutomaticTextCompletionEnabled = false
-    context.coordinator.observeFocusRequests(for: field)
+    context.coordinator.observeFocusRequests(for: field, model: model)
     return field
   }
 
   func updateNSView(_ field: NativeBrowserAddressField, context: Context) {
     context.coordinator.parent = self
+    // The toolbar is reused when the selected tab changes, so the focus
+    // observation has to follow the model it is bound to now.
+    context.coordinator.observeFocusRequests(for: field, model: model)
     // Assigning -stringValue while the field editor is active would reset the
     // user's selection and disturb an in-flight IME composition, so the text is
     // only written when it genuinely differs.
@@ -79,6 +82,9 @@ struct AddressField: NSViewRepresentable {
   final class Coordinator: NSObject, NSTextFieldDelegate {
     var parent: AddressField
     private var focusObserver: NSObjectProtocol?
+    /// The model the current observation is registered for. A focus request is
+    /// only honoured for the session's own address field.
+    private var observedModel: AddressFieldModel?
     private let log = AppLog.navigation
 
     init(parent: AddressField) {
@@ -95,16 +101,21 @@ struct AddressField: NSViewRepresentable {
       guard let focusObserver else { return }
       NotificationCenter.default.removeObserver(focusObserver)
       self.focusObserver = nil
+      self.observedModel = nil
     }
 
     /// ⌘L arrives as a notification (see BrowserCommandNotifications). The
-    /// toolbar has already matched it to this session, so the field only has to
-    /// ask its window for first responder status.
-    func observeFocusRequests(for field: NativeBrowserAddressField) {
-      guard focusObserver == nil else { return }
+    /// toolbar has already matched it to a session and forwarded it with that
+    /// session's AddressFieldModel, so the observation is registered for that
+    /// model only (Milestone 3 section 15). A field can therefore never react to
+    /// another tab's ⌘L.
+    func observeFocusRequests(for field: NativeBrowserAddressField, model: AddressFieldModel) {
+      if observedModel === model, focusObserver != nil { return }
+      stopObservingFocusRequests()
+      observedModel = model
       focusObserver = NotificationCenter.default.addObserver(
         forName: .browserAddressFieldShouldFocus,
-        object: nil,
+        object: model,
         queue: .main
       ) { [weak field] _ in
         MainActor.assumeIsolated {

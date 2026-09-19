@@ -10,6 +10,11 @@
 //    3. start the SwiftUI/AppKit application,
 //    4. shut CEF down after the run loop returns.
 //
+//  Nothing here changed for Milestone 3's CEF bootstrap: the framework loading,
+//  the helper packaging, CefInitialize/CefExecuteProcess, the sandbox
+//  configuration, the cache path and the message-loop architecture are exactly
+//  the Milestone 2 code.
+//
 
 import AppKit
 import Foundation
@@ -51,6 +56,11 @@ enum BrowserMain {
       // Milestone 2 integration check. The result is this process's exit code.
       exit(NavigationSelfTest.run(runtime: runtime))
     }
+    // Milestone 3 multi-tab integration check. It is installed as a driver that
+    // runs inside the real application - real window, real surface host, real
+    // NSApplication run loop - because that is the configuration in which
+    // Chromium actually completes a browser teardown for a loaded page.
+    TabsSelfTest.installIfRequested(runtime: runtime)
 
     scheduleToolingHooksIfRequested(runtime: runtime)
 
@@ -79,38 +89,54 @@ enum BrowserMain {
     CommandLine.arguments.contains("--cef-self-test")
       || CommandLine.arguments.contains("--browser-self-test")
       || CommandLine.arguments.contains("--navigation-self-test")
+      || CommandLine.arguments.contains("--tabs-self-test")
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }
+      || CommandLine.arguments.contains { $0.hasPrefix("--open-tabs=") }
       || CommandLine.arguments.contains("--wait-for-window")
       || CommandLine.arguments.contains { $0.hasPrefix("--terminate-in-pump-after=") }
       || CommandLine.arguments.contains("--focus-address-first")
+      || CommandLine.arguments.contains("--dump-main-menu")
       || CommandLine.arguments.contains("--log-shutdown-timing")
   }
 
-  /// Milestone 1 integration check: builds the real window and container, loads
-  /// the configured page, waits for Chromium to report the load finished, then
-  /// closes the browser and shuts CEF down.
+  /// The window the self-tests drive. It is a real, key window: Chromium
+  /// destroys a browser when its host view deallocates, and a view in a window
+  /// that was never ordered in front is not torn down the same way.
+  private static func makeTestWindow(title: String) -> NSWindow {
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 1024, height: 768),
+      styleMask: [.titled, .closable, .resizable],
+      backing: .buffered,
+      defer: false)
+    window.title = title
+    return window
+  }
+
+  /// Milestone 1 integration check: builds the real window and surface host,
+  /// loads the configured page, waits for Chromium to report the load finished,
+  /// then closes the browser and shuts CEF down.
   ///
   /// Running "NativeBrowser --browser-self-test" exits 0 only when the page
   /// loaded, no navigation error was reported and the browser was destroyed.
   private static func runBrowserSelfTestIfRequested(runtime: ApplicationRuntime) -> Bool {
     guard CommandLine.arguments.contains("--browser-self-test") else { return false }
 
-    let session = runtime.browserSession
-    let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1024, height: 768),
-      styleMask: [.titled, .closable, .resizable],
-      backing: .buffered,
-      defer: false)
-    window.title = "NativeBrowser self-test"
-    let container = ChromiumContainerView(frame: window.contentLayoutRect)
-    container.autoresizingMask = [.width, .height]
-    window.contentView = container
+    let manager = runtime.sessionManager
+    let window = makeTestWindow(title: "NativeBrowser self-test")
+    let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
+    host.autoresizingMask = [.width, .height]
+    window.contentView = host
     // The browser view needs a window to render into; keep the test window
     // behind everything else.
     window.orderBack(nil)
-    session.attach(to: container)
+    manager.attachSurfaceHost(host)
+
+    guard let session = manager.selectedSession else {
+      print("browser-self-test: no tab was created")
+      exit(2)
+    }
 
     // CEF is pumped from the application run loop, which the self-test drives
     // itself instead of starting SwiftUI.
@@ -129,20 +155,20 @@ enum BrowserMain {
     )
     runtime.record("selftest:loaded=\(loaded)")
 
-    // Resize check: the window, the AppKit container and the Chromium view must
-    // all track each other (ARCHITECTURE.md section 9).
+    // Resize check: the window, the AppKit surface host, the container and the
+    // Chromium view must all track each other (ARCHITECTURE.md section 9).
     let resizedSize = NSSize(width: 900, height: 620)
     window.setContentSize(resizedSize)
     let resizeDeadline = Date().addingTimeInterval(1.0)
     while Date() < resizeDeadline {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
-    let containerSize = container.bounds.size
+    let hostSize = host.bounds.size
     print(
-      "browser-self-test: resized-container=\(Int(containerSize.width))x\(Int(containerSize.height))"
+      "browser-self-test: resized-container=\(Int(hostSize.width))x\(Int(hostSize.height))"
     )
     runtime.record(
-      "selftest:resized=\(Int(containerSize.width))x\(Int(containerSize.height))")
+      "selftest:resized=\(Int(hostSize.width))x\(Int(hostSize.height))")
 
     // Close the browser the same way the application does at termination:
     // request the close, pump, then let the runtime finish and shut CEF down.
@@ -175,8 +201,8 @@ enum BrowserMain {
   //                        SwiftUI window exists (the first launch into a fresh
   //                        data directory spends a moment building Chromium's
   //                        profile)
-  //   --navigate-after=N   navigate the live browser (BrowserBridge -loadURL: ->
-  //                        CefFrame::LoadURL) N seconds later
+  //   --open-tabs=N        open N tabs in total once the window exists
+  //   --navigate-after=N   navigate the selected tab N seconds later
   //   --navigate-wait      do not start the countdown until that navigation has
   //                        been requested
 
@@ -257,6 +283,7 @@ enum BrowserMain {
     case .waitingForWindow:
       guard runtime.didAppearInWindow else { return }
       AppLog.app.info("tooling: the SwiftUI window appeared")
+      openTabsForTooling(runtime: runtime)
       if let delay = toolingNavigateDelay {
         toolingPhase = .waitingToNavigate
         toolingDeadline = Date().addingTimeInterval(delay)
@@ -285,8 +312,27 @@ enum BrowserMain {
   /// exercised on a browser that has actually navigated.
   private static func navigateForTooling(runtime: ApplicationRuntime) {
     guard let url = URL(string: "https://example.com/") else { return }
-    AppLog.navigation.info("tooling: navigating the live application")
-    runtime.browserSession.load(url)
+    AppLog.navigation.info("tooling: navigating the selected tab")
+    runtime.sessionManager.loadInSelectedTab(url)
+  }
+
+  /// "--open-tabs=N" opens N tabs in total once the window exists.
+  ///
+  /// Used by Scripts/verify_milestone3.sh to run the real application with
+  /// several live Chromium browsers and then exercise the whole quit path.
+  /// Each extra tab gets a URL of its own; the query value is never logged
+  /// (URLLogSanitizer replaces it).
+  private static func openTabsForTooling(runtime: ApplicationRuntime) {
+    let prefix = "--open-tabs="
+    guard
+      let argument = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }),
+      let total = Int(argument.dropFirst(prefix.count)), total > 1
+    else { return }
+    let manager = runtime.sessionManager
+    for index in 2...total {
+      manager.createTab(url: URL(string: "https://example.com/?tab=\(index)"))
+    }
+    AppLog.session.info("tooling: opened \(total, privacy: .public) tabs")
   }
 
   /// Headless CEF lifecycle check used by tooling. Running

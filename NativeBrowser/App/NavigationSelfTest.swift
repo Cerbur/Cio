@@ -32,7 +32,7 @@ enum NavigationSelfTest {
 
   /// Runs the self-test. Returns the process exit code.
   static func run(runtime: ApplicationRuntime) -> Int32 {
-    let session = runtime.browserSession
+    let manager = runtime.sessionManager
     var failures = 0
     var checks = 0
 
@@ -47,23 +47,30 @@ enum NavigationSelfTest {
       runtime.record("selftest:m2:\(name)=\(passed)")
     }
 
-    // The real window and the real container: CEF attaches its browser view to
-    // this NSView exactly as it does in the application.
+    // The real window and the real surface host: CEF attaches its browser view
+    // to a container inside this NSView exactly as it does in the application.
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 1024, height: 768),
       styleMask: [.titled, .closable, .resizable],
       backing: .buffered,
       defer: false)
     window.title = "NativeBrowser navigation self-test"
-    let container = ChromiumContainerView(frame: window.contentLayoutRect)
-    container.autoresizingMask = [.width, .height]
-    window.contentView = container
+    let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
+    host.autoresizingMask = [.width, .height]
+    window.contentView = host
     // The window has to be a real, key window: Chromium destroys the browser
     // when its host view deallocates, and a view in a window that was never
     // ordered in front (or made key) is not torn down the same way.
     window.makeKeyAndOrderFront(nil)
-    session.attach(to: container)
+    manager.attachSurfaceHost(host)
     runtime.startMessagePump()
+
+    // The tab the manager created at launch, reached through the Milestone 3
+    // ownership path rather than through a single-browser property.
+    guard let session = manager.selectedSession else {
+      print("navigation-self-test: FAIL no-tab - the manager created no tab")
+      return 2
+    }
 
     // 1. Initial page.
     let initialLoaded = wait(until: { session.hasFinishedFirstLoad }, timeout: 45)
@@ -189,38 +196,49 @@ enum NavigationSelfTest {
     //     quit runs (section 6 of Scripts/verify_milestone2.sh) check it for a
     //     browser that has navigated and while a page is still loading.
     //
-    let freshContainer = ChromiumContainerView(frame: window.contentLayoutRect)
-    freshContainer.translatesAutoresizingMaskIntoConstraints = false
-    window.contentView?.addSubview(freshContainer)
-    NSLayoutConstraint.activate([
-      freshContainer.topAnchor.constraint(equalTo: window.contentView!.topAnchor),
-      freshContainer.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor),
-      freshContainer.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor),
-      freshContainer.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor),
-    ])
-    let freshSession = BrowserSession(initialURL: URL(string: "about:blank")!)
-    runtime.registerLiveSession(freshSession)
-    freshSession.attach(to: freshContainer)
+    //     The fresh browser is a real second tab created through the manager,
+    //     so it exercises the same ownership path the application uses. It is
+    //     created *without* taking the selection: a browser whose container
+    //     goes visible -> hidden in the same run-loop turn as its close does not
+    //     deallocate in this harness (verified: the CEF host view stays alive
+    //     and OnBeforeClose is deferred until the window is destroyed), while
+    //     the same close from a steady-state background tab completes
+    //     immediately. The application itself is not affected - section 3 of
+    //     Scripts/verify_milestone3.sh closes a *selected* tab in the running
+    //     application and asserts that it reaches OnBeforeClose.
+    let freshURL = URL(string: "about:blank")!
+    let freshTabID = manager.createTab(url: freshURL, select: false)
+    let freshSession = freshTabID.flatMap { manager.session(for: $0) }
 
-    let freshLoaded = wait(until: { freshSession.hasFinishedFirstLoad }, timeout: 30)
+    let freshLoaded = freshSession.map { session in
+      wait(until: { session.hasFinishedFirstLoad }, timeout: 30)
+    } ?? false
     report(
       "fresh-browser-loads", freshLoaded,
-      "url=\(URLLogSanitizer.sanitized(freshSession.url))")
+      "url=\(URLLogSanitizer.sanitized(freshSession?.url))")
 
-    // Pumped exactly the way ApplicationRuntime.closeBrowserSessions() pumps
-    // during application termination, because that is the path this check
-    // exists to corroborate.
+    // Pumped exactly the way the runtime pumps during application termination,
+    // because that is the path this check exists to corroborate.
     let closeStarted = Date()
-    freshSession.close()
+    if let freshTabID {
+      manager.closeTab(id: freshTabID)
+    }
     let closeDeadline = closeStarted.addingTimeInterval(20)
-    while !freshSession.isClosed, Date() < closeDeadline {
+    while !(freshSession?.isClosed ?? true), Date() < closeDeadline {
       runtime.pumpMessageLoop()
       RunLoop.main.run(until: Date().addingTimeInterval(0.01))
     }
     let closeSeconds = Date().timeIntervalSince(closeStarted)
     report(
-      "browser-closed", freshSession.isClosed,
-      "isClosed=\(freshSession.isClosed) seconds=\(String(format: "%.2f", closeSeconds))")
+      "browser-closed", freshSession?.isClosed ?? false,
+      "isClosed=\(freshSession?.isClosed ?? false) seconds=\(String(format: "%.2f", closeSeconds))")
+    // The remaining browser is the one that navigated through this whole test.
+    // Chromium defers destroying a browser in this harness once its renderer has
+    // done real work (the Milestone 2 notes recorded the same behaviour), and
+    // the application's own quit runs - section 6 below and section 4 of
+    // Scripts/verify_milestone3.sh - are what check that a navigated browser is
+    // destroyed before CefShutdown. Here the window is closed and CEF is shut
+    // down, exactly as Milestone 2 did.
     window.close()
     runtime.shutdownCEF()
     report("cef-clean-shutdown", !CEFProcessHost.isInitialized, "cefInitialized=false")

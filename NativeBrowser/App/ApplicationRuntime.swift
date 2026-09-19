@@ -6,6 +6,13 @@
 //  application, not to any view (ARCHITECTURE.md section 40, constraint 8),
 //  so it lives here and is owned by the process entry point.
 //
+//  Milestone 3 moved browser ownership from "one browserSession" to the
+//  BrowserSessionManager: the runtime now owns exactly one manager, and the
+//  manager owns the tabs and their sessions. Nothing here keeps a second
+//  liveness registry - hasLiveBrowsers asks the manager, and the termination
+//  coordinator is woken by a typed per-session callback rather than by parsing
+//  a lifecycle string.
+//
 
 import Foundation
 
@@ -35,12 +42,13 @@ final class ApplicationRuntime: ObservableObject {
   /// Fallback deadline for termination: how long the Terminator waits for
   /// browsers to reach OnBeforeClose before proceeding anyway. It is a safety
   /// net, not part of the normal path - a browser normally closes in
-  /// milliseconds (ARCHITECTURE.md section 11).
+  /// milliseconds, and with several tabs they close in parallel rather than one
+  /// after another (ARCHITECTURE.md section 11).
   static let browserShutdownTimeout: TimeInterval = 5.0
 
-  /// Milestone 1 opens a single hard-coded page. Milestone 2 adds the command
-  /// bar and Milestone 3 adds real tabs; --home-url is a development override
-  /// used by the verification tooling.
+  /// Milestone 1 opened a single hard-coded page. Milestone 3 opens one tab with
+  /// this URL at launch; --home-url is a development override used by the
+  /// verification tooling.
   static let defaultHomeURL = URL(string: "https://www.google.com")!
 
   static var homeURL: URL {
@@ -53,14 +61,8 @@ final class ApplicationRuntime: ObservableObject {
     return defaultHomeURL
   }
 
-  /// The single browser session of Milestone 1.
-  let browserSession: BrowserSession
-
-  /// Every live browser session. Milestone 3 replaces this with a session
-  /// manager keyed by tab identifier, but shutdown already needs the registry
-  /// because browsers must be closed before CefShutdown().
-  private var liveSessions: [BrowserSession] = []
-  private var onBrowserClosed: (() -> Void)?
+  /// Owns every tab and every Chromium browser the application has open.
+  let sessionManager: BrowserSessionManager
 
   @Published private(set) var cefStatus: CEFStatus = .notInitialized
 
@@ -68,16 +70,31 @@ final class ApplicationRuntime: ObservableObject {
   /// "CEF initializes and shuts down cleanly" can be checked automatically.
   private(set) var lifecycleTrace: [String] = []
 
+  /// Typed notification that one browser session reached OnBeforeClose and was
+  /// released. Set by the Terminator for the duration of the shutdown sequence;
+  /// the callback carries the session, so the receiver always knows which
+  /// browser closed (Milestone 3 section 7).
+  var onLiveSessionDidClose: ((BrowserSession) -> Void)?
+
   private var messagePumpTimer: Timer?
   private var didShutDownCEF = false
+  private var cefShutdownInvocations = 0
   private var isTracingEnabled = false
 
   private init() {
-    let session = BrowserSession(initialURL: Self.homeURL)
-    browserSession = session
-    liveSessions = [session]
-    session.onLifecycleEvent = { [weak self] event in
+    let manager = BrowserSessionManager(initialTabURL: Self.homeURL)
+    sessionManager = manager
+    manager.onLifecycleEvent = { [weak self] event in
       self?.record(event)
+    }
+    manager.onLiveSessionDidClose = { [weak self] session in
+      self?.onLiveSessionDidClose?(session)
+    }
+    // Mirrored so the SwiftUI scene - and therefore the menu commands built from
+    // it - re-evaluate when the tab list, the selection or the selected tab's
+    // navigation state changes.
+    manager.onWillPublish = { [weak self] in
+      self?.objectWillChange.send()
     }
   }
 
@@ -88,21 +105,26 @@ final class ApplicationRuntime: ObservableObject {
     record("runtime:main")
   }
 
+  /// Records a lifecycle milestone.
+  ///
+  /// Diagnostics only. Milestone 3 removed the last piece of control flow that
+  /// was driven by these strings, so recording one can no longer close a browser
+  /// or release a session.
   func record(_ milestone: String) {
-    if milestone.hasPrefix("browser:closed") {
-      onBrowserClosed?()
-    }
-    if milestone == "swiftui:main-window-appeared" {
-      didAppearInWindow = true
-    }
     guard isTracingEnabled else { return }
     lifecycleTrace.append(milestone)
   }
 
-  /// True once the SwiftUI window has reported that it appeared.
+  /// Records that the SwiftUI window appeared.
   ///
-  /// Recorded whether or not the lifecycle trace is enabled, so the tooling
-  /// hooks can wait for the window instead of guessing how long launch takes.
+  /// A typed call rather than a string comparison inside record(_:): the tooling
+  /// hooks wait on the flag, not on the trace.
+  func noteMainWindowAppeared() {
+    didAppearInWindow = true
+    record("swiftui:main-window-appeared")
+  }
+
+  /// True once the SwiftUI window has reported that it appeared.
   private(set) var didAppearInWindow = false
 
   /// Prints the recorded milestones to standard output. Used by
@@ -175,7 +197,7 @@ final class ApplicationRuntime: ObservableObject {
         // inside the text system rather than from the page.
         focusAddressFieldForTooling = false
         AppLog.app.info("tooling: focusing the address field before terminating")
-        browserSession.requestAddressFieldFocus()
+        sessionManager.selectedSession?.requestAddressFieldFocus()
       }
       AppLog.app.info("tooling: requesting termination from inside the CEF message pump")
       NSApp.terminate(nil)
@@ -200,32 +222,37 @@ final class ApplicationRuntime: ObservableObject {
   /// True once CefShutdown() has run. CefShutdown() must be called exactly once.
   var hasShutDownCEF: Bool { didShutDownCEF }
 
-  /// True while a browser has not yet reached OnBeforeClose.
-  var hasLiveBrowsers: Bool {
-    liveSessions.contains { !$0.isClosed }
-  }
+  /// How many times CefShutdown() actually ran. The multi-tab integration test
+  /// asserts this is exactly 1.
+  var cefShutdownCount: Int { cefShutdownInvocations }
+
+  /// True while any browser has not yet reached OnBeforeClose, including the
+  /// browsers whose tab has already left the sidebar. The manager owns the one
+  /// and only registry, so this cannot disagree with what termination closes.
+  var hasLiveBrowsers: Bool { sessionManager.hasLiveSessions }
 
   /// Requests browser closure without waiting for it.
   ///
   /// Called for ordinary browser teardown; application termination uses
   /// Terminator, which also waits for OnBeforeClose.
   func requestBrowserClosure() {
-    let open = liveSessions.filter { !$0.isClosed }
-    guard !open.isEmpty else {
+    guard sessionManager.hasLiveSessions else {
       AppLog.cef.info("no live Chromium browser to close")
       return
     }
     markShutdownPhase("T1")
     AppLog.cef.info(
-      "closing \(open.count, privacy: .public) Chromium browser(s); \(self.liveSessions.count, privacy: .public) live session(s)")
-    for session in open {
-      session.close()
-    }
+      "closing \(self.sessionManager.liveSessionCount, privacy: .public) Chromium browser(s); every live session at once"
+    )
+    sessionManager.requestCloseAllForTermination()
   }
 
   /// Releases every live browser's view (see BrowserBridge.releaseBrowserView).
+  ///
+  /// A safety net for the case where CEF never delivers DoClose; the normal path
+  /// is DoClose -> -[BrowserBridge completeClose].
   func releaseBrowserViews() {
-    for session in liveSessions where !session.isClosed {
+    for session in sessionManager.liveSessions where !session.isClosed {
       session.releaseBrowserView()
     }
   }
@@ -237,6 +264,7 @@ final class ApplicationRuntime: ObservableObject {
   func shutdownCEF() {
     guard !didShutDownCEF else { return }
     didShutDownCEF = true
+    cefShutdownInvocations += 1
     markShutdownPhase("T5")
     stopMessagePump()
     CEFProcessHost.shutdown()
@@ -308,7 +336,9 @@ final class ApplicationRuntime: ObservableObject {
       AppLog.app.info("termination: sequence starting")
       runtime.record("termination:started")
       runtime.startLivenessWatchdog()
-      runtime.onBrowserClosed = { [weak self] in self?.scheduleStep() }
+      // Typed wake-up: the manager reports which session reached OnBeforeClose.
+      // A close is never inferred from a lifecycle string.
+      runtime.onLiveSessionDidClose = { [weak self] _ in self?.scheduleStep() }
       let timer = Timer(timeInterval: ApplicationRuntime.browserShutdownTimeout,
                         repeats: false) { [weak self] _ in
         MainActor.assumeIsolated { self?.step() }
@@ -339,7 +369,8 @@ final class ApplicationRuntime: ObservableObject {
         runtime.markShutdownPhase("firstStep")
       }
       // The close is requested here, on a clean stack, rather than inline in
-      // -applicationShouldTerminate: (see start()).
+      // -applicationShouldTerminate: (see start()). Every live browser is asked
+      // to close in this one call; none is waited for before the next.
       if !didRequestClosure {
         didRequestClosure = true
         runtime.requestBrowserClosure()
@@ -361,7 +392,7 @@ final class ApplicationRuntime: ObservableObject {
         return
       }
       // OnBeforeClose schedules the next step. Do not busy-poll while CEF
-      // and AppKit finish releasing the browser view.
+      // and AppKit finish releasing the browser views.
     }
 
     private func finish() {
@@ -372,7 +403,7 @@ final class ApplicationRuntime: ObservableObject {
       pendingStep = nil
       timeoutTimer?.invalidate()
       timeoutTimer = nil
-      runtime.onBrowserClosed = nil
+      runtime.onLiveSessionDidClose = nil
 
       // Never call CefShutdown() with a browser still open: Chromium asserts
       // (EXC_BREAKPOINT/SIGTRAP) and the application dies on quit instead of
@@ -391,20 +422,6 @@ final class ApplicationRuntime: ObservableObject {
       }
       runtime.record("termination:finished")
       onFinished()
-    }
-  }
-
-  // MARK: - Browser sessions
-
-  /// Registers an additional live session so termination closes it too.
-  ///
-  /// Milestone 3 replaces this with a session manager keyed by tab identifier;
-  /// until then the only caller is the navigation self-test, which opens a
-  /// second browser to check that a freshly created one is destroyed cleanly.
-  func registerLiveSession(_ session: BrowserSession) {
-    liveSessions.append(session)
-    session.onLifecycleEvent = { [weak self] event in
-      self?.record(event)
     }
   }
 }
