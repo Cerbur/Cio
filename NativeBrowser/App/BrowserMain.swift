@@ -31,6 +31,9 @@ enum BrowserMain {
     }
 
     let runtime = ApplicationRuntime.shared
+    if CommandLine.arguments.contains("--log-shutdown-timing") {
+      runtime.enableShutdownTiming()
+    }
     if isVerificationRun {
       // Records the startup/shutdown milestones that Scripts/verify_milestone0.sh
       // checks; it is not the app's logging mechanism (see AppLog).
@@ -51,11 +54,24 @@ enum BrowserMain {
 
     scheduleToolingHooksIfRequested(runtime: runtime)
 
+    AppLog.app.info("entering the NSApplication run loop")
     // Runs the NSApplication run loop until the app terminates.
     NativeBrowserApp.main()
+    AppLog.app.info("the NSApplication run loop returned")
 
-    // Safety net: -applicationWillTerminate: normally shuts CEF down first.
-    runtime.shutdownCEF()
+    // Safety net for the path where the run loop returned without
+    // -applicationShouldTerminate: having run (for example a failed launch).
+    // It is a no-op after a normal termination, and it never runs CefShutdown
+    // while a browser is still open.
+    if runtime.hasLiveBrowsers {
+      AppLog.cef.error("run loop returned with a live browser; requesting closure")
+      runtime.requestBrowserClosure()
+      if !runtime.hasLiveBrowsers {
+        runtime.shutdownCEF()
+      }
+    } else {
+      runtime.shutdownCEF()
+    }
   }
 
   /// True when the process was launched by the milestone verification tooling.
@@ -67,6 +83,9 @@ enum BrowserMain {
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }
       || CommandLine.arguments.contains("--wait-for-window")
+      || CommandLine.arguments.contains { $0.hasPrefix("--terminate-in-pump-after=") }
+      || CommandLine.arguments.contains("--focus-address-first")
+      || CommandLine.arguments.contains("--log-shutdown-timing")
   }
 
   /// Milestone 1 integration check: builds the real window and container, loads
@@ -180,6 +199,17 @@ enum BrowserMain {
   private static var toolingDeadline = Date.distantPast
 
   private static func scheduleToolingHooksIfRequested(runtime: ApplicationRuntime) {
+    // "--terminate-in-pump-after=<seconds>" reproduces the Cmd+Q stack: it
+    // requests termination from inside a CEF message pump call.
+    let inPumpPrefix = "--terminate-in-pump-after="
+    if let argument = CommandLine.arguments.first(where: { $0.hasPrefix(inPumpPrefix) }),
+      let delay = TimeInterval(argument.dropFirst(inPumpPrefix.count)), delay > 0
+    {
+      runtime.armTerminateInPump(
+        after: delay,
+        focusAddressField: CommandLine.arguments.contains("--focus-address-first"))
+    }
+
     let quitPrefix = "--quit-after="
     guard
       let quitArgument = CommandLine.arguments.first(where: { $0.hasPrefix(quitPrefix) }),
@@ -242,7 +272,8 @@ enum BrowserMain {
     case .waitingForQuitAfterNavigation, .countingDownToQuit:
       guard Date() >= toolingDeadline else { return }
       toolingPhase = .done
-      AppLog.app.info("tooling: terminating the application")
+      AppLog.app.info("tooling: requesting application termination")
+      // Uses the real coordinator, but does not reproduce a native key stack.
       NSApp.terminate(nil)
     }
   }
@@ -271,7 +302,7 @@ enum BrowserMain {
       while Date() < deadline {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
       }
-      runtime.prepareForTermination()
+      // No browser exists in this mode, so there is nothing to close first.
       runtime.shutdownCEF()
     }
 

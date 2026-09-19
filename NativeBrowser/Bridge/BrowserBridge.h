@@ -80,6 +80,14 @@ NS_SWIFT_UI_ACTOR
 /// Chromium has finished tearing the browser down.
 - (void)close;
 
+/// Releases the Chromium view, which is what actually destroys the browser.
+///
+/// Normally reached through CefLifeSpanHandler::DoClose. Exposed because DoClose
+/// is not always delivered - a real Cmd+Q that Chromium dispatched itself was
+/// observed to lose the close while the run loop stayed healthy - so the
+/// termination path can complete the release instead of waiting. Idempotent.
+- (void)releaseBrowserView;
+
 // MARK: - Events from the CEF layer
 //
 // Called by CEFClientHandler when Chromium reports something. Not part of the

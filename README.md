@@ -227,9 +227,10 @@ project.yml                    # XcodeGen project definition (source of truth)
    on the main run loop, because SwiftUI owns the `NSApplication` run loop.
 
 5. **Lifecycle ordering lives in one place.** `BrowserMain` performs the CEF
-   sub-process hand-off, then `CefInitialize`, then runs the SwiftUI app, then
-   `CefShutdown`; `-applicationWillTerminate:` performs the same shutdown for the
-   normal quit path. Both are idempotent. No view owns CEF lifecycle logic.
+   sub-process hand-off, then `CefInitialize`, then runs the SwiftUI app.
+   `ApplicationRuntime.Terminator` closes browsers before `CefShutdown`; final
+   exit hooks are idempotent and never shut CEF down with live browsers.
+   No view owns CEF lifecycle logic.
 
 6. **Swift never sees a CEF C++ type.** `CEFProcessHost` exposes only
    `NSObject`/`NSString`/`NSError`/`BOOL`/scalars across the bridge.
@@ -316,6 +317,61 @@ project.yml                    # XcodeGen project definition (source of truth)
     test bundle that never starts CEF. `NativeBrowser
     --parse-navigation-input=...` re-checks the same parser inside the shipped
     binary, without initializing Chromium.
+
+20. **Quit returns from the native event before cleaning up CEF.**
+    `applicationShouldTerminate` starts the coordinator and returns
+    `.terminateCancel`. This lets the Cmd+Q event and enclosing Chromium calls
+    unwind. `.terminateLater` is unsafe here: AppKit runs a nested modal loop
+    inside `terminate`, retaining the original event stack. Timers can fire
+    without that stack returning, leaving the browser view alive and delaying
+    `OnBeforeClose` until the five-second fallback.
+
+    The coordinator runs on the default run loop, closes browsers, waits for
+    `OnBeforeClose`, and then calls `CefShutdown()` once. It requests termination
+    again with a ready flag, so the delegate now returns `.terminateNow`.
+    Before detaching the CEF host view, the bridge releases CEF focus and clears
+    the window first responder. Otherwise native page-key handling can leave
+    the host view alive after detachment. `OnBeforeClose` drives progress; the
+    coordinator does not poll or force-release the view after arbitrary turns.
+    Repeated quit requests do not restart cleanup. If browser closure times out,
+    all application exit paths avoid calling `CefShutdown` with live browsers.
+
+21. **`CefSettings.persist_session_cookies` and the mock keychain.** See the
+    troubleshooting section below for why Chromium is kept away from the login
+    keychain; that switch also means cookies live only for the process.
+
+22. **Shutdown latency is measured, not guessed.** The termination path is
+    instrumented on one monotonic clock (`Bridge/ShutdownTiming.h`) shared by
+    Swift, the Objective-C++ bridge and CEF's callbacks, so the phases can be
+    attributed rather than assumed. Pass `--log-shutdown-timing` to have the app
+    print them:
+
+    ```bash
+    NativeBrowser --log-shutdown-timing --wait-for-window --quit-after=8
+    # shutdown-phase: T0 +8123.4ms
+    # shutdown-phase: T1-CloseBrowser +8123.7ms
+    # ...
+    ```
+
+    Real Cmd+Q reproduced the old bug even on `about:blank`: five seconds
+    followed by SIGTRAP. With cancellation/retry, the same test profile quit
+    in about 90 ms with exit 0 and `OnBeforeClose` before `CefShutdown`.
+    Navigating through the address field exposed a second case: without focus
+    cleanup, real Cmd+Q took 5000 ms; with it, 58 ms. Removing that cleanup
+    reproduced the 5000 ms timeout again. Programmatic focus/navigation followed
+    by `terminate` did not reproduce it, so real-key coverage is required.
+    Programmatic `--quit-after` / `--terminate-in-pump-after` checks do not
+    reproduce the native event stack and must not substitute for real Cmd+Q.
+    Capture real-key runs with page focus and address-field focus, then check:
+
+    ```bash
+    python3 Scripts/check_shutdown_timing.py path/to/quit.log 0
+    ```
+
+    Supply the actual process exit code as the second argument. The checker
+    requires ordered T0–T7 phases, one CEF shutdown, no fallback, and a quit
+    budget of 1000 ms (optional third argument overrides it). It validates a
+    recording; it does not itself press Cmd+Q.
 
 ### Troubleshooting: the "Chromium Safe Storage" keychain prompt
 

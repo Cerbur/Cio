@@ -8,6 +8,7 @@
 #import "BrowserBridge.h"
 
 #import "CEFClientHandler.h"
+#import "ShutdownTiming.h"
 
 #include <string>
 
@@ -30,6 +31,10 @@ constexpr int kInitialHeight = 800;
   __weak NSView *_parentView;
   BOOL _closed;
   BOOL _closeRequested;
+  /// YES once the Chromium view has been released. Releasing it more than once
+  /// is not safe: the first release is what destroys the browser, so a second
+  /// pass would run against a browser that is already being torn down.
+  BOOL _viewReleased;
   NSSize _lastReportedSize;
 }
 
@@ -96,6 +101,10 @@ constexpr int kInitialHeight = 800;
 #pragma mark - View integration
 
 - (void)setFocus:(BOOL)focused {
+  if (_closeRequested) {
+    NBShutdownTimingReport(@"focus:refused(closeRequested)", 0);
+    return;
+  }
   CefRefPtr<CefBrowser> browser = _client->browser();
   if (!browser) {
     return;
@@ -116,6 +125,10 @@ constexpr int kInitialHeight = 800;
 }
 
 - (void)resizeToBounds:(NSRect)bounds {
+  if (_closeRequested) {
+    NBShutdownTimingReport(@"resize:refused(closeRequested)", 0);
+    return;
+  }
   CefRefPtr<CefBrowser> browser = _client->browser();
   if (!browser) {
     return;
@@ -136,8 +149,17 @@ constexpr int kInitialHeight = 800;
   }
 }
 
+/// Moves the browser view into a new container.
+///
+/// Refused once a close has been requested: SwiftUI can re-create the
+/// representable's container while the browser is being torn down, and moving
+/// the Chromium view at that point takes it away from the close sequence that
+/// CEF is running, so DoClose/OnBeforeClose never arrive (observed as a hang
+/// until CefShutdown forces the teardown).
 - (void)reparentToView:(NSView *)view {
-  if (view == nil || _closed) {
+  if (view == nil || _closed || _closeRequested) {
+    NBShutdownTimingReport(
+        _closeRequested ? @"reparent:refused(closeRequested)" : @"reparent:refused", 0);
     return;
   }
   _parentView = view;
@@ -172,20 +194,35 @@ constexpr int kInitialHeight = 800;
     [self browserDidClose];
     return;
   }
+  NBShutdownTimingMark(@"T1-CloseBrowser");
   NSLog(@"[browser] closing Chromium browser %d", browser->GetIdentifier());
+
   // force_close: skip the beforeunload handler so quitting is never blocked.
-  // CEFClientHandler::DoClose() completes the close by releasing the Chromium
-  // view (see -completeClose).
+  // The browser is destroyed by CEFClientHandler::DoClose() ->
+  // -completeClose, which releases the Chromium view. Reported as a real
+  // timestamp (not a mark) so a CloseBrowser that does not return is visible.
+  NBShutdownTimingReport(@"CloseBrowser:begin", NBShutdownTimingNow());
   browser->GetHost()->CloseBrowser(/*force_close=*/true);
+  NBShutdownTimingReport(@"CloseBrowser:end", NBShutdownTimingNow());
+  NSLog(@"[browser] CloseBrowser returned");
+}
+
+- (void)releaseBrowserView {
+  [self completeClose];
 }
 
 /// Completes a close that CEF has started: the Chromium view is released so
 /// that CEF destroys the browser object (ARCHITECTURE.md section 26).
 - (void)completeClose {
+  if (_viewReleased) {
+    return;
+  }
   CefRefPtr<CefBrowser> browser = _client->browser();
   if (!browser) {
     return;
   }
+  _viewReleased = YES;
+  NBShutdownTimingMark(@"T2");
 
   // Detaching the Chromium view is what actually destroys the browser: CEF
   // implements AlloyBrowserHostImpl::WindowDestroyed() in
@@ -199,6 +236,10 @@ constexpr int kInitialHeight = 800;
   @autoreleasepool {
     NSView *browserView =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+    // Resign the native responder before detaching the host view. Chromium's
+    // focused content and AppKit's input context can otherwise retain it.
+    browser->GetHost()->SetFocus(false);
+    [browserView.window makeFirstResponder:nil];
     [browserView removeFromSuperview];
     browserView = nil;
   }
@@ -285,6 +326,7 @@ constexpr int kInitialHeight = 800;
     return;
   }
   _closed = YES;
+  NBShutdownTimingMark(@"T3");
   NSLog(@"[browser] Chromium browser destroyed");
   [self.delegate browserBridgeDidClose:self];
 }

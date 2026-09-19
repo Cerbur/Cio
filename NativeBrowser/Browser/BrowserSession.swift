@@ -196,6 +196,14 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.setFocus(false)
   }
 
+  /// Completes the close by releasing the Chromium view, which is what
+  /// destroys the browser. Used when CEF does not deliver DoClose (see
+  /// BrowserBridge.releaseBrowserView). Safe to call more than once.
+  func releaseBrowserView() {
+    guard !isClosed else { return }
+    bridge?.releaseBrowserView()
+  }
+
   /// Requests browser destruction. Safe to call more than once.
   func close() {
     guard !isClosed else { return }

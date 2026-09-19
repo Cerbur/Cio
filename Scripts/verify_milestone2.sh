@@ -336,6 +336,9 @@ if [ "$NAV_QUIT_STATUS" -eq 0 ]; then
 else
   fail "the app navigated and quit with exit $NAV_QUIT_STATUS"
 fi
+if [ "$NAV_QUIT_STATUS" -gt 128 ]; then
+  fail "navigate + quit died from signal $((NAV_QUIT_STATUS - 128))"
+fi
 check_contains "the live application navigated to a second page" \
   "navigation:url($NAV_QUIT_URL)" "$NAV_QUIT_LOG"
 check_contains "the navigated browser was destroyed" "browser:closed" "$NAV_QUIT_LOG"
@@ -375,6 +378,61 @@ else
   fail "quit took ${GUI_TOTAL}s"
 fi
 
+# ---------------------------------------------------------------------------
+echo
+echo "7. programmatic termination ordering"
+# This hook calls terminate BEFORE CefDoMessageLoopWork. It checks ordering,
+# but does not reproduce a native Cmd+Q event retained on Chromium's stack.
+# Real Cmd+Q must also be tested and its timing log checked separately.
+PUMP_LOG="$WORK_DIR/m2-terminate-in-pump.log"
+rm -rf "$DATA_DIR/terminate-in-pump"
+NATIVEBROWSER_DATA_DIR="$DATA_DIR/terminate-in-pump" run_with_timeout 90 "$EXECUTABLE" \
+  --log-shutdown-timing --wait-for-window --terminate-in-pump-after=8 --quit-after=120 > "$PUMP_LOG" 2>&1
+PUMP_STATUS=$?
+# A shutdown crash shows up as a signal exit (139 = SIGSEGV, 133 = SIGTRAP), so
+# the exit code is asserted - grepping for lifecycle markers is not enough.
+if [ "$PUMP_STATUS" -eq 0 ]; then
+  pass "programmatic termination exited 0 (no Chromium CHECK abort)"
+else
+  fail "programmatic termination exited with $PUMP_STATUS"
+fi
+if [ "$PUMP_STATUS" -gt 128 ]; then
+  fail "termination died from signal $((PUMP_STATUS - 128))"
+fi
+if grep -qF -e "termination:browser-close-timeout" "$PUMP_LOG"; then
+  fail "termination fell back to the close-timeout path (a close callback was lost)"
+else
+  pass "termination did not need the close-timeout fallback"
+fi
+if python3 "$REPO_ROOT/Scripts/check_shutdown_timing.py" "$PUMP_LOG" "$PUMP_STATUS"; then
+  pass "shutdown timing and all phase invariants passed"
+else
+  fail "shutdown timing or phase invariants failed"
+fi
+check_contains "the browser was created before terminating" "browser:created(count=1)" "$PUMP_LOG"
+check_contains "AppKit asked the delegate to terminate" "appkit:should-terminate(entered)" "$PUMP_LOG"
+check_contains "termination was deferred until Chromium was off the stack" "termination:started" "$PUMP_LOG"
+check_contains "the browser reached its close lifecycle" "browser:closed" "$PUMP_LOG"
+check_contains "the live browser count reached zero" "termination:browsers-closed" "$PUMP_LOG"
+check_contains "CEF was shut down exactly once" "cef:shutdown(clean: true)" "$PUMP_LOG"
+check_contains "AppKit was told termination may finish" "appkit:terminate-ready-requested" "$PUMP_LOG"
+check_contains "Chromium destroyed the browser (OnBeforeClose)" \
+  "Chromium browser destroyed" "$PUMP_LOG"
+# Ordering: the close, the CEF shutdown and only then the reply to AppKit.
+ORDER_LINE=$(grep -E 'lifecycle: (appkit:should-terminate|termination:started|browser:closed|termination:browsers-closed|cef:shutdown|termination:finished|appkit:terminate-ready-requested|appkit:will-terminate)' "$PUMP_LOG" | sed 's/^lifecycle: //' | tr '\n' ' ')
+EXPECTED_ORDER="appkit:should-terminate(entered) termination:started browser:closed termination:browsers-closed cef:shutdown(clean: true) termination:finished appkit:terminate-ready-requested"
+case "$ORDER_LINE" in
+  "$EXPECTED_ORDER"*)
+    pass "lifecycle ordering is correct" ;;
+  *)
+    fail "unexpected termination ordering: $ORDER_LINE" ;;
+esac
+if [ -z "$(find ~/Library/Logs/DiagnosticReports -name 'NativeBrowser*' -newermt '-3 minutes' 2>/dev/null)" ]; then
+  pass "no new NativeBrowser crash report"
+else
+  fail "a NativeBrowser crash report was written during this run"
+fi
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "Milestone 2: all automated checks passed"
@@ -385,6 +443,8 @@ fi
 cat <<'MANUAL'
 
 REQUIRES MANUAL VERIFICATION (not covered by this script):
+  * real Cmd+Q with page focus and address-field focus; record with
+    --log-shutdown-timing, then run Scripts/check_shutdown_timing.py LOG EXIT_CODE
   * ⌘L while Chromium owns focus (menu key equivalent -> address field focus)
   * ⌘L select-all followed by typing replacing the selection
   * clicking the page after using the address field returns typing to the page
