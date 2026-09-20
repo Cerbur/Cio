@@ -2,9 +2,9 @@
 //  TabSidebarView.swift
 //  NativeBrowser
 //
-//  Plain Milestone 4 sidebar: all Spaces at the top, then the selected Space's
-//  ordered tabs. The rows are value views and all lifecycle work goes through
-//  BrowserWorkspaceStore.
+//  Milestone 5 sidebar: all Spaces at the top, then the selected Space's
+//  ordered tabs inside a native Liquid Glass panel. The rows are value views
+//  and all lifecycle work goes through BrowserWorkspaceStore.
 //
 
 import AppKit
@@ -15,77 +15,127 @@ struct TabSidebarView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 0) {
-          Text("Spaces")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
-
-          ForEach(workspace.spaces) { space in
-            SpaceRowView(
-              space: space,
-              isSelected: space.id == workspace.selectedSpaceID,
-              workspace: workspace)
-          }
-
-          Button {
-            workspace.createSpace()
-          } label: {
-            Label("New Space", systemImage: "plus")
-              .labelStyle(.titleAndIcon)
-          }
-          .buttonStyle(.borderless)
-          .help("New Space")
-          .accessibilityLabel("New Space")
-          .padding(.horizontal, 12)
-          .padding(.vertical, 7)
-
-          Divider()
-            .padding(.vertical, 5)
-
-          Text(workspace.selectedSpace?.name ?? "Tabs")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 4)
-
-          LazyVStack(spacing: 2) {
-            ForEach(workspace.tabs) { tab in
-              TabRowView(
-                tab: tab,
-                isSelected: tab.id == workspace.selectedTabID,
-                onSelect: { workspace.selectTab(id: tab.id) },
-                onClose: { workspace.closeTab(id: tab.id) })
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 0) {
+            SidebarSectionHeader {
+              workspace.createSpace()
+            } help: {
+              "New Space"
             }
+            .padding(.bottom, 5)
+
+            LazyVStack(spacing: 2) {
+              ForEach(workspace.spaces) { space in
+                SpaceRowView(
+                  space: space,
+                  isSelected: space.id == workspace.selectedSpaceID,
+                  workspace: workspace)
+                  .id("space-\(space.id.uuidString)")
+              }
+            }
+
+            Divider().padding(.vertical, 9)
+
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+              Text(workspace.selectedSpace?.name ?? "Tabs")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+              Spacer(minLength: 4)
+
+              Text("\(workspace.tabs.count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 6)
+
+            LazyVStack(spacing: 2) {
+              ForEach(workspace.tabs) { tab in
+                TabRowView(
+                  tab: tab,
+                  isSelected: tab.id == workspace.selectedTabID,
+                  onSelect: { workspace.selectTab(id: tab.id) },
+                  onClose: { workspace.closeTab(id: tab.id) })
+                  .id("tab-\(tab.id.uuidString)")
+              }
+            }
+            .padding(.horizontal, 4)
           }
           .padding(.horizontal, 6)
+          .padding(.top, 10)
+          .padding(.bottom, 12)
         }
-        .padding(.bottom, 8)
+        .frame(maxHeight: .infinity)
+        .onChange(of: workspace.selectedSpaceID) { _, id in
+          proxy.scrollTo("space-\(id.uuidString)", anchor: .center)
+        }
+        .onChange(of: workspace.selectedTabID) { _, id in
+          guard let id else { return }
+          proxy.scrollTo("tab-\(id.uuidString)", anchor: .center)
+        }
       }
-      .frame(maxHeight: .infinity)
 
-      Divider()
+      Rectangle()
+        .fill(Color.primary.opacity(0.08))
+        .frame(height: 0.5)
 
-      HStack(spacing: 6) {
+      HStack(spacing: 8) {
         Button {
           workspace.createTab(url: nil)
         } label: {
-          Label("New Tab", systemImage: "plus")
-            .labelStyle(.titleAndIcon)
+          Image(systemName: "plus")
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 22, height: 22)
+            .background(
+              Circle().fill(Color.accentColor.opacity(0.14))
+            )
+            .foregroundStyle(Color.accentColor)
+          Text("New Tab")
+            .font(.callout.weight(.medium))
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .help("New Tab (⌘T)")
         .accessibilityLabel("New Tab")
-        Spacer(minLength: 0)
+        .contentShape(Rectangle())
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
     }
-    .frame(width: 220)
-    .background(Color(nsColor: .controlBackgroundColor))
+    .frame(width: 248)
+    .frame(maxHeight: .infinity)
+    .browserGlass(cornerRadius: 20)
+  }
+}
+
+private struct SidebarSectionHeader: View {
+  let action: () -> Void
+  let help: () -> String
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Text("Spaces")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+
+      Spacer(minLength: 4)
+
+      Button(action: action) {
+        Image(systemName: "plus")
+          .font(.system(size: 11, weight: .semibold))
+          .frame(width: 22, height: 22)
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(.secondary)
+      .contentShape(Rectangle())
+      .help(help())
+      .accessibilityLabel(help())
+    }
+    .padding(.horizontal, 10)
   }
 }
 
@@ -93,6 +143,7 @@ private struct SpaceRowView: View {
   let space: BrowserSpace
   let isSelected: Bool
   @ObservedObject var workspace: BrowserWorkspaceStore
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     Button {
@@ -100,27 +151,40 @@ private struct SpaceRowView: View {
     } label: {
       HStack(spacing: 7) {
         Image(systemName: isSelected ? "square.3.layers.3d.top.filled" : "square.3.layers.3d")
-          .font(.system(size: 11))
-          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-          .frame(width: 14)
-        Text(space.name)
           .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+          .frame(width: 16)
+        Text(space.name)
+          .font(.callout.weight(isSelected ? .semibold : .regular))
           .lineLimit(1)
           .truncationMode(.tail)
         Spacer(minLength: 4)
         Text("\(space.tabIDs.count)")
           .font(.caption2.monospacedDigit())
-          .foregroundStyle(.secondary)
+          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
       }
       .padding(.horizontal, 8)
-      .padding(.vertical, 6)
+      .frame(height: 30)
       .background(
-        RoundedRectangle(cornerRadius: 6)
-          .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(
+            isSelected
+              ? Color.accentColor.opacity(0.16)
+              : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
+          )
       )
+      .overlay(alignment: .leading) {
+        if isSelected {
+          Capsule(style: .continuous)
+            .fill(Color.accentColor)
+            .frame(width: 3, height: 16)
+        }
+      }
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .onHover { interaction.isHovered = $0 }
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     .contextMenu {
       Button("Rename") {
         promptRename()
@@ -149,46 +213,76 @@ private struct TabRowView: View {
   let isSelected: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
-    HStack(spacing: 6) {
-      Image(systemName: "globe")
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .frame(width: 14)
+    ZStack(alignment: .trailing) {
+      Button(action: onSelect) {
+        HStack(spacing: 8) {
+          Image(systemName: "globe")
+            .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            .frame(width: 16)
 
-      Text(tab.displayTitle)
-        .font(.system(size: 12))
-        .lineLimit(1)
-        .truncationMode(.tail)
+          Text(tab.displayTitle)
+            .font(.callout.weight(isSelected ? .medium : .regular))
+            .lineLimit(1)
+            .truncationMode(.tail)
 
-      Spacer(minLength: 4)
+          Spacer(minLength: 4)
 
-      if tab.isLoading {
-        ProgressView()
-          .progressViewStyle(.circular)
-          .controlSize(.small)
-          .scaleEffect(0.5)
-          .frame(width: 12, height: 12)
+          if tab.isLoading {
+            ProgressView()
+              .progressViewStyle(.circular)
+              .controlSize(.small)
+              .scaleEffect(0.55)
+              .frame(width: 16, height: 16)
+          }
+
+          // Reserve space for the close control so revealing it never changes
+          // the title's layout or makes the sidebar jump.
+          Color.clear.frame(width: 20, height: 20)
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 4)
+        .frame(height: 34)
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
 
       Button(action: onClose) {
         Image(systemName: "xmark")
           .font(.system(size: 9, weight: .semibold))
-          .frame(width: 14, height: 14)
+          .frame(width: 20, height: 20)
+          .foregroundStyle(isSelected ? Color.primary : .secondary)
+          .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+              .fill(Color.primary.opacity(interaction.isHovered ? 0.09 : 0.04))
+          )
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.plain)
+      .opacity(interaction.isHovered || isSelected ? 1 : 0)
+      .allowsHitTesting(interaction.isHovered || isSelected)
       .help("Close Tab (⌘W)")
       .accessibilityLabel("Close Tab")
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 6)
+    .padding(.horizontal, 2)
     .background(
-      RoundedRectangle(cornerRadius: 6)
-        .fill(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+      RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .fill(
+          isSelected
+            ? Color.accentColor.opacity(0.18)
+            : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        )
     )
-    .contentShape(Rectangle())
-    .onTapGesture(perform: onSelect)
+    .overlay(alignment: .leading) {
+      if isSelected {
+        Capsule(style: .continuous)
+          .fill(Color.accentColor)
+          .frame(width: 2, height: 18)
+      }
+    }
+    .onHover { interaction.isHovered = $0 }
     .help(tab.displayTitle)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }

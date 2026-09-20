@@ -2,9 +2,8 @@
 //  BrowserToolbarView.swift
 //  NativeBrowser
 //
-//  Milestone 2 navigation UI: Back, Forward, Reload/Stop and the address field,
-//  above the Chromium content. Deliberately visually plain - the Liquid Glass
-//  treatment is Milestone 5 (ARCHITECTURE.md section 38).
+//  Native compact navigation chrome: Back, Forward, Reload/Stop and the one
+//  AppKit address field above the Chromium content.
 //
 //  The toolbar only ever reads BrowserSession.navigationState and calls the
 //  session's navigation methods, so there is exactly one owner of navigation
@@ -16,6 +15,7 @@ import SwiftUI
 
 struct BrowserToolbarView: View {
   @ObservedObject var session: BrowserSession
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     let state = session.navigationState
@@ -33,15 +33,49 @@ struct BrowserToolbarView: View {
         action: session.goForward)
       reloadOrStopButton(isLoading: state.isLoading)
 
-      AddressField(
-        model: session.addressField,
-        onChange: { session.addressField.userChangedText($0) },
-        onSubmit: { session.submitAddressField() },
-        onEscape: { session.cancelAddressEditing() },
-        onFocusChange: { session.addressFieldFocusChanged($0) }
+      Rectangle()
+        .fill(Color.primary.opacity(0.12))
+        .frame(width: 0.5, height: 18)
+        .padding(.horizontal, 3)
+
+      HStack(spacing: 7) {
+        Image(systemName: "globe")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+          .frame(width: 16)
+
+        AddressField(
+          model: session.addressField,
+          onChange: { session.addressField.userChangedText($0) },
+          onSubmit: { session.submitAddressField() },
+          onEscape: { session.cancelAddressEditing() },
+          onFocusChange: { focused in
+            interaction.isFocused = focused
+            session.addressFieldFocusChanged(focused)
+          }
+        )
+        .frame(minWidth: 240, maxWidth: .infinity, minHeight: 22, idealHeight: 24)
+        .layoutPriority(1)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 3)
+      .background(
+        Capsule(style: .continuous)
+          .fill(
+            interaction.isFocused || session.addressField.isEditing
+              ? Color.accentColor.opacity(0.11)
+              : Color.primary.opacity(0.055)
+          )
       )
-      .frame(minWidth: 240, maxWidth: .infinity, minHeight: 21, idealHeight: 24)
-      .layoutPriority(1)
+      .overlay {
+        Capsule(style: .continuous)
+          .strokeBorder(
+            interaction.isFocused || session.addressField.isEditing
+              ? Color.accentColor.opacity(0.45)
+              : Color.primary.opacity(0.11),
+            lineWidth: interaction.isFocused || session.addressField.isEditing ? 1 : 0.5
+          )
+      }
 
       if state.isLoading {
         ProgressView()
@@ -53,12 +87,9 @@ struct BrowserToolbarView: View {
       }
     }
     .padding(.horizontal, 10)
-    .padding(.vertical, 8)
-    .frame(height: 44)
-    .background(Color(nsColor: .windowBackgroundColor))
-    .overlay(alignment: .bottom) {
-      Divider()
-    }
+    .padding(.vertical, 7)
+    .frame(minHeight: 50)
+    .browserGlass(cornerRadius: 15)
   }
 
   private func historyButton(
@@ -67,26 +98,47 @@ struct BrowserToolbarView: View {
     enabled: Bool,
     action: @escaping () -> Void
   ) -> some View {
-    Button(action: action) {
-      Image(systemName: systemImage)
-        .frame(width: 22, height: 22)
-    }
-    .buttonStyle(.borderless)
-    .disabled(!enabled)
-    .help(label)
-    .accessibilityLabel(label)
+    ToolbarIconButton(systemImage: systemImage, label: label, enabled: enabled, action: action)
   }
 
-  /// One control, two behaviours: Reload while idle, Stop while loading
-  /// (Milestone 2, section 11). The loading state comes from CEF.
-  private func reloadOrStopButton(isLoading: Bool) -> some View {
-    Button(action: session.reloadOrStop) {
-      Image(systemName: isLoading ? "xmark" : "arrow.clockwise")
-        .frame(width: 22, height: 22)
+  /// A small semantic hover target. It changes only the button chrome; it never
+  /// selects a tab or touches browser focus.
+  private struct ToolbarIconButton: View {
+    let systemImage: String
+    let label: String
+    let enabled: Bool
+    let action: () -> Void
+    @StateObject private var interaction = BrowserInteractionState()
+
+    var body: some View {
+      Button(action: action) {
+        Image(systemName: systemImage)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.42))
+          .frame(width: 28, height: 28)
+          .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .fill(
+                interaction.isHovered && enabled
+                  ? Color.primary.opacity(0.08) : Color.clear
+              )
+          )
+          .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      }
+      .buttonStyle(.plain)
+      .disabled(!enabled)
+      .onHover { interaction.isHovered = $0 }
+      .help(label)
+      .accessibilityLabel(label)
     }
-    .buttonStyle(.borderless)
-    .help(isLoading ? "Stop" : "Reload")
-    .accessibilityLabel(isLoading ? "Stop" : "Reload")
+  }
+
+  private func reloadOrStopButton(isLoading: Bool) -> some View {
+    ToolbarIconButton(
+      systemImage: isLoading ? "xmark" : "arrow.clockwise",
+      label: isLoading ? "Stop" : "Reload",
+      enabled: true,
+      action: session.reloadOrStop)
   }
 }
 
@@ -99,8 +151,7 @@ struct BrowserToolbarView: View {
 /// Milestone 3 mounts exactly one toolbar, but the two identity checks here are
 /// what keep that from being load-bearing: the request is only accepted for
 /// *this* session, and it is forwarded with the session's AddressFieldModel as
-/// the object, so a mounted field can only ever react to its own session's ⌘L
-/// (section 15).
+/// the object, so a mounted field can only ever react to its own session's ⌘L.
 private struct AddressFieldFocusListener: ViewModifier {
   let session: BrowserSession
 
@@ -120,3 +171,9 @@ extension View {
     modifier(AddressFieldFocusListener(session: session))
   }
 }
+
+/*
+ The remaining command behavior intentionally stays unchanged: the native
+ AppKit field owns IME composition, Escape and Return, and the existing
+ identity-scoped focus notifications keep ⌘L out of the Chromium surface.
+*/

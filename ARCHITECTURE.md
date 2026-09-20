@@ -2401,9 +2401,10 @@ later milestone; the invariant is enforced here.
 
 - **One window only.** `Window`, not `WindowGroup`; there is no per-window tab
   collection yet.
-- **The sidebar is deliberately plain.** Placeholder globe instead of favicons (no
-  favicon fetching), no drag reordering, no pinning, no tab groups, no hover-only
-  affordances, no Liquid Glass.
+- **The sidebar remains intentionally scoped.** It uses a placeholder globe
+  instead of favicons (no favicon fetching), and has no drag reordering,
+  pinning or tab groups; Milestone 5 adds only native hover/close affordances
+  and the visual material treatment.
 - **No tab suspension.** Every open tab in every Space keeps a live
   `BrowserSession` and a live `CefBrowser`; only the selected tab's container is
   visible.
@@ -2468,3 +2469,45 @@ Space and index; closing the last user tab creates a replacement in that same
 Space; reopening creates a new tab/session/browser in that Space. Termination
 requests closure for every live session, creates no replacement or snapshot, and
 waits for every typed `OnBeforeClose` release before the single `CefShutdown`.
+
+## 64. Milestone 5 implementation record: native macOS visual system
+
+Milestone 5 changes presentation only. NativeBrowserApp keeps the standard
+SwiftUI Window scene, native title bar, traffic lights, menu bar, resizing and
+full-screen behavior, with the system titleBar and unifiedCompact window
+toolbar styles. The content hierarchy is a semantic window background with a
+248-point sidebar panel beside a browser column containing one toolbar, the
+stable surface host and a quiet status line.
+
+The sidebar is composed of a Space section header, Space rows, a selected-Space
+tab header, tab rows and a pinned New Tab footer. Space and tab selection still
+come only from BrowserWorkspaceStore; the rows add only ephemeral hover state.
+Selected Spaces and tabs use both semantic accent color/weight and a leading
+indicator, so selection does not depend on transparency alone. Tab close
+controls are discoverable on hover or for the selected row, and loading keeps a
+small native progress indicator.
+
+BrowserToolbarView uses native SF Symbols and compact AppKit-style icon
+controls for Back, Forward and Reload/Stop. Its address capsule adds a neutral
+site-symbol placeholder, semantic background/stroke colors and a stronger
+focused/editing treatment. AddressField remains the one
+NSViewRepresentable/NSTextField; only its bezel/background/typography were
+restyled. Its field editor, focus notifications, edit-buffer invariant, IME,
+Escape, Return and Cmd+L behavior are unchanged.
+
+The actual installed SDK is macOS 27.0 with an existing macOS 26.0 deployment
+target. The shell uses SwiftUI's macOS 26 glassEffect(.regular, in:) for the
+sidebar and toolbar. A compile-time availability fallback uses semantic
+SwiftUI regularMaterial with a system-color border if the deployment target is
+lowered later; no custom blur engine, screenshot blur, canvas rendering or fake
+title bar is involved. The browser content is never passed through a glass
+modifier or a clip/mask. BrowserSurfaceFrame supplies only a semantic
+background and border around the unchanged BrowserSurfaceView representable,
+so BrowserSurfaceHostView and its native CEF child views remain stable.
+
+Semantic colors/materials are used throughout the shell for light/dark
+appearance and for the native reduced-transparency path. The remaining visual
+limitations are intentional: placeholder globe icons remain in place of fetched
+favicons, there is no sidebar collapse control, and the browser surface keeps a
+square native rendering boundary where clipping could risk CEF windowed
+rendering.

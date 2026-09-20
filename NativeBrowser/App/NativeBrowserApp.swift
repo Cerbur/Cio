@@ -29,6 +29,10 @@ struct NativeBrowserApp: App {
         .environmentObject(runtime)
     }
     .defaultSize(width: 1280, height: 800)
+    // Keep the system title bar and traffic lights. The compact unified style
+    // lets the content chrome sit naturally below native window controls.
+    .windowStyle(.titleBar)
+    .windowToolbarStyle(.unifiedCompact)
     .commands {
       // The workspace store is a stable reference: command actions resolve the
       // selected tab when they run, so they always operate on the current

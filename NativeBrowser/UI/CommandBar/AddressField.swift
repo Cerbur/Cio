@@ -2,7 +2,9 @@
 //  AddressField.swift
 //  NativeBrowser
 //
-//  The native address / search field.
+//  The native address / search field. Milestone 5 changes only its AppKit
+//  appearance; it remains an NSTextField so the field editor continues to own
+//  Cmd+L, IME composition, selection, Escape and Return.
 //
 //  This is an AppKit NSTextField rather than a SwiftUI TextField, for three
 //  reasons that matter to this milestone (sections 13, 16 and 18):
@@ -45,9 +47,15 @@ struct AddressField: NSViewRepresentable {
     field.delegate = context.coordinator
     field.target = context.coordinator
     field.action = #selector(Coordinator.submitAction(_:))
-    field.font = .systemFont(ofSize: NSFont.systemFontSize)
-    field.bezelStyle = .roundedBezel
+    field.font = .systemFont(ofSize: 13)
+    field.textColor = .labelColor
+    field.isBezeled = false
+    field.drawsBackground = false
+    // Keep AppKit's native focus ring available; the SwiftUI capsule around the
+    // field supplies the additional compact toolbar treatment.
+    field.focusRingType = .default
     field.lineBreakMode = .byTruncatingTail
+    field.usesSingleLineMode = true
     // The address bar is an address bar: never rewrite what the user types.
     // Text completion is an NSTextField property; quote/dash/spelling
     // substitution belong to the field editor and are turned off in
