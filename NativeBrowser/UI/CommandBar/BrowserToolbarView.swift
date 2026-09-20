@@ -20,7 +20,7 @@ struct BrowserToolbarView: View {
   var body: some View {
     let state = session.navigationState
 
-    HStack(spacing: 6) {
+    HStack(spacing: 5) {
       historyButton(
         systemImage: "chevron.backward",
         label: "Back",
@@ -57,16 +57,9 @@ struct BrowserToolbarView: View {
         .frame(minWidth: 240, maxWidth: .infinity, minHeight: 22, idealHeight: 24)
         .layoutPriority(1)
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 3)
-      .background(
-        Capsule(style: .continuous)
-          .fill(
-            interaction.isFocused || session.addressField.isEditing
-              ? Color.accentColor.opacity(0.11)
-              : Color.primary.opacity(0.055)
-          )
-      )
+      .padding(.horizontal, 9)
+      .padding(.vertical, 2)
+      .browserCompactGlass(cornerRadius: 15)
       .overlay {
         Capsule(style: .continuous)
           .strokeBorder(
@@ -86,10 +79,16 @@ struct BrowserToolbarView: View {
           .help("Loading")
       }
     }
-    .padding(.horizontal, 10)
+    .padding(.horizontal, 12)
     .padding(.vertical, 7)
-    .frame(minHeight: 50)
-    .browserGlass(cornerRadius: 15)
+    .frame(minHeight: 46)
+    .browserToolbarMaterial()
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color.primary.opacity(0.09))
+        .frame(height: 0.5)
+        .allowsHitTesting(false)
+    }
   }
 
   private func historyButton(
@@ -115,15 +114,15 @@ struct BrowserToolbarView: View {
         Image(systemName: systemImage)
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.42))
-          .frame(width: 28, height: 28)
+          .frame(width: 26, height: 26)
           .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
               .fill(
                 interaction.isHovered && enabled
                   ? Color.primary.opacity(0.08) : Color.clear
               )
           )
-          .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
       }
       .buttonStyle(.plain)
       .disabled(!enabled)

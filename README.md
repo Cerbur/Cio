@@ -125,8 +125,9 @@ Manual verification:
 open build/DerivedData/Build/Products/Debug/NativeBrowser.app
 ```
 
-Expected: a 1280x800 window showing google.com with a native navigation
-toolbar (← → ↻/× and the address field) above it and a thin title line below it.
+Expected: a 1280x800 window showing google.com with a continuous native sidebar,
+a flat integrated navigation header (← → ↻/× and the address field), and the
+page filling the remaining content area without a persistent status line.
 The address field shows the main-frame URL; Back and Forward are enabled once
 there is somewhere to go; the third control reloads while idle and stops while
 loading. ⌘L focuses the address field and selects all of it, ⌘R reloads, ⌘[ and
@@ -197,7 +198,7 @@ NativeBrowser/
     URLLogSanitizerTests.swift # URL log redaction policy tests
     NavigationURLPreservationTests.swift # explicit URLs keep query + fragment
   UI/
-    Main/MainWindowView.swift  # toolbar + Chromium view + title line
+    Main/MainWindowView.swift  # window chrome + toolbar + Chromium surface
     CommandBar/
       BrowserToolbarView.swift # Back / Forward / Reload-Stop / address field
       AddressField.swift       # native NSTextField bridge (IME + focus + select-all)

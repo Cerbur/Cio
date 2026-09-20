@@ -2,9 +2,9 @@
 //  TabSidebarView.swift
 //  NativeBrowser
 //
-//  Milestone 5 sidebar: all Spaces at the top, then the selected Space's
-//  ordered tabs inside a native Liquid Glass panel. The rows are value views
-//  and all lifecycle work goes through BrowserWorkspaceStore.
+//  Milestone 5.1 sidebar: all Spaces at the top, then the selected Space's
+//  ordered tabs inside one continuous native sidebar material. The rows are
+//  value views and all lifecycle work goes through BrowserWorkspaceStore.
 //
 
 import AppKit
@@ -12,9 +12,15 @@ import SwiftUI
 
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  @Environment(\.browserTitlebarContentInset) private var titlebarContentInset
 
   var body: some View {
     VStack(spacing: 0) {
+      // This spacer belongs outside the scroll view so rows never move under
+      // the native traffic lights when the sidebar content is scrolled.
+      Color.clear
+        .frame(height: max(titlebarContentInset, 8))
+
       ScrollViewReader { proxy in
         ScrollView {
           VStack(alignment: .leading, spacing: 0) {
@@ -38,9 +44,9 @@ struct TabSidebarView: View {
             Divider().padding(.vertical, 9)
 
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-              Text(workspace.selectedSpace?.name ?? "Tabs")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
+              Text("Tabs")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
@@ -108,7 +114,13 @@ struct TabSidebarView: View {
     }
     .frame(width: 248)
     .frame(maxHeight: .infinity)
-    .browserGlass(cornerRadius: 20)
+    .browserSidebarMaterial()
+    .overlay(alignment: .trailing) {
+      Rectangle()
+        .fill(Color.primary.opacity(0.12))
+        .frame(width: 0.5)
+        .allowsHitTesting(false)
+    }
   }
 }
 
@@ -164,12 +176,12 @@ private struct SpaceRowView: View {
           .foregroundStyle(isSelected ? Color.accentColor : .secondary)
       }
       .padding(.horizontal, 8)
-      .frame(height: 30)
+      .frame(height: 28)
       .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
           .fill(
             isSelected
-              ? Color.accentColor.opacity(0.16)
+              ? Color.primary.opacity(0.10)
               : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
           )
       )
@@ -177,7 +189,7 @@ private struct SpaceRowView: View {
         if isSelected {
           Capsule(style: .continuous)
             .fill(Color.accentColor)
-            .frame(width: 3, height: 16)
+            .frame(width: 2, height: 14)
         }
       }
       .contentShape(Rectangle())
@@ -263,15 +275,16 @@ private struct TabRowView: View {
       .buttonStyle(.plain)
       .opacity(interaction.isHovered || isSelected ? 1 : 0)
       .allowsHitTesting(interaction.isHovered || isSelected)
+      .accessibilityHidden(!(interaction.isHovered || isSelected))
       .help("Close Tab (⌘W)")
       .accessibilityLabel("Close Tab")
     }
     .padding(.horizontal, 2)
     .background(
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
         .fill(
           isSelected
-            ? Color.accentColor.opacity(0.18)
+            ? Color.primary.opacity(0.10)
             : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
         )
     )

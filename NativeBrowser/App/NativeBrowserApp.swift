@@ -29,8 +29,9 @@ struct NativeBrowserApp: App {
         .environmentObject(runtime)
     }
     .defaultSize(width: 1280, height: 800)
-    // Keep the system title bar and traffic lights. The compact unified style
-    // lets the content chrome sit naturally below native window controls.
+    // Keep the system title bar and traffic lights. MainWindowView applies the
+    // AppKit full-size-content configuration so the titlebar becomes part of
+    // the continuous window chrome instead of reserving a second title row.
     .windowStyle(.titleBar)
     .windowToolbarStyle(.unifiedCompact)
     .commands {
