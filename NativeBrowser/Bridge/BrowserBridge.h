@@ -46,6 +46,21 @@ NS_SWIFT_UI_ACTOR
 /// or a signature, and the owner reports it through URLLogSanitizer.
 - (void)browserBridge:(BrowserBridge *)bridge didRequestNewTabWithURL:(NSString *)url;
 
+/// Chromium is asking for the keyboard (`CefFocusHandler::OnSetFocus`).
+///
+/// Chromium asks when a browser component starts navigating, which happens
+/// asynchronously - after the tab may already have been hidden and after the
+/// application decided whether that page should own the keyboard. `fromSystem`
+/// is YES when the request originates outside Chromium (window activation),
+/// NO for Chromium's own navigation-time request. Return YES to let Chromium
+/// move the keyboard, NO to cancel the focus change.
+///
+/// This is the second half of the Milestone 3 focus invariant: gating the
+/// application's own -setFocus: is not enough, because a new browser focuses
+/// itself when its first navigation starts.
+- (BOOL)browserBridge:(BrowserBridge *)bridge
+    allowsFocusRequestFromSystem:(BOOL)fromSystem;
+
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 
 @end
@@ -128,6 +143,9 @@ NS_SWIFT_UI_ACTOR
                           errorCode:(NSInteger)errorCode
                           failedURL:(NSString *)failedURL;
 - (void)browserDidRequestPopup:(NSString *)url;
+/// CefFocusHandler::OnSetFocus: Chromium is requesting keyboard focus. Answered
+/// by the delegate; a closing or closed bridge never allows it.
+- (BOOL)browserRequestsFocusFromSystem:(BOOL)fromSystem;
 - (void)browserDidClose;
 
 @end

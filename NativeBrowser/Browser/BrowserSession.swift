@@ -102,6 +102,21 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// toolbar's focus handling from fighting Chromium for first responder.
   private(set) var isEditingAddressField = false
 
+  /// True while this session's page content is supposed to own the keyboard.
+  ///
+  /// This is the state the *asynchronous* half of Chromium answers to. CEF
+  /// creates a browser after the tab may already have been hidden again, or
+  /// after the user moved the keyboard into the native address field, so "my
+  /// browser was just created" is not by itself a reason to take AppKit's first
+  /// responder. `focusPage()` sets this, `blur()` clears it, and the one
+  /// selection transition in BrowserSessionManager sets it on every tab change.
+  ///
+  /// A session starts wanting the keyboard, so the tab the application opens at
+  /// launch behaves like Milestone 2: clicking and typing reach the page without
+  /// an extra click. A browser created while its tab is not the visible selected
+  /// surface never takes focus, whatever this flag says.
+  private(set) var wantsPageFocus = true
+
   /// Lifecycle milestones, for logging and the verification tooling. Diagnostics
   /// only: BrowserSessionManager never derives ownership from these strings.
   var onLifecycleEvent: ((String) -> Void)?
@@ -183,6 +198,22 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge.loadURL(initialURL.absoluteString)
   }
 
+  /// Whether this session's container is the visible selected surface. The focus
+  /// rules are stated in terms of it, so focus diagnostics report it too.
+  var isSurfaceVisible: Bool { containerView?.isSurfaceVisible ?? false }
+
+  /// True while this session's page content owns the keyboard - or is the session
+  /// the keyboard was handed to and is still waiting for it. A new tab's
+  /// container may not be in a window yet and its Chromium browser is created
+  /// asynchronously, so AppKit's first responder alone is not enough: a hand-over
+  /// that has not physically happened yet would look like "the keyboard is
+  /// somewhere else", and the keyboard would stop following page content.
+  ///
+  /// This is the state a selection transition captures from the outgoing session.
+  var ownsPageKeyboard: Bool {
+    holdsAppKitKeyboardFocus || wantsPageFocus
+  }
+
   /// True while AppKit's keyboard focus is inside this session's Chromium
   /// surface. A tab switch only moves the keyboard when the page had it, so a
   /// switch never pulls focus out of the native address field.
@@ -260,7 +291,21 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.setFocus(true)
   }
 
+  /// Releases the keyboard from this session's page content.
+  ///
+  /// CEF focus is released through the bridge, which clears AppKit's first
+  /// responder only when it belongs to that browser's own view
+  /// (NBResponderBelongsToView), so releasing one tab never disturbs the native
+  /// address field's field editor. A session whose browser is still being
+  /// created has no bridge to do that, so the container's own first-responder
+  /// status is cleared here: `focusPage()` makes the container first responder
+  /// while a browser is pending, and neither a hidden surface nor a session that
+  /// is no longer selected may keep the keyboard.
   func blur() {
+    wantsPageFocus = false
+    if holdsAppKitKeyboardFocus {
+      containerView?.window?.makeFirstResponder(nil)
+    }
     bridge?.setFocus(false)
   }
 
@@ -309,18 +354,31 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     }
   }
 
+  /// Whether this session's surface may own the keyboard right now. Both halves
+  /// of `focusPage()` consult it: a hidden surface is never first responder, and
+  /// a session that no longer wants the keyboard must not have it handed over
+  /// late.
+  private var canTakePageFocus: Bool {
+    !isClosed && wantsPageFocus && containerView?.isSurfaceVisible == true
+  }
+
   /// Returns the keyboard to Chromium.
   ///
   /// The main-queue hop matters: this is normally called from a control action
   /// while AppKit is still completing its own focus change, and a re-entrant
   /// first-responder change is ignored. One hop lets that settle; it is the
   /// native way to defer to the end of the event, not a delay.
+  ///
+  /// Only the visible selected surface may take the keyboard, and both steps
+  /// re-check that (an explicit `makeFirstResponder` succeeds even for a hidden
+  /// view), so a request issued while the tab was selected cannot focus a
+  /// surface that has been hidden since.
   func focusPage() {
-    if let view = containerView {
-      view.window?.makeFirstResponder(view)
-    }
+    guard !isClosed, let view = containerView, view.isSurfaceVisible else { return }
+    wantsPageFocus = true
+    view.window?.makeFirstResponder(view)
     DispatchQueue.main.async { [weak self] in
-      guard let self, !self.isClosed else { return }
+      guard let self, self.canTakePageFocus else { return }
       self.focus()
     }
   }
@@ -392,8 +450,20 @@ extension BrowserSession: BrowserBridgeDelegate {
     containerView?.setBrowserAttached(true)
     emit("browser:created(count=\(browserCreationCount))")
     // Clicking and typing must reach the page without an extra click first
-    // (ARCHITECTURE.md section 18). CEF takes focus from there on.
-    bridge.setFocus(true)
+    // (ARCHITECTURE.md section 18). CEF takes focus from there on - but CEF
+    // creates a browser asynchronously, so by now this tab may already have been
+    // hidden again, or the user may have moved the keyboard into the native
+    // address field. Taking the keyboard is only correct while this session is
+    // still the visible selected surface *and* the keyboard is still meant for
+    // page content; otherwise a background or hidden browser would steal AppKit's
+    // first responder, which can be made first responder even while hidden.
+    if wantsPageFocus, containerView?.isSurfaceVisible == true {
+      bridge.setFocus(true)
+    } else {
+      AppLog.browser.debug(
+        "browser created without taking focus id=\(self.tabID.uuidString, privacy: .public) visible=\(self.containerView?.isSurfaceVisible == true, privacy: .public) wants-page-focus=\(self.wantsPageFocus, privacy: .public)"
+      )
+    }
     onTabMetadataChanged?(self)
   }
 
@@ -452,6 +522,37 @@ extension BrowserSession: BrowserBridgeDelegate {
     if !hasFinishedFirstLoad {
       hasFinishedFirstLoad = true
     }
+  }
+
+  /// Chromium is asking for the keyboard (`CefFocusHandler::OnSetFocus`).
+  ///
+  /// Chromium asks when a browser component starts navigating, which happens
+  /// asynchronously - after the tab may have been hidden again, and after the
+  /// application already decided whether that page should own the keyboard
+  /// (Milestone 3 focus fix). The answer is therefore the same predicate the
+  /// creation path uses:
+  ///
+  ///   * a surface that is not the visible selected one never takes the
+  ///     keyboard, so a background tab that starts loading cannot steal it;
+  ///   * the visible selected surface takes it while the keyboard is meant to be
+  ///     in page content - either because the page has it already (a click into
+  ///     the page makes the Chromium view first responder first) or because a
+  ///     selection transition handed it over;
+  ///   * while the native address field owns the keyboard, the request is
+  ///     cancelled, so the field keeps it.
+  ///
+  /// The CEF source is recorded but deliberately not part of the decision: CEF
+  /// reports a "system" request for view-level focus changes too, including the
+  /// one that follows a newly created browser, so it cannot be read as "the user
+  /// asked for this".
+  func browserBridge(_ bridge: BrowserBridge, allowsFocusRequestFromSystem fromSystem: Bool)
+    -> Bool
+  {
+    let allowed = !isClosed && isSurfaceVisible && ownsPageKeyboard
+    AppLog.browser.debug(
+      "focus request id=\(self.tabID.uuidString, privacy: .public) source=\(fromSystem ? "system" : "navigation", privacy: .public) visible=\(self.isSurfaceVisible, privacy: .public) wants-page-focus=\(self.wantsPageFocus, privacy: .public) allowed=\(allowed, privacy: .public)"
+    )
+    return allowed
   }
 
   /// Chromium asked for a popup. The bridge already cancelled the unmanaged

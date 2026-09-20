@@ -105,6 +105,22 @@ bool CEFClientHandler::OnBeforePopup(
   return true;  // Cancel the unmanaged popup.
 }
 
+bool CEFClientHandler::OnSetFocus(CefRefPtr<CefBrowser> browser,
+                                   FocusSource source) {
+  // Chromium asks for the keyboard here, for example when a browser starts
+  // navigating - which happens asynchronously, long after the tab may have been
+  // hidden again. The answer is decided by the runtime owner of this browser
+  // (BrowserSession), which knows whether this surface is still the visible
+  // selected one, so a background tab can never steal AppKit's first responder
+  // by starting a load (Milestone 3 focus fix).
+  //
+  // Answered synchronously on the UI thread: CEF uses the return value to decide
+  // whether to move focus, so there is nothing to hop to another thread here.
+  __weak BrowserBridge *bridge = bridge_;
+  const bool fromSystem = (source == FOCUS_SOURCE_SYSTEM);
+  return ![bridge browserRequestsFocusFromSystem:fromSystem];
+}
+
 void CEFClientHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   browser_ = browser;
   __weak BrowserBridge *bridge = bridge_;

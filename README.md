@@ -274,9 +274,16 @@ project.yml                    # XcodeGen project definition (source of truth)
     is not consulted). `NSApplication+CefSupport.mm` implements the protocol and
     wraps `-sendEvent:` once, exactly like CEF's reference implementation.
 
-12. **The page is focused as soon as it exists.** `BrowserSession` calls
-    `setFocus(true)` when Chromium reports the browser, which makes the Chromium
-    view first responder so clicking and typing work without an extra click.
+12. **The page is focused as soon as it exists — and only when it should be.**
+    Chromium creates a browser asynchronously, and focuses it by itself when its
+    first navigation starts. `BrowserSession` therefore takes focus on creation
+    only if that session is still the visible selected surface *and* the keyboard
+    is still meant for page content (`wantsPageFocus`, set by the one selection
+    transition in `BrowserSessionManager`), and it answers Chromium's own focus
+    request (`CefFocusHandler::OnSetFocus`, forwarded through `BrowserBridge`)
+    with the same rule. A background tab, or a tab that was left behind while its
+    browser was still being created, therefore cannot steal the keyboard
+    (ARCHITECTURE.md section 56).
 
 13. **Popups navigate the current browser.** Milestone 1 hosts exactly one
     browser, so allowing a popup would create an unmanaged window;

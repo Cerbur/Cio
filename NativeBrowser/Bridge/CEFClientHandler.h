@@ -19,6 +19,7 @@
 
 class CEFClientHandler final : public CefClient,
                                public CefDisplayHandler,
+                               public CefFocusHandler,
                                public CefLifeSpanHandler,
                                public CefLoadHandler {
  public:
@@ -30,8 +31,12 @@ class CEFClientHandler final : public CefClient,
 
   // CefClient
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+
+  // CefFocusHandler
+  bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override;
 
   // CefDisplayHandler
   void OnTitleChange(CefRefPtr<CefBrowser> browser,

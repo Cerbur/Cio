@@ -2116,7 +2116,8 @@ Closing a tab and destroying its Chromium runtime are two different instants:
 user closes tab
   -> TabCollection records a snapshot (user close only)
   -> tab leaves the visible order; a neighbour is selected, or a replacement tab
-     is created when it was the last one
+     is created when it was the last one, and the keyboard follows the new
+     selection when the closed page had it (section 56)
   -> the session is marked closing (it stays in `sessions`)
   -> BrowserSession.close(terminating:) -> BrowserBridge
        -> CefBrowserHost::CloseBrowser(force_close = true)
@@ -2181,21 +2182,98 @@ The ⌘L path is two notifications, each narrowed by object identity:
 No global keyboard monitor, no key polling and no Chromium key interception is
 involved.
 
+The field also reports *taking* the keyboard itself, from
+`NativeBrowserAddressField.becomeFirstResponder`, and the end of editing still
+arrives as `controlTextDidEndEditing`. AppKit does not reliably deliver the
+begin-editing callback for a programmatic focus change, and without that signal
+the session would not know the field owns the keyboard (section 56).
+
 ## 56. Focus model
 
-- **Tab switch** (section 16 order): release CEF focus on the outgoing session
-  (`blur()`), move `selectedTabID`, make the new container visible, then hand the
-  keyboard to the new page - but only when the outgoing *page* held AppKit focus.
-  If the address field had the keyboard, the switch leaves it there.
+Keyboard ownership has one rule, applied in one place:
+`BrowserSessionManager.withSelectionTransition(_:)` - **the keyboard follows the
+page only when the page had it**. Every path that can move the selection runs
+inside that transition (a tab switch, `⌘T`, `⌘⇧T`, closing the selected tab and
+the replacement tab a last-tab close creates), so those paths cannot drift apart:
+
+```text
+capture the outgoing selected session and whether its PAGE holds AppKit focus
+  -> run the change (collection mutation, session registration; no view work)
+  -> selection did not move?  stop: the keyboard stays with whoever owns it
+  -> outgoing.blur()                  CEF focus + that session's AppKit responder
+  -> publish state, sync the surface  (old container hidden, new one visible)
+  -> the page had the keyboard?
+       yes -> incoming.focusPage()    now, and when its browser is ready
+       no  -> incoming.blur()         record that the page must not take it
+```
+
+Consequences:
+
+- **Background work never touches focus.** `createTab(select: false)` and
+  closing a background tab move no selection, so the transition publishes the new
+  tab order and returns without blurring or focusing anything. A background tab's
+  container is hidden before its browser is created, so that browser cannot take
+  the keyboard either.
+- **A tab change never pulls focus out of the address field.** When the outgoing
+  page did not hold first responder, the incoming session is explicitly told that
+  the page must not take it; neither the pending browser creation nor the deferred
+  half of `focusPage()` can then move the field editor.
+- **A hidden surface is never made first responder.** `focusPage()` refuses
+  unless the container is the visible selected surface, and the main-queue hop
+  inside it re-checks that. An explicit `makeFirstResponder:` succeeds even for a
+  hidden view, so the gate is at the call site rather than left to AppKit.
+- **Chromium creation is asynchronous, so the intent is state, not a call.**
+  `BrowserSession.wantsPageFocus` is set by `focusPage()`, cleared by
+  `blur()`, and `browserBridgeDidCreateBrowser` takes the keyboard only when
+  `wantsPageFocus && containerView.isSurfaceVisible`. A browser that arrives
+  after its tab was hidden again - or after the keyboard moved into the address
+  field - is created without focus, and says so in the log
+  (`browser created without taking focus`, with the tab id, visibility and
+  intent; no URL, no page text).
+- **Chromium's own focus request is answered, not ignored.** A browser focuses
+  itself when its first navigation starts, and that happens asynchronously -
+  after the tab may have been hidden again. `CEFClientHandler` therefore
+  implements `CefFocusHandler::OnSetFocus` and forwards the request through
+  `BrowserBridge` to the session, which allows it only while the session is the
+  visible selected surface *and* the keyboard is meant for page content
+  (`isSurfaceVisible && ownsPageKeyboard`; logged with the tab id, the CEF
+  source, the visibility and the intent). Without that answer, a background tab
+  that merely started loading would make its hidden Chromium view AppKit's first
+  responder - gating the application's own `-setFocus:` alone is not enough.
+  The CEF source is logged but deliberately not part of the decision: CEF reports
+  a "system" request for view-level focus changes too, including the one that
+  follows a newly created browser, so it cannot be read as "the user asked for
+  this".
+- **The address field reports taking the keyboard itself.** AppKit does not
+  reliably deliver `-controlTextDidBeginEditing` for a *programmatic* focus
+  change, so ⌘L used to leave the session believing the page still owned the
+  keyboard - and the next tab change then stole focus out of the field.
+  `NativeBrowserAddressField.becomeFirstResponder` now reports the focus gain
+  through the representable's coordinator (the end of editing still arrives as
+  `controlTextDidEndEditing`), so "the native field owns the keyboard" is state
+  the session actually has.
+- **Creating a tab hands the keyboard to the new page only when the page had
+  it.** With `select: true` and page focus on the old tab, the old page is
+  blurred, the new surface is shown, and the new page receives focus as soon as
+  its browser exists. With the address field focused, the field editor stays
+  first responder (the new session is told the page must not take the keyboard,
+  and Chromium's own focus request for the new browser is cancelled) while the
+  toolbar re-binds to the selected session's model.
+- **Closing the selected tab transfers the keyboard** to the tab the collection
+  selects (right neighbour, else left, else the last-tab replacement), and the
+  hand-over happens before the closing session is asked to close.
+  `-completeClose` clears only that browser's own CEF focus and only that browser
+  view's AppKit responder (`NBResponderBelongsToView`), so the new selection keeps
+  the keyboard. First responder does not end up empty.
+- **Background-tab close** must not steal focus. `-completeClose` always releases
+  the closing browser's own CEF focus, and clears AppKit's first responder only
+  when (a) the responder belongs to the view being destroyed, or (b) the close is
+  part of application termination.
 - **Chromium first responder**: the CEF host view is made first responder by
   `BrowserBridge -setFocus:YES`. `-setFocus:NO` only clears it when the current
   responder actually belongs to that browser view
   (`NBResponderBelongsToView`), so releasing one tab never disturbs the field
   editor.
-- **Background-tab close** must not steal focus. `-completeClose` always releases
-  the closing browser's own CEF focus, and clears AppKit's first responder only
-  when (a) the responder belongs to the view being destroyed, or (b) the close is
-  part of application termination.
 - **The Milestone 2 Cmd+Q fix is preserved** through (b):
   `ApplicationRuntime.requestBrowserClosure()` calls
   `BrowserSession.close(terminating: true)`, which reaches
@@ -2334,5 +2412,6 @@ milestone; the invariant is enforced here.
   `RunLoop.main.run(until:)` harness delivers `DoClose` but defers
   `OnBeforeClose` for a loaded page by minutes, so `--tabs-self-test` drives the
   real window, the real surface host and the real `NSApplication` run loop
-  instead. It therefore still does not exercise real key events, AppKit focus or
-  IME; those remain manual.
+  instead. It observes AppKit's real first responder for the focus rules
+  (`holdsAppKitKeyboardFocus`), but it synthesises no key events: what a keystroke
+  does - Cmd-T, Cmd-W, typing into the page, Chinese IME - remains manual.

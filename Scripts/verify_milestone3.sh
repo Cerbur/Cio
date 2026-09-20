@@ -272,6 +272,60 @@ else
   pass "tab lifecycle uses no delays or timers"
 fi
 
+# One focus transition owns every selection change (Milestone 3 focus fix).
+MANAGER="$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift"
+check_file_contains "one transition owns every selection change" \
+  "$MANAGER" "private func withSelectionTransition<T>(_ change: () -> T) -> T"
+# The collection may only be mutated for selection from inside that transition,
+# so createTab / reopen / close cannot drift away from the focus rules again.
+# (`collection.select(` / `collection.insert(` / `collection.close(` each appear
+# once: in selectTab, insertTab and closeTab, all inside the transition.)
+for SELECTION_CALL in "collection.select(id)" "collection.insert(tab, at: index" \
+  "let result = collection.close(id, reason: reason)"; do
+  SELECTION_CALLS="$(grep -cF -e "$SELECTION_CALL" "$MANAGER" 2>/dev/null)"
+  SELECTION_CALLS="${SELECTION_CALLS:-0}"
+  if [ "$SELECTION_CALLS" -eq 1 ]; then
+    pass "the selection has one mutation site ($SELECTION_CALL)"
+  else
+    fail "$SELECTION_CALLS mutation sites for $SELECTION_CALL (expected 1)"
+  fi
+done
+# The asynchronous half: a created browser only takes focus when its tab is the
+# visible selected surface and the keyboard is still meant for page content.
+check_file_contains "a created browser checks visibility and intent before focusing" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserSession.swift" \
+  "if wantsPageFocus, containerView?.isSurfaceVisible == true {"
+check_file_contains "a deferred focus request re-checks the surface" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserSession.swift" \
+  "guard let self, self.canTakePageFocus else { return }"
+# Chromium focuses a new browser itself when its first navigation starts, so the
+# CEF focus request is answered instead of ignored (Milestone 3 focus fix).
+check_file_contains "Chromium focus requests are handled at the CEF boundary" \
+  "$REPO_ROOT/NativeBrowser/Bridge/CEFClientHandler.h" \
+  "CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }"
+check_file_contains "the focus handler asks the browser's owner" \
+  "$REPO_ROOT/NativeBrowser/Bridge/CEFClientHandler.mm" \
+  "[bridge browserRequestsFocusFromSystem:fromSystem]"
+check_file_contains "the bridge forwards the focus request to its session" \
+  "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm" \
+  "[self.delegate browserBridge:self allowsFocusRequestFromSystem:fromSystem]"
+check_file_contains "only the visible selected surface may take a focus request" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserSession.swift" \
+  "let allowed = !isClosed && isSurfaceVisible && ownsPageKeyboard"
+# The address field reports taking the keyboard itself: AppKit does not deliver
+# -controlTextDidBeginEditing for a programmatic focus change (⌘L), and without
+# that signal a tab change would steal focus back out of the field.
+check_file_contains "the address field reports taking the keyboard" \
+  "$REPO_ROOT/NativeBrowser/UI/CommandBar/AddressField.swift" \
+  "field.onFocusChange = { [weak coordinator = context.coordinator] focused in"
+# Focus handling stays event-driven: no delays, no polling, no key monitors.
+if grep -qE "asyncAfter|Thread\.sleep|usleep|Timer\.scheduledTimer|addLocalMonitorForEvents|addGlobalMonitorForEvents" \
+     "$REPO_ROOT/NativeBrowser/Browser/BrowserSession.swift" 2>/dev/null; then
+  fail "focus handling introduced a delay, a timer or a key monitor"
+else
+  pass "focus handling uses no delays, timers or key monitors"
+fi
+
 # ---------------------------------------------------------------------------
 echo
 echo "3. multi-tab integration (--tabs-self-test)"
@@ -332,6 +386,27 @@ check_contains "the shutdown needed no timeout fallback" \
 check_contains "CefShutdown ran exactly once" \
   "tabs-self-test: pass cef-shutdown-once" "$SELF_LOG"
 check_contains "the self-test reported no failures" "failures=0" "$SELF_LOG"
+# Focus ownership (Milestone 3 focus fix), observed through AppKit's real first
+# responder. No key event is synthesised, so this proves ownership, not what a
+# keystroke does with it.
+check_contains "the selected page can hold AppKit keyboard focus" \
+  "tabs-self-test: pass selected-page-holds-keyboard" "$SELF_LOG"
+check_contains "a selected-page tab switch moves the keyboard to the new tab" \
+  "tabs-self-test: pass switch-moves-keyboard" "$SELF_LOG"
+check_contains "the native address field can own the keyboard" \
+  "tabs-self-test: pass address-field-holds-keyboard" "$SELF_LOG"
+check_contains "a tab change keeps the address field's keyboard focus" \
+  "tabs-self-test: pass tab-change-keeps-address-focus" "$SELF_LOG"
+check_contains "a background tab is created without changing the selection" \
+  "tabs-self-test: pass background-creation-keeps-selection" "$SELF_LOG"
+check_contains "a background browser never takes keyboard focus" \
+  "tabs-self-test: pass background-browser-does-not-take-focus" "$SELF_LOG"
+check_contains "a browser created after its tab was hidden does not steal focus" \
+  "tabs-self-test: pass late-browser-creation-keeps-focus" "$SELF_LOG"
+check_contains "closing a background tab keeps the active tab's focus" \
+  "tabs-self-test: pass background-close-keeps-focus" "$SELF_LOG"
+check_contains "closing the selected tab transfers focus to the new selection" \
+  "tabs-self-test: pass selected-close-transfers-focus" "$SELF_LOG"
 
 # ---------------------------------------------------------------------------
 echo
@@ -478,9 +553,13 @@ REQUIRES MANUAL VERIFICATION (not covered by this script):
   TEST F  Cmd+L with Chromium focused in several tabs: only the selected tab's
           field focuses and selects all; Chinese IME composition stays normal
   TEST G  Cmd+W on a selected middle tab: only that tab closes, the neighbour is
-          selected, the window stays open, the other browsers stay alive
+          selected, the window stays open, the other browsers stay alive, and
+          typing reaches the neighbour without an extra click (the hand-over of
+          AppKit focus itself is automated as selected-close-transfers-focus)
   TEST H  close a background tab with the sidebar button: the active page keeps
-          keyboard focus and is not blurred
+          keyboard focus and is not blurred (automated as
+          background-close-keeps-focus; that a keystroke still reaches the page
+          afterwards is manual)
   TEST I  reduce to one tab, Cmd+W: a fresh usable tab is created, window stays
   TEST J  close a tab with a distinctive URL, Cmd+Shift+T: new tab, same URL, new
           runtime identity, selected
@@ -495,6 +574,19 @@ REQUIRES MANUAL VERIFICATION (not covered by this script):
   TEST N  red window close button with several tabs: shutdown stays clean
   TEST O  resize rapidly while switching tabs: the selected surface always matches
           the available bounds
+
+  Milestone 3 focus ownership (real key events; the ownership rules themselves
+  are automated in --tabs-self-test and listed as pass lines above):
+  TEST P  page focused, Cmd+T, immediately type: the hidden tab receives no input
+          and the new tab owns page focus once its browser exists
+  TEST Q  press Cmd+T several times and click among tabs while pages are still
+          being created: a late OnAfterCreated from a hidden tab never steals
+          focus (the same race without key events is automated as
+          late-browser-creation-keeps-focus)
+  TEST R  address field focused, then switch tabs or create one: keyboard focus
+          does not jump to a hidden or newly created Chromium browser
+  TEST S  Cmd+L + Chinese IME after several tab switches: composition, candidates
+          and commit stay normal
 MANUAL
 
 exit $((FAILURES > 0 ? 1 : 0))

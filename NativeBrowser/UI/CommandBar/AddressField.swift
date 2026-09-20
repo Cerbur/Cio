@@ -53,6 +53,16 @@ struct AddressField: NSViewRepresentable {
     // substitution belong to the field editor and are turned off in
     // -configureFieldEditor once AppKit hands the editor over.
     field.isAutomaticTextCompletionEnabled = false
+    // The field reports taking the keyboard itself. AppKit does not reliably
+    // deliver -controlTextDidBeginEditing for a *programmatic* focus change, so
+    // ⌘L would otherwise leave the session believing the page still owns the
+    // keyboard - and then creating or switching a tab would steal focus out of
+    // the address field. The end of editing still arrives through the delegate
+    // (controlTextDidEndEditing), which is when the shared field editor is
+    // handed back.
+    field.onFocusChange = { [weak coordinator = context.coordinator] focused in
+      coordinator?.reportFocusChange(focused)
+    }
     context.coordinator.observeFocusRequests(for: field, model: model)
     return field
   }
@@ -174,7 +184,8 @@ struct AddressField: NSViewRepresentable {
 /// field editor otherwise hides them) and it can be focused with everything
 /// selected, which is what ⌘L must do.
 final class NativeBrowserAddressField: NSTextField {
-  var onFocusChange: ((Bool) -> Void)?
+  /// Called on the main thread when this field takes or gives up the keyboard.
+  var onFocusChange: (@MainActor (Bool) -> Void)?
 
   override func becomeFirstResponder() -> Bool {
     let accepted = super.becomeFirstResponder()

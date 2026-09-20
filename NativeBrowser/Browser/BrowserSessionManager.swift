@@ -75,8 +75,11 @@ final class BrowserSessionManager: ObservableObject {
     newTabURL = initialTabURL
     let initialTab = BrowserTab(url: initialTabURL)
     collection = TabCollection.workspace(initialTab: initialTab)
-    publishState()
+    // The session exists before the first publication, so the first state an
+    // observer sees already owns its runtime. The surface follows when the
+    // window attaches its host.
     registerSession(for: initialTab.id, initialURL: initialTabURL)
+    publishState()
   }
 
   // MARK: - Queries
@@ -125,11 +128,93 @@ final class BrowserSessionManager: ObservableObject {
     liveSessions.compactMap { $0.browserIdentifier }
   }
 
+  // MARK: - Selection transition
+
+  /// Runs one change to the tab order as a single selection transition.
+  ///
+  /// Every path that can move the selection goes through here - selecting a tab,
+  /// creating one, reopening one, closing one, and the replacement tab a
+  /// last-tab close creates - so the keyboard rules exist once instead of being
+  /// restated by each caller:
+  ///
+  ///   1. capture whether the outgoing *page* owned the keyboard (AppKit's first
+  ///      responder, or a hand-over to it that is still in flight)
+  ///   2. run `change`, which mutates the collection (and therefore the
+  ///      selection) and registers sessions, but never touches a view
+  ///   3. if the selection did not move, stop: a background insert or a
+  ///      background close leaves the active tab and the keyboard alone
+  ///   4. release the outgoing page's CEF and AppKit focus, while its surface is
+  ///      still visible
+  ///   5. publish state and sync the surface, which hides the old container and
+  ///      shows the new one
+  ///   6. hand the keyboard to the newly selected session only when the page had
+  ///      it before; when the native address field had it, the new session is
+  ///      explicitly told not to take it, so the Chromium browser it is still
+  ///      creating cannot steal it later
+  ///
+  /// Nothing here waits, polls or times out: the asynchronous half - a browser
+  /// arriving after its tab was hidden - is answered by
+  /// BrowserSession.wantsPageFocus, which step 6 sets.
+  @discardableResult
+  private func withSelectionTransition<T>(_ change: () -> T) -> T {
+    let outgoing = selectedSession
+    let previousSelection = collection.selectedTabID
+    let pageHeldKeyboard = outgoing?.ownsPageKeyboard ?? false
+
+    let result = change()
+
+    guard collection.selectedTabID != previousSelection else {
+      // The tab order changed but the selection did not: publish it, and leave
+      // the keyboard with whoever owns it.
+      publishState()
+      return result
+    }
+
+    outgoing?.blur()
+    publishState()
+
+    if let incoming = selectedSession, incoming !== outgoing {
+      if pageHeldKeyboard {
+        incoming.focusPage()
+      } else {
+        incoming.blur()
+      }
+    }
+    return result
+  }
+
+  /// Adds one tab and its session to the two registries - and nothing else.
+  ///
+  /// Publication, surface work and focus belong to the caller's selection
+  /// transition: the container has to become visible (step 5 there) before a
+  /// browser is allowed to be created in it, because that is what decides
+  /// whether the new browser may take the keyboard.
+  @discardableResult
+  private func insertTab(_ tab: BrowserTab, at index: Int, select: Bool, initialURL: URL) -> UUID {
+    collection.insert(tab, at: index, select: select)
+    registerSession(for: tab.id, initialURL: initialURL)
+    return tab.id
+  }
+
+  /// The one diagnostic site for "a tab was added to the workspace", shared by
+  /// Cmd-T, the sidebar "+" control, a routed popup and the replacement tab a
+  /// last-tab close creates.
+  private func logTabCreated(_ tabID: UUID, url: URL) {
+    emit("tab:created(\(tabID.uuidString))")
+    AppLog.session.info(
+      "tab created id=\(tabID.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(url), privacy: .public)"
+    )
+  }
+
   // MARK: - Tab lifecycle
 
   /// Creates a tab, its session and (once its container is in the window) its
   /// Chromium browser. Returns the new tab identifier, or nil during
   /// application termination.
+  ///
+  /// `select: false` inserts the tab behind the current selection: neither the
+  /// selected tab nor the keyboard changes, and the new browser is created
+  /// while its surface is hidden, so it can never take focus when it arrives.
   @discardableResult
   func createTab(url: URL? = nil, select: Bool = true) -> UUID? {
     guard !isTerminating else {
@@ -138,13 +223,11 @@ final class BrowserSessionManager: ObservableObject {
       return nil
     }
     let tab = BrowserTab(url: url)
-    collection.append(tab, select: select)
-    publishState()
-    registerSession(for: tab.id, initialURL: url ?? newTabURL)
-    emit("tab:created(\(tab.id.uuidString))")
-    AppLog.session.info(
-      "tab created id=\(tab.id.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(url ?? self.newTabURL), privacy: .public)"
-    )
+    let initialURL = url ?? newTabURL
+    withSelectionTransition {
+      insertTab(tab, at: collection.tabs.count, select: select, initialURL: initialURL)
+    }
+    logTabCreated(tab.id, url: initialURL)
     return tab.id
   }
 
@@ -160,9 +243,12 @@ final class BrowserSessionManager: ObservableObject {
       return nil
     }
     let tab = BrowserTab(title: snapshot.title, url: snapshot.url)
-    collection.insert(tab, at: snapshot.originalIndex, select: true)
-    publishState()
-    registerSession(for: tab.id, initialURL: snapshot.url ?? newTabURL)
+    let initialURL = snapshot.url ?? newTabURL
+    // The restored tab is selected, so it is a selection transition like any
+    // other: the keyboard follows it only when page content had the keyboard.
+    withSelectionTransition {
+      insertTab(tab, at: snapshot.originalIndex, select: true, initialURL: initialURL)
+    }
     emit("tab:reopened(\(tab.id.uuidString))")
     // The snapshot URL is a page the user visited and this line is captured into
     // a log file, so it is only ever reported sanitized.
@@ -173,26 +259,14 @@ final class BrowserSessionManager: ObservableObject {
   }
 
   /// Selects a tab and moves the keyboard with it (section 16).
+  ///
+  /// The transition itself lives in `withSelectionTransition`, so this path and
+  /// tab creation, reopening and closing behave identically.
   func selectTab(id: UUID) {
     guard let session = sessions[id], !session.isClosed else { return }
     guard collection.selectedTabID != id else { return }
 
-    let previous = collection.selectedTabID.flatMap { sessions[$0] }
-    let pageHeldKeyboard = previous?.holdsAppKitKeyboardFocus ?? false
-
-    // 1. release CEF focus from the old selection.
-    previous?.blur()
-    // 2. move the selection.
-    collection.select(id)
-    publishState()
-    // 3. show the new container and hide the old one. No browser is created or
-    //    destroyed here.
-    syncSurface()
-    // 4. let the new page take the keyboard, but only when the page had it
-    //    before: a tab switch must not pull focus out of the address field.
-    if pageHeldKeyboard {
-      session.focusPage()
-    }
+    withSelectionTransition { collection.select(id) }
     emit("tab:selected")
     AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
   }
@@ -222,33 +296,48 @@ final class BrowserSessionManager: ObservableObject {
       return
     }
     let reason: TabCloseReason = isTerminating ? .applicationTerminating : .userClosed
-    let result = collection.close(id, reason: reason)
+
+    // The close is the selection transition: closing the selected tab selects
+    // its neighbour (or, for the last tab, a replacement) and the keyboard is
+    // handed over inside the transition, before the old session is asked to
+    // close. Closing a background tab moves no selection, so the transition
+    // leaves the active tab and the keyboard untouched.
+    let result: TabCloseResult = withSelectionTransition {
+      let result = collection.close(id, reason: reason)
+      guard result.outcome != .unknownTab else { return result }
+
+      // Mark the session as closing *before* the surface is synced: the sync
+      // would treat a session that is neither visible nor known to be closing as
+      // stale and remove its container while Chromium is still shutting the
+      // browser down inside it. A session that never created a browser reaches
+      // OnBeforeClose synchronously, so this ordering also has to hold for that
+      // case.
+      if !closingTabIDs.contains(id) {
+        closingTabIDs.append(id)
+      }
+      if result.needsReplacementTab {
+        // Section 20: the last ordinary tab close leaves a fresh usable tab, so
+        // the window is never left with nothing to show. It is created inside
+        // this transition, so it is selected and receives the keyboard exactly
+        // like any other newly selected tab.
+        let replacement = BrowserTab(url: nil)
+        insertTab(replacement, at: collection.tabs.count, select: true, initialURL: newTabURL)
+        logTabCreated(replacement.id, url: newTabURL)
+      }
+      return result
+    }
     guard result.outcome != .unknownTab else { return }
 
-    // Mark the session as closing *before* publishing: publishState re-syncs the
-    // surface, and a session that is neither visible nor known to be closing
-    // would have its container treated as stale and removed while Chromium is
-    // still shutting the browser down inside it. A session that never created a
-    // browser reaches OnBeforeClose synchronously, so this ordering also has to
-    // hold for that case.
-    if !closingTabIDs.contains(id) {
-      closingTabIDs.append(id)
-    }
-    publishState()
     AppLog.session.info(
       "tab closing id=\(id.uuidString, privacy: .public) live=\(self.sessions.count, privacy: .public)"
     )
     // Nothing is waited for here: CloseBrowser returns immediately and
-    // OnBeforeClose arrives through the message pump.
+    // OnBeforeClose arrives through the message pump. The close releases only
+    // this browser's own CEF focus and only this browser view's AppKit
+    // responder, so it cannot take the keyboard away from the tab that just
+    // inherited it.
     session.close(terminating: isTerminating)
     emit("tab:closed")
-
-    if result.needsReplacementTab {
-      // Section 20: the last ordinary tab close leaves a fresh usable tab, so
-      // the window is never left with nothing to show.
-      createTab(url: nil)
-    }
-    syncSurface()
   }
 
   func closeSelectedTab() {
@@ -351,7 +440,9 @@ final class BrowserSessionManager: ObservableObject {
     sessions[tabID] = session
     onWillPublish?()
     liveSessionCount = sessions.count
-    syncSurface()
+    // No surface work here: the caller's selection transition publishes and
+    // syncs, which is what keeps "a container becomes visible" ordered before
+    // "a browser is created in it" for a newly created tab.
   }
 
   /// One Chromium callback updates exactly one tab: the session identity decides

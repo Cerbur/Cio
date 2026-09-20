@@ -390,6 +390,16 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   [self.delegate browserBridge:self didRequestNewTabWithURL:url];
 }
 
+- (BOOL)browserRequestsFocusFromSystem:(BOOL)fromSystem {
+  // A closed or closing browser never takes the keyboard; the delegate decides
+  // for a live one, because only it knows whether this surface is still the
+  // visible selected one (Milestone 3 focus fix).
+  if (_closed || _closeRequested) {
+    return NO;
+  }
+  return [self.delegate browserBridge:self allowsFocusRequestFromSystem:fromSystem];
+}
+
 - (void)browserDidClose {
   if (_closed) {
     return;

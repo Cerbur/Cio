@@ -30,10 +30,25 @@
 //  plus the section 33 stress shape (several real browsers created and
 //  destroyed with no duplicated identity) and the section 20 last-tab rule.
 //
-//  It does NOT check anything that needs a human: sidebar appearance, real key
-//  events for Cmd-T/Cmd-W, AppKit focus behaviour after a tab switch, IME, or
-//  window resizing feel. Those stay in the manual checklist.
+//  The Milestone 3 focus fix is checked here too, with real AppKit state
+//  (BrowserSession.holdsAppKitKeyboardFocus) rather than a proxy:
 //
+//    K. the selected page can own AppKit's first responder at all
+//    L. a selected-page tab switch moves it from the old session to the new one
+//    M. a tab created with select=false gets a real browser without touching
+//       the selection or the keyboard
+//    N. a tab whose browser arrives *after* it was hidden again does not steal
+//       the keyboard (the asynchronous OnAfterCreated race)
+//    O. closing a background tab leaves the active tab's keyboard ownership
+//       alone
+//    P. closing the selected tab hands the keyboard to the tab that replaces it
+//    Q. a tab change while the native address field owns the keyboard leaves the
+//       field editor first responder (the page follows the keyboard; it never
+//       takes it)
+//
+//  It still does NOT check anything that needs a human: sidebar appearance, real
+//  key events for Cmd-T/Cmd-W, a real key event reaching the page, Chinese IME,
+//  or window resizing feel. Those stay in the manual checklist.
 
 import AppKit
 import Foundation
@@ -117,6 +132,9 @@ final class TabsSelfTest {
   private var creationsBeforeSwitch: [String] = []
   private var identifiersBeforeSwitch: [Int] = []
   private var urlChangesBeforeSwitch: [Int] = []
+  /// The tab the asynchronous-creation race left behind, so the next phase can
+  /// close it as a background tab.
+  private var racedTabID: UUID?
   private var navigateURLChangesBefore = 0
   private var terminationStarted = Date()
   private var liveAtTermination = 0
@@ -174,6 +192,14 @@ final class TabsSelfTest {
       waitForInitialTab(),
       createExtraTabs(),
       switchTabs(),
+      pageHoldsKeyboard(),
+      switchMovesKeyboard(),
+      addressFieldHoldsKeyboard(),
+      tabChangeKeepsAddressField(),
+      backgroundTabDoesNotStealFocus(),
+      lateOnAfterCreatedDoesNotStealFocus(),
+      backgroundCloseKeepsKeyboard(),
+      closeSelectedTransfersKeyboard(),
       closeBackgroundTab(),
       navigateSurvivor(),
       createStressTabs(),
@@ -285,6 +311,337 @@ final class TabsSelfTest {
           "switches=\(self.switchCount) creations=\(self.manager.liveSessions.map { String($0.browserCreationCount) }.joined(separator: ","))"
         )
       })
+  }
+
+  // MARK: Focus steps (Milestone 3 focus fix)
+  //
+  // These steps observe AppKit's real first responder through
+  // BrowserSession.holdsAppKitKeyboardFocus. They deliberately never synthesise a
+  // key event, so they prove ownership of the keyboard, not what a keystroke
+  // does with it: Cmd-key behaviour, typing into the page and IME stay manual.
+
+  /// The precondition every other focus check needs: the selected page really can
+  /// own AppKit's first responder, and the test can see it.
+  private func pageHoldsKeyboard() -> Step {
+    Step(
+      name: "page-holds-keyboard",
+      timeout: 30,
+      begin: {
+        self.manager.selectedSession?.focusPage()
+      },
+      advance: {
+        self.manager.selectedSession?.holdsAppKitKeyboardFocus == true
+      },
+      finish: { completed in
+        self.report(
+          "selected-page-holds-keyboard", completed,
+          self.focusDescription(of: self.manager.selectedSession))
+      })
+  }
+
+  /// A selected-page tab switch moves the keyboard with the page: the outgoing
+  /// session stops holding it and the newly selected one holds it.
+  private func switchMovesKeyboard() -> Step {
+    var outgoingID: UUID?
+    var incomingID: UUID?
+    return Step(
+      name: "switch-moves-keyboard",
+      timeout: 30,
+      begin: {
+        outgoingID = self.manager.selectedTabID
+        incomingID = self.manager.tabs.map(\.id).first { $0 != outgoingID }
+        if let incomingID {
+          self.manager.selectTab(id: incomingID)
+        }
+      },
+      advance: {
+        guard let outgoingID, let incomingID,
+          let outgoing = self.manager.session(for: outgoingID),
+          let incoming = self.manager.session(for: incomingID)
+        else { return true }
+        return self.manager.selectedTabID == incomingID
+          && !outgoing.holdsAppKitKeyboardFocus
+          && incoming.holdsAppKitKeyboardFocus
+      },
+      finish: { completed in
+        let outgoing = outgoingID.flatMap { self.manager.session(for: $0) }
+        let incoming = incomingID.flatMap { self.manager.session(for: $0) }
+        self.report(
+          "switch-moves-keyboard",
+          completed && self.manager.selectedTabID == incomingID
+            && outgoing?.holdsAppKitKeyboardFocus == false
+            && incoming?.holdsAppKitKeyboardFocus == true,
+          "old=[\(self.focusDescription(of: outgoing))] new=[\(self.focusDescription(of: incoming))]")
+      })
+  }
+
+  /// ⌘L in the real window: the native address field owns the keyboard. This
+  /// runs the production notification path, not a private hook.
+  private func addressFieldHoldsKeyboard() -> Step {
+    Step(
+      name: "address-field-holds-keyboard",
+      timeout: 30,
+      begin: {
+        self.manager.selectedSession?.requestAddressFieldFocus()
+      },
+      advance: { self.addressFieldIsFirstResponder },
+      finish: { completed in
+        let pageFocused = self.manager.selectedSession?.holdsAppKitKeyboardFocus ?? false
+        self.report(
+          "address-field-holds-keyboard",
+          completed && self.addressFieldIsFirstResponder && !pageFocused,
+          "field-editor=\(self.addressFieldIsFirstResponder) page-focused=\(pageFocused)")
+      })
+  }
+
+  /// Cmd-T while the address field owns the keyboard: the new tab is selected,
+  /// its browser is created, and the field editor keeps the keyboard. A tab
+  /// change must not pull focus into a newly created Chromium surface.
+  private func tabChangeKeepsAddressField() -> Step {
+    var createdTabID: UUID?
+    var createdSession: BrowserSession?
+    var ticksAfterBrowser = 0
+    return Step(
+      name: "tab-change-keeps-address-field",
+      timeout: 90,
+      begin: {
+        createdTabID = self.manager.createTab(
+          url: URL(string: "https://example.com/focus-address-field"))
+        createdSession = createdTabID.flatMap { self.manager.session(for: $0) }
+      },
+      advance: {
+        guard let createdSession else { return true }
+        guard createdSession.hasBrowser, createdSession.browserCreationCount == 1 else {
+          return false
+        }
+        // Two extra ticks: the browser exists, and any focus request it made
+        // while being created has already been answered.
+        ticksAfterBrowser += 1
+        return ticksAfterBrowser >= 2
+      },
+      finish: { completed in
+        let pageFocused = self.manager.liveSessions.contains { $0.holdsAppKitKeyboardFocus }
+        self.report(
+          "tab-change-keeps-address-focus",
+          completed && self.manager.selectedTabID == createdTabID
+            && self.addressFieldIsFirstResponder && !pageFocused,
+          "created=\(self.shortID(createdTabID)) selected=\(self.shortID(self.manager.selectedTabID)) field-editor=\(self.addressFieldIsFirstResponder) any-page-focused=\(pageFocused) new=[\(self.focusDescription(of: createdSession))]")
+      })
+  }
+
+  /// A tab created with `select: false` gets a real Chromium browser while the
+  /// selection and the keyboard stay exactly where they were.
+  private func backgroundTabDoesNotStealFocus() -> Step {
+    var backgroundSession: BrowserSession?
+    var selectedBefore: UUID?
+    var heldBefore = false
+    var ticks = 0
+    var browserArrivedAtTick: Int?
+    var focusAppearedAtTick: Int?
+    return Step(
+      name: "background-tab-creation",
+      timeout: 90,
+      begin: {
+        selectedBefore = self.manager.selectedTabID
+        // Put the keyboard in the selected page first, so a steal would be
+        // visible as a change rather than as a no-op.
+        self.manager.selectedSession?.focusPage()
+        heldBefore = self.manager.selectedSession?.holdsAppKitKeyboardFocus ?? false
+        let url = URL(string: "https://example.com/focus-background")!
+        if let tabID = self.manager.createTab(url: url, select: false) {
+          backgroundSession = self.manager.session(for: tabID)
+        }
+      },
+      advance: {
+        ticks += 1
+        guard let backgroundSession else { return true }
+        if backgroundSession.hasBrowser, backgroundSession.browserCreationCount == 1 {
+          if browserArrivedAtTick == nil { browserArrivedAtTick = ticks }
+        }
+        // Diagnostic: when did the background surface first hold AppKit focus?
+        if focusAppearedAtTick == nil, backgroundSession.holdsAppKitKeyboardFocus {
+          focusAppearedAtTick = ticks
+        }
+        if let browserArrivedAtTick, ticks >= browserArrivedAtTick + 2 {
+          return true
+        }
+        return false
+      },
+      finish: { completed in
+        let background = backgroundSession
+        let focusTick = focusAppearedAtTick.map(String.init) ?? "never"
+        self.report(
+          "background-creation-keeps-selection",
+          completed && background != nil && self.manager.selectedTabID == selectedBefore,
+          "selected-before=\(self.shortID(selectedBefore)) selected-after=\(self.shortID(self.manager.selectedTabID))")
+        self.report(
+          "background-browser-does-not-take-focus",
+          completed && heldBefore && background != nil
+            && background?.holdsAppKitKeyboardFocus == false
+            && background?.isSurfaceVisible == false
+            && self.manager.selectedSession?.holdsAppKitKeyboardFocus == heldBefore,
+          "background=[\(self.focusDescription(of: background))] selected=[\(self.focusDescription(of: self.manager.selectedSession))] browser-tick=\(browserArrivedAtTick.map(String.init) ?? "never") focus-tick=\(focusTick) window-responder=\(self.responderClassName())")
+      })
+  }
+
+  /// The asynchronous creation race: create a tab, move the selection straight
+  /// back in the same turn (so Chromium cannot have delivered OnAfterCreated
+  /// yet), and let the browser arrive afterwards. It must stay hidden and must
+  /// not take AppKit's first responder.
+  private func lateOnAfterCreatedDoesNotStealFocus() -> Step {
+    var racedSession: BrowserSession?
+    var keptTabID: UUID?
+    var keptHeldKeyboard = false
+    var browserArrived = false
+    var browserWasPendingWhenDeselected = false
+    var ticksAfterArrival = 0
+    return Step(
+      name: "late-browser-creation",
+      timeout: 90,
+      begin: {
+        keptTabID = self.manager.selectedTabID
+        self.manager.selectedSession?.focusPage()
+        keptHeldKeyboard = self.manager.selectedSession?.holdsAppKitKeyboardFocus ?? false
+        let url = URL(string: "https://example.org/focus-race")!
+        if let tabID = self.manager.createTab(url: url) {
+          racedSession = self.manager.session(for: tabID)
+        }
+        // No run-loop turn in between: this is the race the fix has to survive.
+        if let keptTabID {
+          self.manager.selectTab(id: keptTabID)
+        }
+        // Record that the race was real: Chromium had not delivered
+        // OnAfterCreated while this tab was still the selected one, so the
+        // browser really is created after the tab was hidden.
+        browserWasPendingWhenDeselected =
+          racedSession != nil && racedSession?.hasBrowser == false
+          && (racedSession?.browserCreationCount ?? 0) == 0
+        self.racedTabID = racedSession?.tabID
+      },
+      advance: {
+        guard let racedSession else { return true }
+        if racedSession.hasBrowser, racedSession.browserCreationCount == 1 {
+          browserArrived = true
+        }
+        guard browserArrived else { return false }
+        // One extra tick, so the focus request the selection transition queued
+        // and this session's OnAfterCreated have both been delivered.
+        ticksAfterArrival += 1
+        return ticksAfterArrival >= 2
+      },
+      finish: { completed in
+        let raced = racedSession
+        self.report(
+          "late-browser-creation-keeps-focus",
+          completed && browserArrived && browserWasPendingWhenDeselected && keptHeldKeyboard
+            && raced != nil
+            && raced?.isSurfaceVisible == false
+            && raced?.holdsAppKitKeyboardFocus == false
+            && self.manager.selectedTabID == keptTabID
+            && self.manager.selectedSession?.holdsAppKitKeyboardFocus == keptHeldKeyboard,
+          "browser-pending-when-deselected=\(browserWasPendingWhenDeselected) raced=[\(self.focusDescription(of: raced))] selected=[\(self.focusDescription(of: self.manager.selectedSession))]")
+      })
+  }
+
+  /// Closing a background tab (the sidebar close button) leaves the active tab's
+  /// keyboard ownership alone.
+  private func backgroundCloseKeepsKeyboard() -> Step {
+    var victim: BrowserSession?
+    var selectedBefore: UUID?
+    var heldBefore = false
+    return Step(
+      name: "background-close-keeps-keyboard",
+      timeout: 90,
+      begin: {
+        selectedBefore = self.manager.selectedTabID
+        self.manager.selectedSession?.focusPage()
+        heldBefore = self.manager.selectedSession?.holdsAppKitKeyboardFocus ?? false
+        // Prefer the tab the race phase left behind; otherwise any tab that is
+        // not selected.
+        let background =
+          self.manager.tabs.map(\.id).first { $0 == self.racedTabID && $0 != selectedBefore }
+          ?? self.manager.tabs.map(\.id).first { $0 != selectedBefore }
+        if let background {
+          victim = self.manager.session(for: background)
+          self.manager.closeTab(id: background)
+        }
+      },
+      advance: { victim?.isClosed ?? true },
+      finish: { completed in
+        self.report(
+          "background-close-keeps-focus",
+          completed && victim != nil && heldBefore
+            && self.manager.selectedTabID == selectedBefore
+            && self.manager.selectedSession?.holdsAppKitKeyboardFocus == true,
+          "closed=[\(self.focusDescription(of: victim))] selected=[\(self.focusDescription(of: self.manager.selectedSession))]")
+      })
+  }
+
+  /// Closing the selected tab (Cmd-W) hands the keyboard to the tab that becomes
+  /// selected, instead of leaving first responder empty.
+  private func closeSelectedTransfersKeyboard() -> Step {
+    var closedID: UUID?
+    var heldBefore = false
+    return Step(
+      name: "close-selected-transfers-keyboard",
+      timeout: 90,
+      begin: {
+        closedID = self.manager.selectedTabID
+        self.manager.selectedSession?.focusPage()
+        heldBefore = self.manager.selectedSession?.holdsAppKitKeyboardFocus ?? false
+        self.manager.closeSelectedTab()
+      },
+      advance: {
+        guard let closedID, let selectedID = self.manager.selectedTabID,
+          selectedID != closedID
+        else { return false }
+        // Wait until the closing session is really released, so the neighbour's
+        // keyboard ownership is not observed while its predecessor is still
+        // being torn down.
+        guard self.manager.session(for: closedID) == nil else { return false }
+        return self.manager.selectedSession?.holdsAppKitKeyboardFocus == true
+      },
+      finish: { completed in
+        let released = closedID.map { self.manager.session(for: $0) == nil } ?? false
+        self.report(
+          "selected-close-transfers-focus",
+          completed && heldBefore && released && self.manager.selectedTabID != closedID
+            && self.manager.selectedSession?.holdsAppKitKeyboardFocus == true,
+          "closed=\(self.shortID(closedID)) released=\(released) selected=[\(self.focusDescription(of: self.manager.selectedSession))]")
+      })
+  }
+
+  /// Tab-sized focus diagnostics: identifiers, selection, visibility and whether
+  /// AppKit's first responder is inside the session's surface. Never a URL, page
+  /// text or anything the user typed (section 15).
+  private func focusDescription(of session: BrowserSession?) -> String {
+    guard let session else { return "tab=none" }
+    return
+      "tab=\(self.shortID(session.tabID)) selected=\(self.manager.selectedTabID == session.tabID) visible=\(session.isSurfaceVisible) focused=\(session.holdsAppKitKeyboardFocus) browser=\(session.hasBrowser)"
+  }
+
+  private func shortID(_ id: UUID?) -> String {
+    guard let id else { return "none" }
+    return String(id.uuidString.prefix(8))
+  }
+
+  /// True while AppKit's first responder is the native address field (or the
+  /// shared field editor it uses). Class checks only - the field's text is never
+  /// read (section 15).
+  private var addressFieldIsFirstResponder: Bool {
+    guard let window = NSApp.windows.first(where: { $0.isVisible }),
+      let responder = window.firstResponder
+    else { return false }
+    return responder is NSTextView || responder is NativeBrowserAddressField
+  }
+
+  /// The class of the view AppKit is currently giving the keyboard to. A class
+  /// name only - never page text, a URL or anything the user typed (section 15).
+  private func responderClassName() -> String {
+    guard let window = NSApp.windows.first(where: { $0.isVisible }),
+      let responder = window.firstResponder
+    else { return "none" }
+    return String(describing: type(of: responder))
   }
 
   private func closeBackgroundTab() -> Step {
