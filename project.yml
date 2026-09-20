@@ -100,11 +100,13 @@ targets:
     sources:
       - path: NativeBrowser/Tests
       - path: NativeBrowser/Browser/NavigationInput.swift
-      # The Milestone 3 tab model is pure Foundation: it is compiled into this
-      # target as well, so the ordering/selection/recently-closed rules are
-      # tested with no application, no window and no CEF.
+      # The Milestone 4 workspace model is pure Foundation: it is compiled
+      # into this target so Space/tab membership, ordering, selection and
+      # recently-closed rules are tested with no application, no window and no
+      # CEF.
       - path: NativeBrowser/Browser/BrowserTab.swift
-      - path: NativeBrowser/Browser/TabCollection.swift
+      - path: NativeBrowser/Browser/BrowserSpace.swift
+      - path: NativeBrowser/Browser/WorkspaceCollection.swift
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.

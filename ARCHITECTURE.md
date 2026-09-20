@@ -2045,9 +2045,13 @@ Do not proceed to the next milestone until the current milestone builds and its 
 ```text
 ApplicationRuntime                         (process-scoped, @MainActor)
   |
-  +-- BrowserSessionManager                (one per application, @MainActor, ObservableObject)
-        |
-        +-- TabCollection                  (pure model: order, selection, recently closed)
+  +-- BrowserWorkspaceStore                (one in-memory domain owner)
+  |     |
+  |     +-- WorkspaceCollection            (Spaces, tabs, selection, close policy)
+  |     +-- BrowserSpace -> ordered BrowserTab identities
+  |     +-- recentlyClosed [ClosedTabSnapshot]
+  |
+  +-- BrowserSessionManager                (one runtime owner)
         |
         +-- BrowserTab A  ---> BrowserSession A ---> BrowserBridge A ---> CefBrowser A
         +-- BrowserTab B  ---> BrowserSession B ---> BrowserBridge B ---> CefBrowser B
@@ -2077,20 +2081,22 @@ timestamp. It deliberately carries **no** tab identifier, so reopening can only
 ever produce a new `BrowserTab` with a new identity - resurrecting a closed
 runtime is not expressible.
 
-`TabCollection` (`NativeBrowser/Browser/TabCollection.swift`) is the whole tab
-*policy*, also Foundation-only:
+`WorkspaceCollection` (`NativeBrowser/Browser/WorkspaceCollection.swift`) is the
+whole Space/tab *policy*, also Foundation-only:
 
-- append / insert-at-index / select / select-by-position,
-- the selection rule for a close (right neighbour, else left neighbour, else the
-  workspace is empty),
+- create / rename / select Spaces, append / insert-at-index / select tabs,
+- one selected tab per Space and a derived effective selected tab,
+- the selection rule for a close (right neighbour, else left neighbour, else a
+  replacement in the same Space),
 - the recently-closed stack, bounded to `recentlyClosedLimit = 10` entries and
   in memory only,
-- `close(_:reason:)`, where `TabCloseReason` is what separates an ordinary user
-  close from a termination close.
+- `close(_:reason:)`, where `WorkspaceTabCloseReason` separates an ordinary
+  user close from a termination close, and snapshots include `spaceID` and the
+  original index.
 
 Because it is pure, all of those rules are unit-tested in a bundle that never
-links CEF (`NativeBrowser/Tests/TabCollectionTests.swift`). It is compiled into
-both the application target and the test target; see `project.yml`.
+links CEF (`NativeBrowser/Tests/WorkspaceCollectionTests.swift`). It is compiled
+into both the application target and the test target; see `project.yml`.
 
 ## 53. Visible tabs, live sessions and closing sessions
 
@@ -2098,7 +2104,7 @@ Three sets, deliberately distinct:
 
 | set | meaning | where |
 | --- | --- | --- |
-| visible tabs | what the sidebar shows and what can be selected | `TabCollection.tabs` |
+| visible tabs | what the selected Space sidebar shows | `WorkspaceCollection.tabs(in:)` |
 | live sessions | every Chromium runtime the application still owns | `BrowserSessionManager.sessions` |
 | closing sessions | live sessions whose tab has already left the sidebar | `closingTabIDs` |
 
@@ -2106,18 +2112,18 @@ Three sets, deliberately distinct:
 deterministic. A tab is marked closing **before** `CloseBrowser` is called and
 removed from the set only in the typed close callback.
 
-`liveSessionOrder` is `tabs + closingTabIDs`, deduplicated (during termination a
-tab is both visible and closing) - it is the order used for the surface and for
-`liveSessions`.
+`liveSessionOrder` is the runtime registration order plus `closingTabIDs`,
+deduplicated - it is the order used for the surface and for `liveSessions`.
 
 Closing a tab and destroying its Chromium runtime are two different instants:
 
 ```text
 user closes tab
-  -> TabCollection records a snapshot (user close only)
-  -> tab leaves the visible order; a neighbour is selected, or a replacement tab
-     is created when it was the last one, and the keyboard follows the new
-     selection when the closed page had it (section 56)
+  -> WorkspaceCollection records a snapshot (user close only)
+  -> tab leaves its Space's visible order; a neighbour is selected, or a
+     replacement tab is created in that same Space when it was the last one,
+     and the keyboard follows the new selection when the closed page had it
+     (section 56)
   -> the session is marked closing (it stays in `sessions`)
   -> BrowserSession.close(terminating:) -> BrowserBridge
        -> CefBrowserHost::CloseBrowser(force_close = true)
@@ -2151,7 +2157,8 @@ Consequences:
   create or destroy a `CefBrowser`**. `BrowserSession.browserCreationCount`
   remains `1` across selection, sidebar churn, toolbar updates, title/URL/loading
   callbacks, focus changes and window resizing - asserted by
-  `--tabs-self-test` and checked structurally by `verify_milestone3.sh`.
+  `--spaces-self-test` (with `--tabs-self-test` retained as a compatibility
+  alias) and checked structurally by the milestone verifiers.
 - A container is removed only from `sessionDidClose`, i.e. after OnBeforeClose.
 - Hidden tabs are hidden, not suspended: no sleeping, freezing, discarding or
   renderer suspension (Milestone 3 section 34).
@@ -2159,7 +2166,7 @@ Consequences:
 ## 55. Toolbar and address field binding
 
 One window, one sidebar, one toolbar, one address field. `MainWindowView` binds
-`BrowserToolbarView(session:)` to `manager.selectedSession`, so a selection change
+`BrowserToolbarView(session:)` to `workspace.selectedSession`, so a selection change
 re-points the toolbar, the address model, Back/Forward state and loading state
 together.
 
@@ -2191,9 +2198,9 @@ the session would not know the field owns the keyboard (section 56).
 ## 56. Focus model
 
 Keyboard ownership has one rule, applied in one place:
-`BrowserSessionManager.withSelectionTransition(_:)` - **the keyboard follows the
+`BrowserWorkspaceStore.withSelectionTransition(_:)` - **the keyboard follows the
 page only when the page had it**. Every path that can move the selection runs
-inside that transition (a tab switch, `⌘T`, `⌘⇧T`, closing the selected tab and
+inside that transition (a Space switch, tab switch, `⌘T`, `⌘⇧T`, closing the selected tab and
 the replacement tab a last-tab close creates), so those paths cannot drift apart:
 
 ```text
@@ -2280,10 +2287,11 @@ Consequences:
   `-[BrowserBridge closeForApplicationTermination:YES]` and sets
   `_releasesFirstResponderOnClose`. An ordinary tab close passes `NO`.
 
-## 57. Multi-browser application shutdown
+## 57. Multi-Space application shutdown
 
-The Milestone 2 termination architecture is unchanged; only the set of browsers it
-closes grew.
+The application termination architecture is unchanged at the AppKit boundary, but
+Milestone 4 changes the runtime set from one tab collection to every live session
+in every Space. `BrowserSessionManager` is the only liveness registry.
 
 ```text
 Cmd+Q / red button / NSApp.terminate
@@ -2292,7 +2300,8 @@ Cmd+Q / red button / NSApp.terminate
   -> ApplicationRuntime.Terminator.start()
   -> a zero-delay timer on the default run-loop mode runs step() on a clean stack
   -> runtime.requestBrowserClosure()
-       -> sessionManager.requestCloseAllForTermination()
+       -> workspaceStore.requestCloseAllForTermination()
+            -> sessionManager.requestCloseAllForTermination()
             -> isTerminating = true              (no replacement tabs, no snapshots)
             -> one CloseBrowser per live session, in the same turn: they close in
                parallel, and OnBeforeClose may arrive in any order
@@ -2308,17 +2317,15 @@ Cmd+Q / red button / NSApp.terminate
   their OnBeforeClose arrives, so `hasLiveBrowsers` keeps the coordinator
   waiting for them. A tab that started closing before Cmd+Q is closed exactly like
   any other.
-- **No replacement tabs during termination**: `TabCollection.close` returns
-  `needsReplacementTab == false` for `TabCloseReason.applicationTerminating`, and
-  `createTab` independently refuses while `isTerminating` is set. The
-  recently-closed stack is not written either.
-- `ApplicationRuntime.browserShutdownTimeout` (5 s) is still a single global
-  safety net, not a per-browser budget. If any browser were still open at the
-  deadline the coordinator reports it and **skips CefShutdown** rather than
-  calling it with a live browser.
-- The 5-second fallback is not the normal path: `verify_milestone3.sh` asserts
-  the absence of `termination:browser-close-timeout` and that all OnBeforeClose
-  events precede `cef:shutdown`.
+- **No replacement tabs during termination**: `WorkspaceCollection.close` uses
+  `WorkspaceTabCloseReason.applicationTerminating`, and `createTab` refuses
+  while the runtime manager is terminating. The recently-closed stack is not
+  written either.
+- **There is no production timeout fallback.** `ApplicationRuntime.Terminator`
+  advances only from the typed `onLiveSessionDidClose` callback and calls
+  `CefShutdown` only after the manager reports zero live sessions. The verifier
+  has an external watchdog so a lost callback fails the test instead of changing
+  the application's shutdown semantics.
 
 ## 58. Address-bar and tab shortcuts
 
@@ -2337,7 +2344,7 @@ makes them work while Chromium owns the keyboard.
 | ⌘1…⌘8 | select tab by position |
 | ⌘9 | select the last tab |
 
-Every action resolves `manager.selectedSession` when it runs, so a menu item can
+Every action resolves `workspace.selectedSession` when it runs, so a menu item can
 never act on a tab that is no longer selected.
 
 **⌘W ownership.** The scene installs AppKit's standard window Close item, which
@@ -2355,12 +2362,13 @@ one ⌘W item exists in each dump and that it is the tab command.
 `CEFClientHandler::OnBeforePopup` always cancels the unmanaged CEF popup - a
 native CEF child window would not be owned or closed by anything - and reports
 the target URL to its bridge instead. `BrowserBridge` forwards it to its
-`BrowserSession`, which raises `onOpenNewTabRequest`, and the manager opens the
-URL as a managed tab. The current tab is no longer replaced.
+`BrowserSession`, which raises `onOpenNewTabRequest`; `BrowserWorkspaceStore`
+resolves the source tab's Space and opens the URL as a managed tab there. The
+current tab is no longer replaced.
 
-The URL is never formatted into a log in the Objective-C++ layer: the manager
-reports it through `URLLogSanitizer`, so a popup URL carrying an OAuth code or a
-signature cannot leak.
+The URL is never formatted into a log in the Objective-C++ layer: the workspace
+store reports it through `URLLogSanitizer`, so a popup URL carrying an OAuth code
+or a signature cannot leak.
 
 Intentionally deferred: `window.opener`, JavaScript popup object identity, OAuth
 child-window scripting (`window.open` handle postMessage), custom popup
@@ -2369,9 +2377,10 @@ dimensions, and `no_javascript_access`.
 ## 60. Recently closed
 
 ⌘⇧T pops the newest `ClosedTabSnapshot` and creates a **new** `BrowserTab`
-(with a fresh UUID), a **new** `BrowserSession` and a **new** `CefBrowser` at the
-snapshot's original index, then selects it. Nothing about the closed runtime is
-reused and its tab identifier is not recoverable from the snapshot.
+(with a fresh UUID), a **new** `BrowserSession` and a **new** `CefBrowser` in
+the snapshot's original Space and at its original index, then selects it.
+Nothing about the closed runtime is reused and its tab identifier is not
+recoverable from the snapshot.
 
 Only an ordinary user close records a snapshot, and only for a tab that had
 committed a URL - reopening an empty "New Tab" is not offered. Termination closes
@@ -2383,35 +2392,79 @@ The stack is in memory only, bounded to 10 entries, and is not written to disk
 ## 61. Single window
 
 `NativeBrowserApp` uses a `Window` scene, not a `WindowGroup`. The runtime owns
-exactly one `BrowserSessionManager` with one tab collection and one set of
-Chromium containers, so a scene that could create a second window would mount the
-same tabs - and the same `NSView`s - twice. Per-window workspaces are a later
-milestone; the invariant is enforced here.
+exactly one `BrowserWorkspaceStore`, one `BrowserSessionManager` and one set of
+Chromium containers, so a scene that could create a second window would mount
+the same Spaces - and the same `NSView`s - twice. Per-window workspaces are a
+later milestone; the invariant is enforced here.
 
-## 62. Known limitations of the Milestone 3 implementation
+## 62. Known limitations of the Milestone 4 implementation
 
 - **One window only.** `Window`, not `WindowGroup`; there is no per-window tab
   collection yet.
 - **The sidebar is deliberately plain.** Placeholder globe instead of favicons (no
   favicon fetching), no drag reordering, no pinning, no tab groups, no hover-only
   affordances, no Liquid Glass.
-- **No tab suspension.** Every open tab keeps a live `BrowserSession` and a live
-  `CefBrowser`; the automated stress run creates 10 real browsers in total and the
-  manual check goes to 20.
-- **No persistence.** The tab list, the selection and the recently-closed stack
-  are in memory only and are gone after relaunch.
+- **No tab suspension.** Every open tab in every Space keeps a live
+  `BrowserSession` and a live `CefBrowser`; only the selected tab's container is
+  visible.
+- **No persistence or session restore.** Space names, membership, ordering,
+  selection and the recently-closed stack are in memory only and are gone after
+  relaunch.
+- **No Space deletion.** Milestone 4 supports create, rename and select; it does
+  not expose deletion.
 - **Popup semantics are minimal.** Only ordinary `target=_blank` / `window.open`
   navigation is routed to a tab; see section 59 for what is deferred.
 - **Renderer-crash recovery is not implemented.** A crashed renderer surfaces
   through `OnLoadError` as a failed load; there is no crash page or automatic
   reload.
 - **`--use-mock-keychain` is still in the CEF bootstrap.** Unchanged by
-  Milestone 3 and still development debt to revisit before signed distribution or
-  password storage.
+  Milestone 4 and still development debt to revisit before signed distribution
+  or password storage.
 - **The integration self-test runs inside the real application.** A hand-rolled
   `RunLoop.main.run(until:)` harness delivers `DoClose` but defers
-  `OnBeforeClose` for a loaded page by minutes, so `--tabs-self-test` drives the
+  `OnBeforeClose` for a loaded page by minutes, so `--spaces-self-test` drives the
   real window, the real surface host and the real `NSApplication` run loop
   instead. It observes AppKit's real first responder for the focus rules
   (`holdsAppKitKeyboardFocus`), but it synthesises no key events: what a keystroke
   does - Cmd-T, Cmd-W, typing into the page, Chinese IME - remains manual.
+
+## 63. Milestone 4 implementation record: Spaces
+
+Milestone 4 is an in-memory workspace layer over the Milestone 3 runtime.
+`BrowserSpace`, `WorkspaceCollection` and `ClosedTabSnapshot` are pure
+Foundation domain types. `BrowserWorkspaceStore` is the sole mutable domain
+owner: it owns Space order, tab membership/order, the selected Space, each
+Space's selected tab, the recently-closed stack, and the selection/focus
+transition. The pure collection is compiled into `NativeBrowserTests` and is
+covered by 22 deterministic tests without AppKit or CEF.
+
+The runtime graph is:
+
+```text
+ApplicationRuntime
+  -> BrowserWorkspaceStore
+       -> WorkspaceCollection
+            -> [BrowserSpace] -> ordered [BrowserTab] membership
+            -> selectedSpaceID -> per-Space selectedTabID
+            -> recentlyClosed [ClosedTabSnapshot]
+       -> BrowserSessionManager
+            -> tabID -> BrowserSession -> BrowserBridge -> CefBrowser
+            -> tabID -> ChromiumContainerView
+            -> weak BrowserSurfaceHostView
+```
+
+The manager deliberately does not own domain tabs, Spaces, ordering, selection
+or recently-closed history. It retains every live runtime and every container
+across Spaces; `BrowserSurfaceHostView` mounts them all and the manager toggles
+visibility so switching Spaces or tabs never recreates a Chromium browser.
+The toolbar resolves the store's effective selected session, and metadata or
+navigation callbacks are keyed by the originating session's tab identity.
+
+Space switches use the same focus transition as tab switches. A pending
+`OnAfterCreated`, a hidden Space callback, or an inactive popup cannot change
+the effective selection or steal the address field's first responder. Popup
+URLs are routed by the source tab's Space. Ordinary closes record the source
+Space and index; closing the last user tab creates a replacement in that same
+Space; reopening creates a new tab/session/browser in that Space. Termination
+requests closure for every live session, creates no replacement or snapshot, and
+waits for every typed `OnBeforeClose` release before the single `CefShutdown`.

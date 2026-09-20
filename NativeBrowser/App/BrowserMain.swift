@@ -56,11 +56,11 @@ enum BrowserMain {
       // Milestone 2 integration check. The result is this process's exit code.
       exit(NavigationSelfTest.run(runtime: runtime))
     }
-    // Milestone 3 multi-tab integration check. It is installed as a driver that
+    // Milestone 4 multi-Space integration check. It is installed as a driver that
     // runs inside the real application - real window, real surface host, real
     // NSApplication run loop - because that is the configuration in which
     // Chromium actually completes a browser teardown for a loaded page.
-    TabsSelfTest.installIfRequested(runtime: runtime)
+    SpacesSelfTest.installIfRequested(runtime: runtime)
 
     scheduleToolingHooksIfRequested(runtime: runtime)
 
@@ -90,6 +90,7 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--browser-self-test")
       || CommandLine.arguments.contains("--navigation-self-test")
       || CommandLine.arguments.contains("--tabs-self-test")
+      || CommandLine.arguments.contains("--spaces-self-test")
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }
@@ -123,7 +124,8 @@ enum BrowserMain {
   private static func runBrowserSelfTestIfRequested(runtime: ApplicationRuntime) -> Bool {
     guard CommandLine.arguments.contains("--browser-self-test") else { return false }
 
-    let manager = runtime.sessionManager
+    let workspace = runtime.workspaceStore
+    let manager = workspace.sessionManager
     let window = makeTestWindow(title: "NativeBrowser self-test")
     let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
     host.autoresizingMask = [.width, .height]
@@ -131,9 +133,9 @@ enum BrowserMain {
     // The browser view needs a window to render into; keep the test window
     // behind everything else.
     window.orderBack(nil)
-    manager.attachSurfaceHost(host)
+    workspace.attachSurfaceHost(host)
 
-    guard let session = manager.selectedSession else {
+    guard let session = workspace.selectedSession else {
       print("browser-self-test: no tab was created")
       exit(2)
     }
@@ -313,7 +315,7 @@ enum BrowserMain {
   private static func navigateForTooling(runtime: ApplicationRuntime) {
     guard let url = URL(string: "https://example.com/") else { return }
     AppLog.navigation.info("tooling: navigating the selected tab")
-    runtime.sessionManager.loadInSelectedTab(url)
+    runtime.workspaceStore.loadInSelectedTab(url)
   }
 
   /// "--open-tabs=N" opens N tabs in total once the window exists.
@@ -328,9 +330,9 @@ enum BrowserMain {
       let argument = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }),
       let total = Int(argument.dropFirst(prefix.count)), total > 1
     else { return }
-    let manager = runtime.sessionManager
+    let workspace = runtime.workspaceStore
     for index in 2...total {
-      manager.createTab(url: URL(string: "https://example.com/?tab=\(index)"))
+      workspace.createTab(url: URL(string: "https://example.com/?tab=\(index)"))
     }
     AppLog.session.info("tooling: opened \(total, privacy: .public) tabs")
   }

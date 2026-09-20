@@ -2,25 +2,13 @@
 //  BrowserSessionManager.swift
 //  NativeBrowser
 //
-//  The application-level owner of the tab workspace (Milestone 3 sections 2, 5,
-//  6, 8, 10 and 25).
+//  Runtime owner for Chromium sessions and stable browser surfaces.
 //
-//  It owns, and is the only owner of:
-//
-//    * the ordered visible tabs and the selected tab  (a pure TabCollection)
-//    * exactly one BrowserSession per tab identifier
-//    * the sessions that are closing but have not reached OnBeforeClose yet
-//    * the in-memory recently-closed stack used by Cmd-Shift-T
-//    * one ChromiumContainerView per live session
-//
-//  There is deliberately no "current CefBrowser" and no second liveness
-//  registry: ApplicationRuntime asks this object whether a browser is still
-//  alive, and the typed onLiveSessionDidClose hook is what termination waits on.
-//  Nothing infers closure from a lifecycle string.
-//
-//  Closing a tab and destroying its Chromium runtime are two different instants
-//  (section 6). The tab leaves the visible order immediately; the BrowserSession
-//  stays in `sessions` until CEF reports OnBeforeClose.
+//  Milestone 4 deliberately keeps workspace/domain policy out of this type.
+//  BrowserWorkspaceStore owns Spaces, BrowserTabs, ordering, selection and
+//  recently-closed policy. This manager owns only BrowserSession objects,
+//  closing-session retention, ChromiumContainerView objects and the stable
+//  BrowserSurfaceHostView synchronization.
 //
 
 import AppKit
@@ -28,65 +16,49 @@ import Foundation
 
 @MainActor
 final class BrowserSessionManager: ObservableObject {
-  /// URL a new tab opens when the caller does not supply one.
-  let newTabURL: URL
+  // MARK: - Published runtime state
 
-  // MARK: - Published state
-
-  /// Ordered visible tabs.
-  @Published private(set) var tabs: [BrowserTab] = []
-  @Published private(set) var selectedTabID: UUID?
-  @Published private(set) var recentlyClosed: [ClosedTabSnapshot] = []
-  /// How many Chromium runtimes this manager still owns. Includes sessions that
-  /// are closing but have not reached OnBeforeClose yet, because those still
-  /// count as live for termination (section 8).
+  /// Every Chromium runtime still owned by the application, including sessions
+  /// whose visible tab has already been removed but which await OnBeforeClose.
   @Published private(set) var liveSessionCount = 0
 
   // MARK: - Hooks
 
-  /// Lifecycle milestones for logging and the verification tooling. Diagnostics
-  /// only: no control flow depends on the strings.
+  /// Lifecycle milestones used by the verification tooling. Diagnostics only.
   var onLifecycleEvent: ((String) -> Void)?
 
-  /// Typed notification that one session reached OnBeforeClose and was released.
-  /// Carries the session, so the receiver knows *which* browser closed.
+  /// Typed notification used by ApplicationRuntime's termination coordinator.
+  /// The callback carries the exact session released by OnBeforeClose.
   var onLiveSessionDidClose: ((BrowserSession) -> Void)?
 
-  /// Called just before published state changes. ApplicationRuntime mirrors it
-  /// so the SwiftUI scene - and the menu commands built from it - re-evaluate
-  /// when the tab list or the selection changes.
-  var onWillPublish: (() -> Void)?
+  /// Runtime metadata callback. BrowserWorkspaceStore uses the session identity
+  /// to update exactly one BrowserTab in the pure domain model.
+  var onTabMetadataChanged: ((BrowserSession) -> Void)?
+
+  /// Popup callback. The workspace store resolves the source session's Space.
+  var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
+
+  /// Called when the runtime registry changes so the workspace store can redraw
+  /// its status bar without becoming a second runtime registry.
+  var onRuntimeStateChanged: (() -> Void)?
 
   // MARK: - Runtime registry
 
-  private var collection: TabCollection
   private var sessions: [UUID: BrowserSession] = [:]
-  /// Order in which closing sessions were requested, so the closing set is
-  /// deterministic (dictionary order is not).
+  /// Registration order keeps runtime diagnostics and surface updates
+  /// deterministic without making this manager a domain tab-order owner.
+  private var sessionOrder: [UUID] = []
+  /// Sessions requested to close, retained until the typed OnBeforeClose path.
   private var closingTabIDs: [UUID] = []
   private var containers: [UUID: ChromiumContainerView] = [:]
   private weak var surfaceHost: BrowserSurfaceHostView?
+  private var selectedSurfaceTabID: UUID?
 
   private(set) var isTerminating = false
 
-  // MARK: - Init
-
-  init(initialTabURL: URL) {
-    newTabURL = initialTabURL
-    let initialTab = BrowserTab(url: initialTabURL)
-    collection = TabCollection.workspace(initialTab: initialTab)
-    // The session exists before the first publication, so the first state an
-    // observer sees already owns its runtime. The surface follows when the
-    // window attaches its host.
-    registerSession(for: initialTab.id, initialURL: initialTabURL)
-    publishState()
-  }
+  init() {}
 
   // MARK: - Queries
-
-  var selectedSession: BrowserSession? {
-    selectedTabID.flatMap { sessions[$0] }
-  }
 
   func session(for tabID: UUID) -> BrowserSession? {
     sessions[tabID]
@@ -94,21 +66,16 @@ final class BrowserSessionManager: ObservableObject {
 
   var hasLiveSessions: Bool { !sessions.isEmpty }
 
-  /// Every live Chromium runtime, visible tabs first and then the ones that are
-  /// closing. This is the one registry termination consults.
+  /// Every live runtime in deterministic registration order, followed by any
+  /// closing runtime not present in that order.
   var liveSessions: [BrowserSession] {
     liveSessionOrder.compactMap { sessions[$0] }
   }
 
-  /// Visible tabs in sidebar order, followed by the closing sessions in the
-  /// order their close was requested.
-  ///
-  /// Deduplicated: while the whole application is terminating, a tab is still in
-  /// the visible order *and* marked as closing, and it must be counted once.
   var liveSessionOrder: [UUID] {
     var seen = Set<UUID>()
     var order: [UUID] = []
-    for tabID in collection.tabIDs + closingTabIDs
+    for tabID in sessionOrder + closingTabIDs
     where sessions[tabID] != nil && seen.insert(tabID).inserted {
       order.append(tabID)
     }
@@ -119,238 +86,65 @@ final class BrowserSessionManager: ObservableObject {
     closingTabIDs.contains(tabID)
   }
 
-  var canReopenClosedTab: Bool { collection.canReopenClosedTab }
-
-  /// The CEF browser identifier of every live session (nil while a browser has
-  /// not been created yet). Used by the multi-tab integration test to prove that
-  /// each tab owns a distinct Chromium browser.
+  /// The Chromium identifier of every live session that has completed browser
+  /// creation. This is a runtime diagnostic, not a second ownership registry.
   var liveBrowserIdentifiers: [Int] {
     liveSessions.compactMap { $0.browserIdentifier }
   }
 
-  // MARK: - Selection transition
+  // MARK: - Runtime lifecycle
 
-  /// Runs one change to the tab order as a single selection transition.
-  ///
-  /// Every path that can move the selection goes through here - selecting a tab,
-  /// creating one, reopening one, closing one, and the replacement tab a
-  /// last-tab close creates - so the keyboard rules exist once instead of being
-  /// restated by each caller:
-  ///
-  ///   1. capture whether the outgoing *page* owned the keyboard (AppKit's first
-  ///      responder, or a hand-over to it that is still in flight)
-  ///   2. run `change`, which mutates the collection (and therefore the
-  ///      selection) and registers sessions, but never touches a view
-  ///   3. if the selection did not move, stop: a background insert or a
-  ///      background close leaves the active tab and the keyboard alone
-  ///   4. release the outgoing page's CEF and AppKit focus, while its surface is
-  ///      still visible
-  ///   5. publish state and sync the surface, which hides the old container and
-  ///      shows the new one
-  ///   6. hand the keyboard to the newly selected session only when the page had
-  ///      it before; when the native address field had it, the new session is
-  ///      explicitly told not to take it, so the Chromium browser it is still
-  ///      creating cannot steal it later
-  ///
-  /// Nothing here waits, polls or times out: the asynchronous half - a browser
-  /// arriving after its tab was hidden - is answered by
-  /// BrowserSession.wantsPageFocus, which step 6 sets.
+  /// Creates exactly one runtime for a domain tab identity. The manager does
+  /// not store the tab or decide where it belongs; the workspace store does.
   @discardableResult
-  private func withSelectionTransition<T>(_ change: () -> T) -> T {
-    let outgoing = selectedSession
-    let previousSelection = collection.selectedTabID
-    let pageHeldKeyboard = outgoing?.ownsPageKeyboard ?? false
-
-    let result = change()
-
-    guard collection.selectedTabID != previousSelection else {
-      // The tab order changed but the selection did not: publish it, and leave
-      // the keyboard with whoever owns it.
-      publishState()
-      return result
-    }
-
-    outgoing?.blur()
-    publishState()
-
-    if let incoming = selectedSession, incoming !== outgoing {
-      if pageHeldKeyboard {
-        incoming.focusPage()
-      } else {
-        incoming.blur()
-      }
-    }
-    return result
-  }
-
-  /// Adds one tab and its session to the two registries - and nothing else.
-  ///
-  /// Publication, surface work and focus belong to the caller's selection
-  /// transition: the container has to become visible (step 5 there) before a
-  /// browser is allowed to be created in it, because that is what decides
-  /// whether the new browser may take the keyboard.
-  @discardableResult
-  private func insertTab(_ tab: BrowserTab, at index: Int, select: Bool, initialURL: URL) -> UUID {
-    collection.insert(tab, at: index, select: select)
-    registerSession(for: tab.id, initialURL: initialURL)
-    return tab.id
-  }
-
-  /// The one diagnostic site for "a tab was added to the workspace", shared by
-  /// Cmd-T, the sidebar "+" control, a routed popup and the replacement tab a
-  /// last-tab close creates.
-  private func logTabCreated(_ tabID: UUID, url: URL) {
-    emit("tab:created(\(tabID.uuidString))")
-    AppLog.session.info(
-      "tab created id=\(tabID.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(url), privacy: .public)"
-    )
-  }
-
-  // MARK: - Tab lifecycle
-
-  /// Creates a tab, its session and (once its container is in the window) its
-  /// Chromium browser. Returns the new tab identifier, or nil during
-  /// application termination.
-  ///
-  /// `select: false` inserts the tab behind the current selection: neither the
-  /// selected tab nor the keyboard changes, and the new browser is created
-  /// while its surface is hidden, so it can never take focus when it arrives.
-  @discardableResult
-  func createTab(url: URL? = nil, select: Bool = true) -> UUID? {
+  func createSession(for tabID: UUID, initialURL: URL) -> BrowserSession? {
     guard !isTerminating else {
-      // Section 10: shutdown must never produce a replacement tab.
-      AppLog.session.error("refusing to create a tab while the application is terminating")
+      AppLog.session.error("refusing to create a session while the application is terminating")
       return nil
     }
-    let tab = BrowserTab(url: url)
-    let initialURL = url ?? newTabURL
-    withSelectionTransition {
-      insertTab(tab, at: collection.tabs.count, select: select, initialURL: initialURL)
+    guard sessions[tabID] == nil else {
+      AppLog.session.error("refusing to create a duplicate session for a tab")
+      return sessions[tabID]
     }
-    logTabCreated(tab.id, url: initialURL)
-    return tab.id
-  }
 
-  /// Puts the most recently closed tab back (Cmd-Shift-T, section 22).
-  ///
-  /// The restored tab is a new BrowserTab with a new identifier and a brand new
-  /// BrowserSession/CefBrowser. Nothing about the old runtime is reused.
-  @discardableResult
-  func reopenLastClosedTab() -> UUID? {
-    guard !isTerminating else { return nil }
-    guard let snapshot = collection.popRecentlyClosed() else {
-      AppLog.session.debug("nothing to reopen: the recently closed stack is empty")
-      return nil
+    let session = BrowserSession(tabID: tabID, initialURL: initialURL)
+    session.onLifecycleEvent = { [weak self] event in
+      self?.onLifecycleEvent?(event)
     }
-    let tab = BrowserTab(title: snapshot.title, url: snapshot.url)
-    let initialURL = snapshot.url ?? newTabURL
-    // The restored tab is selected, so it is a selection transition like any
-    // other: the keyboard follows it only when page content had the keyboard.
-    withSelectionTransition {
-      insertTab(tab, at: snapshot.originalIndex, select: true, initialURL: initialURL)
+    session.onTabMetadataChanged = { [weak self] session in
+      self?.onTabMetadataChanged?(session)
     }
-    emit("tab:reopened(\(tab.id.uuidString))")
-    // The snapshot URL is a page the user visited and this line is captured into
-    // a log file, so it is only ever reported sanitized.
-    AppLog.session.info(
-      "reopened a closed tab id=\(tab.id.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(snapshot.url), privacy: .public)"
-    )
-    return tab.id
-  }
-
-  /// Selects a tab and moves the keyboard with it (section 16).
-  ///
-  /// The transition itself lives in `withSelectionTransition`, so this path and
-  /// tab creation, reopening and closing behave identically.
-  func selectTab(id: UUID) {
-    guard let session = sessions[id], !session.isClosed else { return }
-    guard collection.selectedTabID != id else { return }
-
-    withSelectionTransition { collection.select(id) }
-    emit("tab:selected")
-    AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
-  }
-
-  /// Selects the tab at a zero-based index (Cmd-1...Cmd-8).
-  @discardableResult
-  func selectTab(at index: Int) -> Bool {
-    guard let id = collection.tabID(at: index) else { return false }
-    selectTab(id: id)
-    return collection.selectedTabID == id
-  }
-
-  /// Selects the last tab (Cmd-9).
-  @discardableResult
-  func selectLastTab() -> Bool {
-    guard let id = collection.tabs.last?.id else { return false }
-    selectTab(id: id)
-    return collection.selectedTabID == id
-  }
-
-  /// Closes one tab: the visible row goes now, the Chromium runtime goes when
-  /// CEF confirms OnBeforeClose (section 6).
-  func closeTab(id: UUID) {
-    guard let session = sessions[id] else {
-      // Unknown, or already released: closing is a safe no-op (section 29.14).
-      AppLog.session.debug("close ignored for an unknown or already closed tab")
-      return
+    session.onClosed = { [weak self] session in
+      self?.sessionDidClose(session)
     }
-    let reason: TabCloseReason = isTerminating ? .applicationTerminating : .userClosed
-
-    // The close is the selection transition: closing the selected tab selects
-    // its neighbour (or, for the last tab, a replacement) and the keyboard is
-    // handed over inside the transition, before the old session is asked to
-    // close. Closing a background tab moves no selection, so the transition
-    // leaves the active tab and the keyboard untouched.
-    let result: TabCloseResult = withSelectionTransition {
-      let result = collection.close(id, reason: reason)
-      guard result.outcome != .unknownTab else { return result }
-
-      // Mark the session as closing *before* the surface is synced: the sync
-      // would treat a session that is neither visible nor known to be closing as
-      // stale and remove its container while Chromium is still shutting the
-      // browser down inside it. A session that never created a browser reaches
-      // OnBeforeClose synchronously, so this ordering also has to hold for that
-      // case.
-      if !closingTabIDs.contains(id) {
-        closingTabIDs.append(id)
-      }
-      if result.needsReplacementTab {
-        // Section 20: the last ordinary tab close leaves a fresh usable tab, so
-        // the window is never left with nothing to show. It is created inside
-        // this transition, so it is selected and receives the keyboard exactly
-        // like any other newly selected tab.
-        let replacement = BrowserTab(url: nil)
-        insertTab(replacement, at: collection.tabs.count, select: true, initialURL: newTabURL)
-        logTabCreated(replacement.id, url: newTabURL)
-      }
-      return result
+    session.onOpenNewTabRequest = { [weak self] session, url in
+      self?.onOpenNewTabRequest?(session, url)
     }
-    guard result.outcome != .unknownTab else { return }
 
-    AppLog.session.info(
-      "tab closing id=\(id.uuidString, privacy: .public) live=\(self.sessions.count, privacy: .public)"
-    )
-    // Nothing is waited for here: CloseBrowser returns immediately and
-    // OnBeforeClose arrives through the message pump. The close releases only
-    // this browser's own CEF focus and only this browser view's AppKit
-    // responder, so it cannot take the keyboard away from the tab that just
-    // inherited it.
-    session.close(terminating: isTerminating)
-    emit("tab:closed")
+    sessions[tabID] = session
+    sessionOrder.append(tabID)
+    publishRuntimeState()
+    return session
   }
 
-  func closeSelectedTab() {
-    guard let id = collection.selectedTabID else { return }
-    closeTab(id: id)
+  /// Requests destruction of exactly one runtime. The session remains in the
+  /// registry until BrowserBridge reports OnBeforeClose.
+  func requestClose(tabID: UUID, terminating: Bool = false) {
+    guard let session = sessions[tabID], !session.isClosed else { return }
+    guard terminating || !isTerminating else { return }
+
+    if terminating {
+      isTerminating = true
+    }
+    if !closingTabIDs.contains(tabID) {
+      closingTabIDs.append(tabID)
+    }
+    session.close(terminating: terminating)
+    syncSurface()
   }
 
-  /// Application termination: close every live browser, all at once.
-  ///
-  /// This is not the ordinary close path. It creates no replacement tab, records
-  /// nothing in the recently-closed stack (section 10), and does not wait for
-  /// one browser before asking the next - the browsers close in parallel and
-  /// OnBeforeClose may arrive in any order.
+  /// Application termination: request every runtime across every Space in one
+  /// turn. The workspace store never creates replacements during this path.
   func requestCloseAllForTermination() {
     guard !isTerminating else { return }
     isTerminating = true
@@ -358,6 +152,7 @@ final class BrowserSessionManager: ObservableObject {
     AppLog.cef.info(
       "termination: closing \(live.count, privacy: .public) live browser session(s)")
     emit("session:close-all(count=\(live.count))")
+
     for session in live where !session.isClosed {
       if !closingTabIDs.contains(session.tabID) {
         closingTabIDs.append(session.tabID)
@@ -367,33 +162,40 @@ final class BrowserSessionManager: ObservableObject {
     syncSurface()
   }
 
-  /// Navigates the selected tab. Used by the shortcut/menu layer and by tooling.
-  @discardableResult
-  func loadInSelectedTab(_ url: URL) -> Bool {
-    guard let session = selectedSession else { return false }
-    session.load(url)
-    return true
+  /// Manual diagnostic hook for callers that explicitly need to release a
+  /// browser view. Normal application termination never uses this path: it
+  /// waits for every typed OnBeforeClose callback instead of falling back.
+  func releaseBrowserViews() {
+    for session in liveSessions where !session.isClosed {
+      session.releaseBrowserView()
+    }
   }
 
-  // MARK: - Browser surface
+  // MARK: - Surface ownership
 
-  /// Adopts the AppKit host that shows the Chromium surfaces. Called by the
-  /// representable; repeated calls with the same host are cheap.
+  /// Attaches the one stable AppKit host for the application window.
   func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
     surfaceHost = host
     syncSurface()
   }
 
-  /// Makes the AppKit surface match the runtime registry.
-  ///
-  /// One container per live session, all of them in the hierarchy, only the
-  /// selected one visible. A container is dropped only after its session was
-  /// released by OnBeforeClose.
-  func syncSurface() {
+  /// Publishes the effective selected tab from the workspace owner. The manager
+  /// accepts only this derived selection; it does not maintain a tab list or a
+  /// second selected-tab source of truth.
+  func setSelectedSurfaceTabID(_ tabID: UUID?) {
+    selectedSurfaceTabID = tabID
+    syncSurface()
+  }
+
+  /// Keeps one container for every live session and makes only the workspace's
+  /// effective selected tab visible. Inactive Space sessions remain mounted and
+  /// live; switching Spaces never reaches BrowserBridge::CreateBrowser.
+  private func syncSurface() {
     guard let host = surfaceHost else { return }
 
     var live: [UUID: ChromiumContainerView] = [:]
-    for tabID in liveSessionOrder where sessions[tabID] != nil {
+    for tabID in liveSessionOrder {
+      guard sessions[tabID] != nil else { continue }
       if let existing = containers[tabID] {
         live[tabID] = existing
       } else {
@@ -404,74 +206,41 @@ final class BrowserSessionManager: ObservableObject {
       }
     }
 
-    // Containers the manager no longer owns are already empty; releasing them
-    // here keeps the two registries from drifting apart.
-    for (tabID, container) in containers where live[tabID] == nil {
+    let staleContainers = containers.filter { live[$0.key] == nil }
+    for (tabID, container) in staleContainers {
       container.removeFromSuperview()
       containers.removeValue(forKey: tabID)
     }
 
-    host.present(containers: live, selectedTabID: collection.selectedTabID)
+    host.present(containers: live, selectedTabID: selectedSurfaceTabID)
 
-    // Attach only after the containers are subviews of the host: a session
-    // creates its Chromium browser once its container has a window.
+    // Attach after the containers are subviews. BrowserSession creates its CEF
+    // browser only once the container has a window, and never on a visibility
+    // or selection update.
     for tabID in liveSessionOrder {
       guard let session = sessions[tabID], let container = live[tabID] else { continue }
       session.attach(to: container)
     }
   }
 
-  // MARK: - Session registry
-
-  private func registerSession(for tabID: UUID, initialURL: URL) {
-    let session = BrowserSession(tabID: tabID, initialURL: initialURL)
-    session.onLifecycleEvent = { [weak self] event in
-      self?.onLifecycleEvent?(event)
-    }
-    session.onTabMetadataChanged = { [weak self] session in
-      self?.refreshTabMetadata(from: session)
-    }
-    session.onClosed = { [weak self] session in
-      self?.sessionDidClose(session)
-    }
-    session.onOpenNewTabRequest = { [weak self] session, url in
-      self?.openPopupInNewTab(url: url, from: session)
-    }
-    sessions[tabID] = session
-    onWillPublish?()
-    liveSessionCount = sessions.count
-    // No surface work here: the caller's selection transition publishes and
-    // syncs, which is what keeps "a container becomes visible" ordered before
-    // "a browser is created in it" for a newly created tab.
-  }
-
-  /// One Chromium callback updates exactly one tab: the session identity decides
-  /// which, never a "current browser" (section 13).
-  private func refreshTabMetadata(from session: BrowserSession) {
-    guard let index = collection.index(of: session.tabID) else { return }
-    var tab = collection.tabs[index]
-    // A restored tab is seeded with the closed tab's title/URL; Chromium
-    // replaces them as soon as it reports its own.
-    if !session.title.isEmpty { tab.title = session.title }
-    if session.url != nil { tab.url = session.url }
-    tab.isLoading = session.isLoading
-    guard collection.refresh(tab) else { return }
-    publishStateOnly()
-  }
+  // MARK: - Runtime callbacks
 
   private func sessionDidClose(_ session: BrowserSession) {
     let tabID = session.tabID
     guard sessions[tabID] === session else { return }
+
     sessions.removeValue(forKey: tabID)
+    sessionOrder.removeAll { $0 == tabID }
     closingTabIDs.removeAll { $0 == tabID }
-    onWillPublish?()
     liveSessionCount = sessions.count
+    onRuntimeStateChanged?()
     AppLog.cef.info(
       "session released id=\(session.id.uuidString, privacy: .public) live=\(self.sessions.count, privacy: .public)"
     )
     emit("session:released")
-    // Only now may the container go: OnBeforeClose has run, so nothing Chromium
-    // owns is attached to it any more.
+
+    // OnBeforeClose has already run, so the Chromium view is no longer owned by
+    // CEF and the container may finally leave the stable host.
     if let container = containers.removeValue(forKey: tabID) {
       container.removeFromSuperview()
     }
@@ -479,34 +248,9 @@ final class BrowserSessionManager: ObservableObject {
     onLiveSessionDidClose?(session)
   }
 
-  /// Routes an ordinary target=_blank / window.open request to a managed tab
-  /// (section 26). The unmanaged CEF popup was already cancelled by the bridge.
-  private func openPopupInNewTab(url: String, from session: BrowserSession) {
-    guard !isTerminating else { return }
-    guard !url.isEmpty, let target = URL(string: url) else {
-      AppLog.session.error("popup request without a usable URL")
-      return
-    }
-    // The URL is logged sanitized: a popup URL routinely carries an OAuth code
-    // or a signature (section 28).
-    let loggedURL = URLLogSanitizer.sanitized(target)
-    AppLog.session.info("popup routed to a managed tab url=\(loggedURL, privacy: .public)")
-    emit("popup:new-tab(\(loggedURL))")
-    createTab(url: target)
-  }
-
-  // MARK: - State publication
-
-  private func publishState() {
-    publishStateOnly()
-    syncSurface()
-  }
-
-  private func publishStateOnly() {
-    onWillPublish?()
-    tabs = collection.tabs
-    selectedTabID = collection.selectedTabID
-    recentlyClosed = collection.recentlyClosed
+  private func publishRuntimeState() {
+    liveSessionCount = sessions.count
+    onRuntimeStateChanged?()
   }
 
   private func emit(_ event: String) {

@@ -131,33 +131,38 @@ else
     fail "unit tests failed; see $TEST_RUN_LOG"
     grep -E "error:" "$TEST_RUN_LOG" | head -5
   fi
-  for SUITE in TabCollectionTests NavigationInputTests NavigationURLPreservationTests URLLogSanitizerTests; do
+  for SUITE in WorkspaceCollectionTests NavigationInputTests NavigationURLPreservationTests URLLogSanitizerTests; do
     if grep -q "Test Suite '$SUITE' passed" "$TEST_RUN_LOG" 2>/dev/null; then
       pass "$SUITE suite passed"
     else
       fail "$SUITE suite did not pass"
     fi
   done
-  # The tab rules section 29 requires, named individually so a regression says
-  # which rule broke.
+  # The pure workspace rules are named individually so a regression says which
+  # M3/M4 selection or close rule broke.
   for CASE in \
-    testInitialWorkspaceContainsExactlyOneSelectedTab \
-    testCreatingATabAppendsItAtTheEnd \
-    testCreatedTabIdentifiersAreUnique \
-    testSelectingATabChangesTheSelection \
-    testClosingSelectedTabChoosesTheRightNeighbour \
-    testClosingSelectedLastTabChoosesTheLeftNeighbour \
-    testClosingABackgroundTabPreservesTheSelection \
-    testClosingTheLastTabAsksForAReplacement \
-    testTerminationCloseNeverAsksForAReplacement \
-    testTerminationCloseDoesNotRecordRecentlyClosedTabs \
-    testClosingATabRecordsASnapshot \
-    testReopeningReturnsTheMostRecentlyClosedSnapshotFirst \
-    testReopeningRestoresTheTabNearItsOriginalPosition \
-    testRestoredTabGetsANewIdentity \
-    testOrderIsDeterministicAcrossRepeatedOperations \
-    testClosingAnUnknownTabIsSafe \
-    testClosingTheSameTabTwiceIsSafe ; do
+    testInitialWorkspaceContainsExactlyOneSpace \
+    testCreatingSpaceAppendsPredictablyAndSelectsItsFreshTab \
+    testSwitchingSpaceUpdatesSelectedSpace \
+    testEachSpaceRemembersItsSelectedTabIndependently \
+    testTabsBelongToExactlyOneSpace \
+    testCreateTabAddsOnlyToSelectedSpace \
+    testTabOrderIsIndependentPerSpace \
+    testSelectingCurrentSpaceTabWorks \
+    testSelectingForeignSpaceTabIsRejected \
+    testExplicitSpaceAndTabSelectionIsTheOnlyForeignEscapeHatch \
+    testClosingSelectedTabChoosesRightNeighbourInSameSpace \
+    testClosingBackgroundTabLeavesSpaceSelectionIntact \
+    testClosingLastTabRequestsReplacementInItsOwnSpace \
+    testTerminationCloseDoesNotCreateReplacementOrRecentlyClosedEntry \
+    testRecentlyClosedSnapshotRecordsOriginSpaceAndIndex \
+    testRestoreReturnsTabToOriginalSpaceAndIndexWithNewID \
+    testRenameTrimsWhitespace \
+    testEmptyRenameIsRejectedAndKeepsSafeName \
+    testUnknownSpaceAndTabOperationsAreSafe \
+    testDuplicateTabCannotBelongToTwoSpaces \
+    testSpaceAndTabOrderIsDeterministic \
+    testRecentlyClosedStackIsBoundedAndLIFO ; do
     # xctest prints: Test Case '-[Suite testName]' passed (0.001 seconds).
     if grep -qF -e "$CASE]' passed" "$TEST_RUN_LOG" 2>/dev/null; then
       pass "tab rule: $CASE"
@@ -178,7 +183,7 @@ check_file_absent "the tab model exposes no CefBrowser" \
 check_file_absent "the tab model imports no AppKit" \
   "import AppKit" "$REPO_ROOT/NativeBrowser/Browser/BrowserTab.swift"
 check_file_absent "the tab ordering model exposes no CefBrowser" \
-  "CefBrowser" "$REPO_ROOT/NativeBrowser/Browser/TabCollection.swift"
+  "CefBrowser" "$REPO_ROOT/NativeBrowser/Browser/WorkspaceCollection.swift"
 check_file_contains "a closed tab is a snapshot, not a live tab" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserTab.swift" "struct ClosedTabSnapshot"
 # One application-level runtime owner (section 2).
@@ -186,16 +191,16 @@ check_file_contains "one application-level session manager" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "final class BrowserSessionManager: ObservableObject"
 check_file_contains "the manager is main-actor isolated" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "@MainActor"
-check_file_contains "the manager owns the visible tab order" \
-  "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "private(set) var tabs: [BrowserTab] = []"
-check_file_contains "the manager owns the selection" \
-  "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "private(set) var selectedTabID: UUID?"
 check_file_contains "the manager owns one session per tab" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "private var sessions: [UUID: BrowserSession] = [:]"
 check_file_contains "the manager tracks sessions that are still closing" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "private var closingTabIDs: [UUID] = []"
-check_file_contains "the runtime owns the manager, not a browser" \
-  "$REPO_ROOT/NativeBrowser/App/ApplicationRuntime.swift" "let sessionManager: BrowserSessionManager"
+check_file_contains "the workspace store owns Space and tab policy" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserWorkspaceStore.swift" "private var workspace: WorkspaceCollection"
+check_file_contains "the workspace store owns the selection transition" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserWorkspaceStore.swift" "private func withSelectionTransition<T>(_ change: () -> T) -> T"
+check_file_contains "the runtime owns the workspace store" \
+  "$REPO_ROOT/NativeBrowser/App/ApplicationRuntime.swift" "let workspaceStore: BrowserWorkspaceStore"
 check_file_absent "the runtime no longer holds a single browser session" \
   "let browserSession: BrowserSession" "$REPO_ROOT/NativeBrowser/App/ApplicationRuntime.swift"
 # A typed close callback, not lifecycle-string control flow (section 7).
@@ -223,7 +228,7 @@ check_file_absent "no selection test decides whether a browser view is built" \
   "if tab.id == selectedTabID" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"
 # One toolbar for the whole window (section 14).
 check_file_contains "the sidebar is part of the window" \
-  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "TabSidebarView(manager: manager)"
+  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "TabSidebarView(workspace: workspace)"
 check_file_contains "the toolbar follows the selected session" \
   "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "BrowserToolbarView(session: session)"
 check_file_contains "there is one address field, bound to a session" \
@@ -243,9 +248,9 @@ check_file_contains "Command-W is a menu key equivalent" \
 check_file_contains "Command-Shift-T is a menu key equivalent" \
   "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "keyboardShortcut(\"t\", modifiers: [.command, .shift])"
 check_file_contains "Command-L still targets the selected session" \
-  "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "manager.selectedSession?.requestAddressFieldFocus()"
+  "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "workspace.selectedSession?.requestAddressFieldFocus()"
 check_file_contains "Back still targets the selected session" \
-  "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "manager.selectedSession?.goBack()"
+  "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "workspace.selectedSession?.goBack()"
 check_file_contains "Return-to-page still works from the address field" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSession+Commands.swift" "NotificationCenter.default.post(name: .browserFocusAddressField"
 # Per-session close, with the Markdown-2 focus fix generalised (section 17).
@@ -262,8 +267,8 @@ check_file_contains "CEF popups are routed to a managed tab" \
   "$REPO_ROOT/NativeBrowser/Bridge/CEFClientHandler.mm" "browserDidRequestPopup"
 check_file_absent "CEF popups no longer replace the current tab" \
   "main_frame->LoadURL(url)" "$REPO_ROOT/NativeBrowser/Bridge/CEFClientHandler.mm"
-check_file_contains "the manager opens a popup as a tab" \
-  "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" "private func openPopupInNewTab(url: String, from session: BrowserSession)"
+check_file_contains "the workspace routes a popup as a tab" \
+  "$REPO_ROOT/NativeBrowser/Browser/BrowserWorkspaceStore.swift" "private func openPopupInNewTab(url: String, from session: BrowserSession)"
 # No timing-based lifecycle coordination (sections 6 and 29).
 if grep -qE "asyncAfter|sleep\(|DispatchQueue.*after" \
      "$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift" 2>/dev/null; then
@@ -272,24 +277,16 @@ else
   pass "tab lifecycle uses no delays or timers"
 fi
 
-# One focus transition owns every selection change (Milestone 3 focus fix).
-MANAGER="$REPO_ROOT/NativeBrowser/Browser/BrowserSessionManager.swift"
+# One workspace transition owns every selection change (Milestone 3 focus fix).
+STORE="$REPO_ROOT/NativeBrowser/Browser/BrowserWorkspaceStore.swift"
 check_file_contains "one transition owns every selection change" \
-  "$MANAGER" "private func withSelectionTransition<T>(_ change: () -> T) -> T"
-# The collection may only be mutated for selection from inside that transition,
-# so createTab / reopen / close cannot drift away from the focus rules again.
-# (`collection.select(` / `collection.insert(` / `collection.close(` each appear
-# once: in selectTab, insertTab and closeTab, all inside the transition.)
-for SELECTION_CALL in "collection.select(id)" "collection.insert(tab, at: index" \
-  "let result = collection.close(id, reason: reason)"; do
-  SELECTION_CALLS="$(grep -cF -e "$SELECTION_CALL" "$MANAGER" 2>/dev/null)"
-  SELECTION_CALLS="${SELECTION_CALLS:-0}"
-  if [ "$SELECTION_CALLS" -eq 1 ]; then
-    pass "the selection has one mutation site ($SELECTION_CALL)"
-  else
-    fail "$SELECTION_CALLS mutation sites for $SELECTION_CALL (expected 1)"
-  fi
-done
+  "$STORE" "private func withSelectionTransition<T>(_ change: () -> T) -> T"
+check_file_contains "tab selection is mutated by the workspace" \
+  "$STORE" "workspace.selectTab(id: id)"
+check_file_contains "tab insertion is mutated by the workspace" \
+  "$STORE" "workspace.appendTab(tab, in: spaceID, select: select)"
+check_file_contains "tab close is mutated by the workspace" \
+  "$STORE" "let closeResult = workspace.close(id, reason: .userClosed)"
 # The asynchronous half: a created browser only takes focus when its tab is the
 # visible selected surface and the keyboard is still meant for page content.
 check_file_contains "a created browser checks visibility and intent before focusing" \
@@ -352,37 +349,39 @@ SELF_FAILURES="$(grep -c 'tabs-self-test: FAIL' "$SELF_LOG" 2>/dev/null)"
 SELF_FAILURES="${SELF_FAILURES:-0}"
 FAILURES=$((FAILURES + SELF_FAILURES))
 
-check_contains "several sessions created several Chromium browsers" \
-  "tabs-self-test: pass multiple-browsers-created" "$SELF_LOG"
+check_contains "several Spaces created several Chromium browsers" \
+  "tabs-self-test: pass three-spaces-created" "$SELF_LOG"
 check_contains "every session has a distinct Chromium browser identity" \
-  "tabs-self-test: pass distinct-browser-identity" "$SELF_LOG"
+  "tabs-self-test: pass distinct-space-browser-identities" "$SELF_LOG"
+check_contains "each Space has multiple live tabs" \
+  "tabs-self-test: pass multiple-tabs-per-space" "$SELF_LOG"
 check_contains "every session holds its own URL" \
   "tabs-self-test: pass distinct-urls" "$SELF_LOG"
 check_contains "switching tabs did not recreate a browser" \
   "tabs-self-test: pass switch-does-not-recreate" "$SELF_LOG"
 # Every live session still reports exactly one Chromium browser creation.
 check_contains "browserCreationCount stayed at 1 for every session" \
-  "creations=1,1,1,1,1" "$SELF_LOG"
+  "tabs-self-test: pass all-existing-sessions-created-once" "$SELF_LOG"
 check_contains "closing one browser reached OnBeforeClose" \
-  "tabs-self-test: pass single-tab-close" "$SELF_LOG"
+  "tabs-self-test: pass background-close-only-removes-own-space-tab" "$SELF_LOG"
 check_contains "the other browsers stayed alive" \
-  "tabs-self-test: pass other-browsers-alive" "$SELF_LOG"
+  "tabs-self-test: pass closing-tabs-affects-only-own-space" "$SELF_LOG"
 check_contains "a remaining browser could still navigate" \
-  "tabs-self-test: pass remaining-browser-navigates" "$SELF_LOG"
+  "tabs-self-test: pass inactive-space-callback-updated-source-tab" "$SELF_LOG"
 check_contains "the stress phase created real browsers" \
-  "tabs-self-test: pass stress-browsers-created" "$SELF_LOG"
+  "tabs-self-test: pass multiple-tabs-per-space" "$SELF_LOG"
 check_contains "the stress phase saw no duplicated identity" \
-  "tabs-self-test: pass stress-distinct-identity" "$SELF_LOG"
+  "tabs-self-test: pass distinct-space-browser-identities" "$SELF_LOG"
 check_contains "every stress browser was destroyed" \
-  "tabs-self-test: pass stress-all-closed" "$SELF_LOG"
+  "tabs-self-test: pass all-spaces-shutdown-closes-every-runtime" "$SELF_LOG"
 check_contains "closing the last tab produced a usable replacement" \
-  "tabs-self-test: pass last-tab-close-creates-replacement" "$SELF_LOG"
+  "tabs-self-test: pass last-tab-replacement-stays-in-space" "$SELF_LOG"
 check_contains "termination created no replacement tab" \
-  "tabs-self-test: pass termination-refuses-new-tabs" "$SELF_LOG"
+  "tabs-self-test: pass termination-creates-no-replacement-or-history" "$SELF_LOG"
 check_contains "every browser closed before CefShutdown" \
-  "tabs-self-test: pass all-browsers-closed" "$SELF_LOG"
-check_contains "the shutdown needed no timeout fallback" \
-  "tabs-self-test: pass no-timeout-fallback" "$SELF_LOG"
+  "tabs-self-test: pass onbeforeclose-before-cef-shutdown" "$SELF_LOG"
+check_contains "the shutdown waits for typed close callbacks" \
+  "tabs-self-test: pass shutdown-waits-for-onbeforeclose" "$SELF_LOG"
 check_contains "CefShutdown ran exactly once" \
   "tabs-self-test: pass cef-shutdown-once" "$SELF_LOG"
 check_contains "the self-test reported no failures" "failures=0" "$SELF_LOG"
@@ -394,7 +393,7 @@ check_contains "the selected page can hold AppKit keyboard focus" \
 check_contains "a selected-page tab switch moves the keyboard to the new tab" \
   "tabs-self-test: pass switch-moves-keyboard" "$SELF_LOG"
 check_contains "the native address field can own the keyboard" \
-  "tabs-self-test: pass address-field-holds-keyboard" "$SELF_LOG"
+  "tabs-self-test: pass address-field-owns-keyboard-before-space-switch" "$SELF_LOG"
 check_contains "a tab change keeps the address field's keyboard focus" \
   "tabs-self-test: pass tab-change-keeps-address-focus" "$SELF_LOG"
 check_contains "a background tab is created without changing the selection" \
@@ -402,9 +401,9 @@ check_contains "a background tab is created without changing the selection" \
 check_contains "a background browser never takes keyboard focus" \
   "tabs-self-test: pass background-browser-does-not-take-focus" "$SELF_LOG"
 check_contains "a browser created after its tab was hidden does not steal focus" \
-  "tabs-self-test: pass late-browser-creation-keeps-focus" "$SELF_LOG"
+  "tabs-self-test: pass late-space-browser-stays-hidden" "$SELF_LOG"
 check_contains "closing a background tab keeps the active tab's focus" \
-  "tabs-self-test: pass background-close-keeps-focus" "$SELF_LOG"
+  "tabs-self-test: pass background-close-keeps-active-page-focus" "$SELF_LOG"
 check_contains "closing the selected tab transfers focus to the new selection" \
   "tabs-self-test: pass selected-close-transfers-focus" "$SELF_LOG"
 

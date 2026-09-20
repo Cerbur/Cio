@@ -11,37 +11,37 @@
 //  no global key polling and no Chromium key interception anywhere in the
 //  application.
 //
-//  Every command targets the *selected* session. The closures resolve
-//  `manager.selectedSession` when they run instead of capturing a session, so a
+//  Every command targets the workspace's effective selected session. The
+//  closures resolve `workspace.selectedSession` when they run instead of capturing a session, so a
 //  menu item can never act on a tab that is no longer selected.
 //
 
 import SwiftUI
 
 struct BrowserCommands: Commands {
-  /// The runtime owner of the tabs. Stable for the application's lifetime.
-  let manager: BrowserSessionManager
+  /// The workspace/domain owner. Stable for the application's lifetime.
+  @ObservedObject var workspace: BrowserWorkspaceStore
 
   var body: some Commands {
     CommandGroup(after: .newItem) {
       Divider()
 
-      Button("Back") { manager.selectedSession?.goBack() }
+      Button("Back") { workspace.selectedSession?.goBack() }
         .keyboardShortcut("[", modifiers: .command)
-        .disabled(!(manager.selectedSession?.canGoBack ?? false))
+        .disabled(!(workspace.selectedSession?.canGoBack ?? false))
 
-      Button("Forward") { manager.selectedSession?.goForward() }
+      Button("Forward") { workspace.selectedSession?.goForward() }
         .keyboardShortcut("]", modifiers: .command)
-        .disabled(!(manager.selectedSession?.canGoForward ?? false))
+        .disabled(!(workspace.selectedSession?.canGoForward ?? false))
 
       Button(selectedIsLoading ? "Stop" : "Reload") {
-        manager.selectedSession?.reloadOrStop()
+        workspace.selectedSession?.reloadOrStop()
       }
       .keyboardShortcut("r", modifiers: .command)
 
       Divider()
 
-      Button("Open Location…") { manager.selectedSession?.requestAddressFieldFocus() }
+      Button("Open Location…") { workspace.selectedSession?.requestAddressFieldFocus() }
         .keyboardShortcut("l", modifiers: .command)
     }
 
@@ -50,16 +50,16 @@ struct BrowserCommands: Commands {
     // AppDelegate so that Command-W cannot mean "close the window" while tabs
     // exist (section 21).
     CommandMenu("Tabs") {
-      Button("New Tab") { manager.createTab(url: nil) }
+      Button("New Tab") { workspace.createTab(url: nil) }
         .keyboardShortcut("t", modifiers: .command)
 
-      Button("Close Tab") { manager.closeSelectedTab() }
+      Button("Close Tab") { workspace.closeSelectedTab() }
         .keyboardShortcut("w", modifiers: .command)
-        .disabled(manager.selectedTabID == nil)
+        .disabled(workspace.selectedTabID == nil)
 
-      Button("Reopen Closed Tab") { manager.reopenLastClosedTab() }
+      Button("Reopen Closed Tab") { workspace.reopenLastClosedTab() }
         .keyboardShortcut("t", modifiers: [.command, .shift])
-        .disabled(!manager.canReopenClosedTab)
+        .disabled(!workspace.canReopenClosedTab)
 
       Divider()
 
@@ -68,18 +68,18 @@ struct BrowserCommands: Commands {
       ForEach(1...9, id: \.self) { position in
         Button(position == 9 ? "Select Last Tab" : "Select Tab \(position)") {
           if position == 9 {
-            manager.selectLastTab()
+            workspace.selectLastTab()
           } else {
-            manager.selectTab(at: position - 1)
+            workspace.selectTab(at: position - 1)
           }
         }
         .keyboardShortcut(KeyEquivalent(Character("\(position)")), modifiers: .command)
-        .disabled(position == 9 ? manager.tabs.isEmpty : manager.tabs.count < position)
+        .disabled(position == 9 ? workspace.tabs.isEmpty : workspace.tabs.count < position)
       }
     }
   }
 
   private var selectedIsLoading: Bool {
-    manager.selectedSession?.isLoading ?? false
+    workspace.selectedSession?.isLoading ?? false
   }
 }

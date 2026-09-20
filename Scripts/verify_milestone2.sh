@@ -279,11 +279,10 @@ check_file_contains "optional command-[ back shortcut" \
   "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "keyboardShortcut(\"[\", modifiers: .command)"
 check_file_contains "optional command-] forward shortcut" \
   "$REPO_ROOT/NativeBrowser/App/AppCommands.swift" "keyboardShortcut(\"]\", modifiers: .command)"
-# Milestone 3 replaced the single captured session with the runtime owner of the
-# tabs; the commands are still attached to the scene, and the check still fails
-# if that attachment is removed.
+# Milestone 4 keeps the commands attached to the scene while the workspace
+# store, rather than the runtime manager, owns the selected tab.
 check_file_contains "the commands are attached to the scene" \
-  "$REPO_ROOT/NativeBrowser/App/NativeBrowserApp.swift" "BrowserCommands(manager: runtime.sessionManager)"
+  "$REPO_ROOT/NativeBrowser/App/NativeBrowserApp.swift" "BrowserCommands(workspace: runtime.workspaceStore)"
 check_file_contains "the toolbar renders Back" \
   "$REPO_ROOT/NativeBrowser/UI/CommandBar/BrowserToolbarView.swift" "systemImage: \"chevron.backward\""
 check_file_contains "the toolbar renders Forward" \
@@ -298,11 +297,11 @@ check_file_contains "the toolbar sits above the Chromium view" \
 # host that keeps every live Chromium container mounted; the content still fills
 # the window, and a forced identity change on it is still checked for.
 check_file_contains "the Chromium surface still fills the window" \
-  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "BrowserSurfaceView(manager: manager)"
+  "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" "BrowserSurfaceView(manager: workspace.sessionManager)"
 check_file_contains "the Chromium view is not rebuilt by UI state" \
   "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift" ".frame(maxWidth: .infinity, maxHeight: .infinity)"
 check_absent "no forced identity change on the Chromium surface" \
-  "BrowserSurfaceView(manager: manager).id(" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"
+  "BrowserSurfaceView(manager: workspace.sessionManager).id(" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"
 check_file_contains "focus requests reach the field through the responder chain" \
   "$REPO_ROOT/NativeBrowser/Browser/BrowserSession+Commands.swift" "NotificationCenter.default.post(name: .browserFocusAddressField"
 check_file_contains "the field becomes first responder with select-all" \
@@ -326,7 +325,8 @@ done < <(grep -o 'navigation-self-test: pass .*' "$SELF_LOG" 2>/dev/null)
 while IFS= read -r line; do
   printf '  [FAIL] %s\n' "$line"
 done < <(grep -o 'navigation-self-test: FAIL .*' "$SELF_LOG" 2>/dev/null)
-SELF_FAILURES="$(grep -c 'navigation-self-test: FAIL' "$SELF_LOG" 2>/dev/null || echo 0)"
+SELF_FAILURES="$(grep -c 'navigation-self-test: FAIL' "$SELF_LOG" 2>/dev/null)"
+SELF_FAILURES="${SELF_FAILURES:-0}"
 FAILURES=$((FAILURES + SELF_FAILURES))
 check_contains "the Chromium browser was created exactly once" \
   "navigation-self-test: pass browser-created-once" "$SELF_LOG"

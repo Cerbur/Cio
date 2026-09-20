@@ -1,0 +1,374 @@
+//
+//  BrowserWorkspaceStore.swift
+//  NativeBrowser
+//
+//  Application-facing workspace owner for Milestone 4.
+//
+//  WorkspaceCollection owns pure domain state. BrowserSessionManager owns only
+//  runtime objects. This store is the seam between them: it performs one
+//  coherent Space/tab selection transition, asks the runtime manager to create
+//  or close sessions, and publishes the effective selected tab to the stable
+//  browser surface host.
+//
+
+import AppKit
+import Combine
+import Foundation
+
+@MainActor
+final class BrowserWorkspaceStore: ObservableObject {
+  let homeURL: URL
+  let sessionManager: BrowserSessionManager
+
+  private var workspace: WorkspaceCollection
+
+  /// Diagnostics and verification hooks. The store forwards runtime lifecycle
+  /// events but remains the owner of all domain transitions.
+  var onLifecycleEvent: ((String) -> Void)?
+
+  init(initialTabURL: URL) {
+    homeURL = initialTabURL
+    let manager = BrowserSessionManager()
+    sessionManager = manager
+
+    let initialTab = BrowserTab(url: initialTabURL)
+    workspace = WorkspaceCollection(initialTab: initialTab)
+
+    manager.onLifecycleEvent = { [weak self] event in
+      self?.onLifecycleEvent?(event)
+    }
+    manager.onRuntimeStateChanged = { [weak self] in
+      self?.objectWillChange.send()
+    }
+    manager.onTabMetadataChanged = { [weak self] session in
+      self?.refreshTabMetadata(from: session)
+    }
+    manager.onOpenNewTabRequest = { [weak self] session, url in
+      self?.openPopupInNewTab(url: url, from: session)
+    }
+
+    // The initial runtime exists before the first surface publication. The
+    // browser itself waits until its stable container is in a window.
+    _ = manager.createSession(for: initialTab.id, initialURL: initialTabURL)
+    publishWorkspace()
+  }
+
+  // MARK: - Domain projections
+
+  /// Read-only projections. `workspace` remains the only mutable domain source
+  /// of truth; these are never independently mutated by UI code.
+  var spaces: [BrowserSpace] { workspace.spaces }
+  var selectedSpaceID: UUID { workspace.selectedSpaceID }
+  var selectedSpace: BrowserSpace? { workspace.selectedSpace }
+  var selectedTabID: UUID? { workspace.selectedTabID }
+  var selectedTab: BrowserTab? { workspace.selectedTab }
+  var tabs: [BrowserTab] { workspace.currentTabs }
+  var currentTabIDs: [UUID] { workspace.currentTabIDs }
+  var allTabs: [BrowserTab] { workspace.allTabs }
+  var allTabIDs: [UUID] { workspace.allTabIDs }
+  var recentlyClosed: [ClosedTabSnapshot] { workspace.recentlyClosed }
+  var canReopenClosedTab: Bool { workspace.canReopenClosedTab }
+
+  func tabs(in spaceID: UUID) -> [BrowserTab] {
+    workspace.tabs(in: spaceID)
+  }
+
+  func space(withID id: UUID) -> BrowserSpace? {
+    workspace.space(withID: id)
+  }
+
+  var selectedSession: BrowserSession? {
+    selectedTabID.flatMap { sessionManager.session(for: $0) }
+  }
+
+  var liveSessionCount: Int { sessionManager.liveSessionCount }
+  var liveSessions: [BrowserSession] { sessionManager.liveSessions }
+  var hasLiveSessions: Bool { sessionManager.hasLiveSessions }
+  var isTerminating: Bool { sessionManager.isTerminating }
+
+  func tab(withID id: UUID) -> BrowserTab? {
+    workspace.tab(withID: id)
+  }
+
+  func space(forTabID tabID: UUID) -> BrowserSpace? {
+    guard let spaceID = workspace.spaceID(containing: tabID) else { return nil }
+    return workspace.space(withID: spaceID)
+  }
+
+  func spaceID(forTabID tabID: UUID) -> UUID? {
+    workspace.spaceID(containing: tabID)
+  }
+
+  func session(for tabID: UUID) -> BrowserSession? {
+    sessionManager.session(for: tabID)
+  }
+
+  // MARK: - Space lifecycle
+
+  /// Creates and selects a Space with one fresh tab and one fresh runtime.
+  @discardableResult
+  func createSpace() -> UUID? {
+    guard !isTerminating else { return nil }
+
+    let tab = BrowserTab(url: homeURL)
+    var createdSpaceID: UUID?
+    withSelectionTransition {
+      createdSpaceID = workspace.createSpace(initialTab: tab, select: true)
+      guard createdSpaceID != nil else { return }
+      _ = sessionManager.createSession(for: tab.id, initialURL: homeURL)
+    }
+
+    guard let createdSpaceID else { return nil }
+    let name = workspace.space(withID: createdSpaceID)?.name ?? "Space"
+    AppLog.session.info(
+      "space created id=\(createdSpaceID.uuidString, privacy: .public) name=\(name, privacy: .public)"
+    )
+    emit("space:created(\(createdSpaceID.uuidString))")
+    logTabCreated(tab.id, url: homeURL)
+    return createdSpaceID
+  }
+
+  @discardableResult
+  func renameSpace(id: UUID, name: String) -> Bool {
+    let changed = workspace.renameSpace(id: id, name: name)
+    if changed {
+      publishWorkspace()
+      emit("space:renamed(\(id.uuidString))")
+    }
+    return changed
+  }
+
+  /// Switches Space through the same focus transition as a tab switch.
+  func selectSpace(id: UUID) {
+    guard workspace.space(withID: id) != nil,
+      workspace.selectedSpaceID != id
+    else { return }
+    withSelectionTransition {
+      workspace.selectSpace(id: id)
+    }
+    emit("space:selected(\(id.uuidString))")
+  }
+
+  // MARK: - Tab lifecycle
+
+  /// Creates a tab in the currently selected Space.
+  @discardableResult
+  func createTab(url: URL? = nil, select: Bool = true) -> UUID? {
+    createTab(url: url, in: workspace.selectedSpaceID, select: select)
+  }
+
+  /// Creates a tab in an explicit Space. A background-space popup uses
+  /// `select: false`, so it cannot switch Spaces or take keyboard focus.
+  @discardableResult
+  func createTab(url: URL?, in spaceID: UUID, select: Bool) -> UUID? {
+    guard !isTerminating,
+      workspace.space(withID: spaceID) != nil,
+      !select || workspace.selectedSpaceID == spaceID
+    else { return nil }
+
+    let tab = BrowserTab(url: url)
+    let initialURL = url ?? homeURL
+    var inserted = false
+    withSelectionTransition {
+      inserted = workspace.appendTab(tab, in: spaceID, select: select)
+      guard inserted else { return }
+      _ = sessionManager.createSession(for: tab.id, initialURL: initialURL)
+    }
+    guard inserted else { return nil }
+    logTabCreated(tab.id, url: initialURL)
+    return tab.id
+  }
+
+  func selectTab(id: UUID) {
+    guard workspace.spaceID(containing: id) == workspace.selectedSpaceID,
+      sessionManager.session(for: id) != nil,
+      workspace.selectedTabID != id
+    else { return }
+
+    withSelectionTransition {
+      workspace.selectTab(id: id)
+    }
+    emit("tab:selected")
+    AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
+  }
+
+  @discardableResult
+  func selectTab(at index: Int) -> Bool {
+    guard currentTabIDs.indices.contains(index) else { return false }
+    let id = currentTabIDs[index]
+    selectTab(id: id)
+    return selectedTabID == id
+  }
+
+  @discardableResult
+  func selectLastTab() -> Bool {
+    guard let id = currentTabIDs.last else { return false }
+    selectTab(id: id)
+    return selectedTabID == id
+  }
+
+  /// Removes a tab from its owning Space, requests its runtime close, and
+  /// creates a replacement in that same Space when it was the last user tab.
+  func closeTab(id: UUID) {
+    guard !isTerminating, sessionManager.session(for: id) != nil else { return }
+
+    var result: WorkspaceTabCloseResult?
+    var shouldRequestRuntimeClose = false
+    withSelectionTransition {
+      let closeResult = workspace.close(id, reason: .userClosed)
+      guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
+        result = closeResult
+        return
+      }
+      result = closeResult
+      // The selection transition must hand keyboard ownership to the incoming
+      // tab before CEF is asked to tear down the outgoing runtime. The manager
+      // retains that runtime after this closure until OnBeforeClose.
+      shouldRequestRuntimeClose = true
+
+      if closeResult.needsReplacementTab {
+        let replacement = BrowserTab()
+        let inserted = workspace.appendTab(replacement, in: spaceID, select: false)
+        if inserted {
+          _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
+          logTabCreated(replacement.id, url: homeURL)
+        }
+      }
+    }
+
+    guard let result, result.outcome != .unknownTab else { return }
+    if shouldRequestRuntimeClose {
+      sessionManager.requestClose(tabID: id)
+    }
+    AppLog.session.info(
+      "tab closing id=\(id.uuidString, privacy: .public) live=\(self.sessionManager.liveSessionCount, privacy: .public)"
+    )
+    emit("tab:closed")
+  }
+
+  func closeSelectedTab() {
+    guard let id = selectedTabID else { return }
+    closeTab(id: id)
+  }
+
+  /// Reopens the newest user-closed snapshot in its original Space and index.
+  /// The tab and runtime identities are always new.
+  @discardableResult
+  func reopenLastClosedTab() -> UUID? {
+    guard !isTerminating, let snapshot = workspace.popRecentlyClosed() else { return nil }
+    let tab = BrowserTab(title: snapshot.title, url: snapshot.url)
+    var restored = false
+    withSelectionTransition {
+      restored = workspace.restoreTab(tab, from: snapshot)
+      guard restored else { return }
+      _ = sessionManager.createSession(for: tab.id, initialURL: snapshot.url ?? homeURL)
+    }
+    guard restored else { return nil }
+
+    emit("tab:reopened(\(tab.id.uuidString))")
+    AppLog.session.info(
+      "reopened a closed tab id=\(tab.id.uuidString, privacy: .public) space=\(snapshot.spaceID.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(snapshot.url), privacy: .public)"
+    )
+    return tab.id
+  }
+
+  // MARK: - Runtime and navigation forwarding
+
+  func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
+    sessionManager.attachSurfaceHost(host)
+    sessionManager.setSelectedSurfaceTabID(selectedTabID)
+  }
+
+  func requestCloseAllForTermination() {
+    sessionManager.requestCloseAllForTermination()
+  }
+
+  func releaseBrowserViews() {
+    sessionManager.releaseBrowserViews()
+  }
+
+  @discardableResult
+  func loadInSelectedTab(_ url: URL) -> Bool {
+    guard let selectedSession else { return false }
+    selectedSession.load(url)
+    return true
+  }
+
+  // MARK: - Selection transition
+
+  /// The one workspace-level focus transition for tab selection, new tabs,
+  /// reopening, closing and Space switching.
+  @discardableResult
+  private func withSelectionTransition<T>(_ change: () -> T) -> T {
+    let outgoing = selectedSession
+    let previousSelection = workspace.selectedTabID
+    let pageHeldKeyboard = outgoing?.ownsPageKeyboard ?? false
+
+    let result = change()
+
+    guard workspace.selectedTabID != previousSelection else {
+      publishWorkspace()
+      return result
+    }
+
+    outgoing?.blur()
+    if !pageHeldKeyboard {
+      // Set the intent before the incoming surface is made visible. This closes
+      // the async browser-creation race where OnAfterCreated arrives late.
+      selectedSession?.blur()
+    }
+    publishWorkspace()
+
+    if let incoming = selectedSession, incoming !== outgoing {
+      if pageHeldKeyboard {
+        incoming.focusPage()
+      } else {
+        incoming.blur()
+      }
+    }
+    return result
+  }
+
+  // MARK: - Domain/runtime callbacks
+
+  private func refreshTabMetadata(from session: BrowserSession) {
+    guard var tab = workspace.tab(withID: session.tabID) else { return }
+    if !session.title.isEmpty { tab.title = session.title }
+    if session.url != nil { tab.url = session.url }
+    tab.isLoading = session.isLoading
+    guard workspace.refresh(tab) else { return }
+    objectWillChange.send()
+  }
+
+  /// Popup routing always begins with the source runtime identity. The source
+  /// tab's Space, not the currently selected Space, determines ownership.
+  private func openPopupInNewTab(url: String, from session: BrowserSession) {
+    guard !isTerminating, !url.isEmpty, let target = URL(string: url),
+      let sourceSpaceID = workspace.spaceID(containing: session.tabID)
+    else { return }
+
+    let shouldSelect = workspace.selectedTabID == session.tabID
+    let loggedURL = URLLogSanitizer.sanitized(target)
+    AppLog.session.info(
+      "popup routed to source Space=\(sourceSpaceID.uuidString, privacy: .public) url=\(loggedURL, privacy: .public)"
+    )
+    emit("popup:new-tab(\(loggedURL))")
+    _ = createTab(url: target, in: sourceSpaceID, select: shouldSelect)
+  }
+
+  private func publishWorkspace() {
+    objectWillChange.send()
+    sessionManager.setSelectedSurfaceTabID(workspace.selectedTabID)
+  }
+
+  private func logTabCreated(_ tabID: UUID, url: URL) {
+    emit("tab:created(\(tabID.uuidString))")
+    AppLog.session.info(
+      "tab created id=\(tabID.uuidString, privacy: .public) url=\(URLLogSanitizer.sanitized(url), privacy: .public)"
+    )
+  }
+
+  private func emit(_ event: String) {
+    onLifecycleEvent?(event)
+  }
+}

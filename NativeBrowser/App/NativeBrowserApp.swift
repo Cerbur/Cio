@@ -6,11 +6,10 @@
 //  is BrowserMain so that the CEF sub-process hand-off can run before any UI
 //  code (see ARCHITECTURE.md section 11).
 //
-//  A single `Window` scene, not a `WindowGroup` (Milestone 3 section 3). The
-//  runtime owns exactly one BrowserSessionManager with one tab collection, so a
-//  scene that could create a second window would mount the same tabs - and the
-//  same Chromium views - in two places. Per-window workspaces are a later
-//  milestone, so the window count is constrained here instead.
+//  A single `Window` scene, not a `WindowGroup`. The runtime owns exactly one
+//  BrowserWorkspaceStore with one BrowserSessionManager, so a scene that could
+//  create a second window would mount the same workspace and Chromium views in
+//  two places. Per-window workspaces are a later milestone.
 //
 //  The browser commands (Command-L, Command-T, Command-W, Command-R, Command-[,
 //  Command-]) are menu items so that AppKit dispatches them before the first
@@ -31,10 +30,10 @@ struct NativeBrowserApp: App {
     }
     .defaultSize(width: 1280, height: 800)
     .commands {
-      // The manager is a stable reference: the command actions resolve the
+      // The workspace store is a stable reference: command actions resolve the
       // selected tab when they run, so they always operate on the current
       // selection rather than on whatever was selected when the menu was built.
-      BrowserCommands(manager: runtime.sessionManager)
+      BrowserCommands(workspace: runtime.workspaceStore)
     }
   }
 }

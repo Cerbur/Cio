@@ -68,7 +68,7 @@ struct BrowserTab: Identifiable, Equatable, Sendable {
 }
 
 /// A tab the user closed, kept so ⌘⇧T can reopen it (ARCHITECTURE.md section
-/// 42; Milestone 3 section 22).
+/// 42; Milestone 4 section 18).
 ///
 /// Deliberately not a serialised tab: there is no tab identifier here, so a
 /// reopened tab can only ever be a *new* BrowserTab with a new identity and a
@@ -78,14 +78,23 @@ struct BrowserTab: Identifiable, Equatable, Sendable {
 struct ClosedTabSnapshot: Equatable, Sendable {
   let url: URL?
   let title: String
+  /// The Space that owned the tab when it closed.
+  let spaceID: UUID
   /// Index the tab occupied when it closed, so ⌘⇧T can put it back near where
   /// it was when that is still possible.
   let originalIndex: Int
   let closedAt: Date
 
-  init(url: URL?, title: String, originalIndex: Int, closedAt: Date = Date()) {
+  init(
+    url: URL?,
+    title: String,
+    spaceID: UUID,
+    originalIndex: Int,
+    closedAt: Date = Date()
+  ) {
     self.url = url
     self.title = title
+    self.spaceID = spaceID
     self.originalIndex = originalIndex
     self.closedAt = closedAt
   }

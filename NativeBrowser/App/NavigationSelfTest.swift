@@ -32,7 +32,8 @@ enum NavigationSelfTest {
 
   /// Runs the self-test. Returns the process exit code.
   static func run(runtime: ApplicationRuntime) -> Int32 {
-    let manager = runtime.sessionManager
+    let workspace = runtime.workspaceStore
+    let manager = workspace.sessionManager
     var failures = 0
     var checks = 0
 
@@ -62,13 +63,13 @@ enum NavigationSelfTest {
     // when its host view deallocates, and a view in a window that was never
     // ordered in front (or made key) is not torn down the same way.
     window.makeKeyAndOrderFront(nil)
-    manager.attachSurfaceHost(host)
+    workspace.attachSurfaceHost(host)
     runtime.startMessagePump()
 
     // The tab the manager created at launch, reached through the Milestone 3
     // ownership path rather than through a single-browser property.
-    guard let session = manager.selectedSession else {
-      print("navigation-self-test: FAIL no-tab - the manager created no tab")
+    guard let session = workspace.selectedSession else {
+      print("navigation-self-test: FAIL no-tab - the workspace created no tab")
       return 2
     }
 
@@ -207,7 +208,7 @@ enum NavigationSelfTest {
     //     Scripts/verify_milestone3.sh closes a *selected* tab in the running
     //     application and asserts that it reaches OnBeforeClose.
     let freshURL = URL(string: "about:blank")!
-    let freshTabID = manager.createTab(url: freshURL, select: false)
+    let freshTabID = workspace.createTab(url: freshURL, select: false)
     let freshSession = freshTabID.flatMap { manager.session(for: $0) }
 
     let freshLoaded = freshSession.map { session in
@@ -221,7 +222,7 @@ enum NavigationSelfTest {
     // because that is the path this check exists to corroborate.
     let closeStarted = Date()
     if let freshTabID {
-      manager.closeTab(id: freshTabID)
+      workspace.closeTab(id: freshTabID)
     }
     let closeDeadline = closeStarted.addingTimeInterval(20)
     while !(freshSession?.isClosed ?? true), Date() < closeDeadline {

@@ -4,8 +4,8 @@ A macOS-only Chromium browser shell: **SwiftUI + AppKit + Objective-C++ + CEF**
 (Chromium Embedded Framework). No Electron, no WKWebView, no Chromium fork.
 
 This repository currently implements **Milestone 0 — Project Bootstrapping**,
-**Milestone 1 — One Chromium Tab** and **Milestone 2 — Navigation UI** from
-`ARCHITECTURE.md`:
+**Milestone 1 — One Chromium Tab**, **Milestone 2 — Navigation UI**,
+**Milestone 3 — Tabs** and **Milestone 4 — Spaces** from `ARCHITECTURE.md`:
 
 Milestone 0:
 
@@ -38,7 +38,12 @@ Milestone 2:
 - Chinese IME works in the address field (native `NSTextField`, no custom key
   interception)
 
-Tabs, sidebar, Spaces, history, downloads, session restore and the Liquid Glass
+Milestone 3 adds multiple independent tabs, stable Chromium surfaces, managed
+popups, focus-safe tab switching and multi-browser shutdown.
+
+Milestone 4 adds in-memory Spaces, per-Space tab ordering and selection,
+source-Space popup routing, recently-closed Space restoration and all-Space
+shutdown. Persistence, history, downloads, session restore and Liquid Glass
 styling are **not** part of these milestones.
 
 ---
@@ -81,6 +86,8 @@ open NativeBrowser.xcodeproj
 Scripts/verify_milestone0.sh    # CEF lifecycle, framework, helpers, signature
 Scripts/verify_milestone1.sh    # browser content, callbacks, resize, clean quit
 Scripts/verify_milestone2.sh    # parser, navigation state, shortcuts, navigation, clean quit
+Scripts/verify_milestone3.sh    # tab/runtime ownership, focus, popups, shutdown, redaction
+Scripts/verify_milestone4.sh    # Spaces model, multi-Space CEF integration, shutdown
 Scripts/check_no_secrets.sh     # credential scan of tracked files and git history
 ```
 
@@ -164,6 +171,7 @@ NativeBrowser/
     URLLogSanitizer.swift      # the one URL redaction policy for logs and traces
     AppCommands.swift          # browser menu commands: command-L / R / [ / ]
     NavigationSelfTest.swift   # Milestone 2 integration self-test (--navigation-self-test)
+    SpacesSelfTest.swift       # Milestones 3/4 runtime self-test (--tabs-self-test/--spaces-self-test)
     NavigationInputProbe.swift # parser probe in the shipped binary (--parse-navigation-input=)
   Bridge/
     CEFProcessHost.h/.mm       # Objective-C++ CEF lifecycle boundary (no C++ types leak to Swift)
@@ -174,12 +182,17 @@ NativeBrowser/
   Browser/
     BrowserSession.swift       # runtime session for one browser (not persisted)
     BrowserSession+Commands.swift # address-field submit/cancel and focus hand-off
+    BrowserSessionManager.swift # live runtime sessions, containers and close callbacks
+    BrowserWorkspaceStore.swift # application-facing Space/tab policy and transitions
+    BrowserSpace.swift          # CEF-free Space value
+    WorkspaceCollection.swift   # CEF-free Spaces, tabs and close policy
     NavigationInput.swift      # address/search parser (Foundation only, unit tested)
     ChromiumView.swift         # NSViewRepresentable wrapper
     ChromiumContainerView.swift# AppKit container that hosts the Chromium view
   Helper/
     HelperMain.mm              # main() of the Chromium helper processes
   Tests/
+    WorkspaceCollectionTests.swift # pure Space/tab policy tests (no CEF)
     NavigationInputTests.swift # parser unit tests (no CEF, no app host)
     URLLogSanitizerTests.swift # URL log redaction policy tests
     NavigationURLPreservationTests.swift # explicit URLs keep query + fragment
@@ -204,6 +217,8 @@ Scripts/
   verify_milestone0.sh         # Milestone 0 acceptance checks
   verify_milestone1.sh         # Milestone 1 acceptance checks
   verify_milestone2.sh         # Milestone 2 acceptance checks
+  verify_milestone3.sh         # Milestone 3 acceptance/regression checks
+  verify_milestone4.sh         # Milestone 4 acceptance checks
   check_no_secrets.sh          # credential scan (tracked files + git history)
 project.yml                    # XcodeGen project definition (source of truth)
 ```
@@ -464,7 +479,7 @@ so it does not need to be edited for a version bump.
 
 ## Not implemented yet
 
-Tabs, sidebar, Spaces, history, downloads, session restore and Liquid Glass
-styling — see `ARCHITECTURE.md` milestones 3-8. The title line below the
-browser view stays until Milestone 3 gives each tab its own title; the toolbar
-is deliberately plain until Milestone 5.
+History, downloads, session restore and Liquid Glass styling — see
+`ARCHITECTURE.md` milestones 5-8. Space deletion and persistence are also
+outside the in-memory Milestone 4 scope. The toolbar and sidebar remain plain
+until the later styling milestone.

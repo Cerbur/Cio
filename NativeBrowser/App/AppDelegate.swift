@@ -57,8 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     let runtime = ApplicationRuntime.shared
     runtime.record("appkit:will-terminate")
-    // Do not undo the Terminator's timeout protection by calling CefShutdown
-    // with live browsers from this second entry point.
+    // The Terminator calls CefShutdown only after every typed OnBeforeClose
+    // callback has released its session. Never bypass that ordering here.
     if !runtime.hasLiveBrowsers {
       runtime.shutdownCEF()
     }

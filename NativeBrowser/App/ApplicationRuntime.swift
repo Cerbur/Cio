@@ -6,12 +6,12 @@
 //  application, not to any view (ARCHITECTURE.md section 40, constraint 8),
 //  so it lives here and is owned by the process entry point.
 //
-//  Milestone 3 moved browser ownership from "one browserSession" to the
-//  BrowserSessionManager: the runtime now owns exactly one manager, and the
-//  manager owns the tabs and their sessions. Nothing here keeps a second
-//  liveness registry - hasLiveBrowsers asks the manager, and the termination
-//  coordinator is woken by a typed per-session callback rather than by parsing
-//  a lifecycle string.
+//  Milestone 4 separates pure workspace policy from Chromium runtime policy:
+//  the runtime owns one BrowserWorkspaceStore, which owns one
+//  BrowserSessionManager. Nothing here keeps a second liveness registry -
+//  hasLiveBrowsers asks the manager through the workspace store, and the
+//  termination coordinator is woken by a typed per-session callback rather
+//  than by parsing a lifecycle string.
 //
 
 import Foundation
@@ -39,13 +39,6 @@ final class ApplicationRuntime: ObservableObject {
   /// the NSApplication run loop (SwiftUI) rather than CEF owning it.
   private static let messagePumpInterval: TimeInterval = 1.0 / 60.0
 
-  /// Fallback deadline for termination: how long the Terminator waits for
-  /// browsers to reach OnBeforeClose before proceeding anyway. It is a safety
-  /// net, not part of the normal path - a browser normally closes in
-  /// milliseconds, and with several tabs they close in parallel rather than one
-  /// after another (ARCHITECTURE.md section 11).
-  static let browserShutdownTimeout: TimeInterval = 5.0
-
   /// Milestone 1 opened a single hard-coded page. Milestone 3 opens one tab with
   /// this URL at launch; --home-url is a development override used by the
   /// verification tooling.
@@ -61,8 +54,13 @@ final class ApplicationRuntime: ObservableObject {
     return defaultHomeURL
   }
 
-  /// Owns every tab and every Chromium browser the application has open.
-  let sessionManager: BrowserSessionManager
+  /// Owns all Spaces, tabs, selection policy and the runtime manager for the
+  /// single application window.
+  let workspaceStore: BrowserWorkspaceStore
+
+  /// Compatibility projection for application lifecycle tooling. Runtime
+  /// ownership remains inside `workspaceStore`; this is not a second owner.
+  var sessionManager: BrowserSessionManager { workspaceStore.sessionManager }
 
   @Published private(set) var cefStatus: CEFStatus = .notInitialized
 
@@ -82,19 +80,13 @@ final class ApplicationRuntime: ObservableObject {
   private var isTracingEnabled = false
 
   private init() {
-    let manager = BrowserSessionManager(initialTabURL: Self.homeURL)
-    sessionManager = manager
-    manager.onLifecycleEvent = { [weak self] event in
+    let store = BrowserWorkspaceStore(initialTabURL: Self.homeURL)
+    workspaceStore = store
+    store.onLifecycleEvent = { [weak self] event in
       self?.record(event)
     }
-    manager.onLiveSessionDidClose = { [weak self] session in
+    store.sessionManager.onLiveSessionDidClose = { [weak self] session in
       self?.onLiveSessionDidClose?(session)
-    }
-    // Mirrored so the SwiftUI scene - and therefore the menu commands built from
-    // it - re-evaluate when the tab list, the selection or the selected tab's
-    // navigation state changes.
-    manager.onWillPublish = { [weak self] in
-      self?.objectWillChange.send()
     }
   }
 
@@ -197,7 +189,7 @@ final class ApplicationRuntime: ObservableObject {
         // inside the text system rather than from the page.
         focusAddressFieldForTooling = false
         AppLog.app.info("tooling: focusing the address field before terminating")
-        sessionManager.selectedSession?.requestAddressFieldFocus()
+        workspaceStore.selectedSession?.requestAddressFieldFocus()
       }
       AppLog.app.info("tooling: requesting termination from inside the CEF message pump")
       NSApp.terminate(nil)
@@ -229,32 +221,22 @@ final class ApplicationRuntime: ObservableObject {
   /// True while any browser has not yet reached OnBeforeClose, including the
   /// browsers whose tab has already left the sidebar. The manager owns the one
   /// and only registry, so this cannot disagree with what termination closes.
-  var hasLiveBrowsers: Bool { sessionManager.hasLiveSessions }
+  var hasLiveBrowsers: Bool { workspaceStore.hasLiveSessions }
 
   /// Requests browser closure without waiting for it.
   ///
   /// Called for ordinary browser teardown; application termination uses
   /// Terminator, which also waits for OnBeforeClose.
   func requestBrowserClosure() {
-    guard sessionManager.hasLiveSessions else {
+    guard workspaceStore.hasLiveSessions else {
       AppLog.cef.info("no live Chromium browser to close")
       return
     }
     markShutdownPhase("T1")
     AppLog.cef.info(
-      "closing \(self.sessionManager.liveSessionCount, privacy: .public) Chromium browser(s); every live session at once"
+      "closing \(self.workspaceStore.liveSessionCount, privacy: .public) Chromium browser(s); every live session at once"
     )
-    sessionManager.requestCloseAllForTermination()
-  }
-
-  /// Releases every live browser's view (see BrowserBridge.releaseBrowserView).
-  ///
-  /// A safety net for the case where CEF never delivers DoClose; the normal path
-  /// is DoClose -> -[BrowserBridge completeClose].
-  func releaseBrowserViews() {
-    for session in sessionManager.liveSessions where !session.isClosed {
-      session.releaseBrowserView()
-    }
+    workspaceStore.requestCloseAllForTermination()
   }
 
   /// Shuts CEF down. Idempotent, and safe to call when CEF never started.
@@ -320,8 +302,6 @@ final class ApplicationRuntime: ObservableObject {
     private var didMarkFirstStep = false
     private var didRequestClosure = false
     private var pendingStep: Timer?
-    private var timeoutTimer: Timer?
-    private var deadline = Date.distantPast
 
     init(runtime: ApplicationRuntime, onFinished: @escaping () -> Void) {
       self.runtime = runtime
@@ -332,19 +312,12 @@ final class ApplicationRuntime: ObservableObject {
     func start() {
       guard !isRunning, !didFinish else { return }
       isRunning = true
-      deadline = Date().addingTimeInterval(ApplicationRuntime.browserShutdownTimeout)
       AppLog.app.info("termination: sequence starting")
       runtime.record("termination:started")
       runtime.startLivenessWatchdog()
       // Typed wake-up: the manager reports which session reached OnBeforeClose.
       // A close is never inferred from a lifecycle string.
       runtime.onLiveSessionDidClose = { [weak self] _ in self?.scheduleStep() }
-      let timer = Timer(timeInterval: ApplicationRuntime.browserShutdownTimeout,
-                        repeats: false) { [weak self] _ in
-        MainActor.assumeIsolated { self?.step() }
-      }
-      timeoutTimer = timer
-      RunLoop.main.add(timer, forMode: .default)
       // Close only after the original terminate(_:) and key event return.
       scheduleStep()
     }
@@ -382,44 +355,28 @@ final class ApplicationRuntime: ObservableObject {
         finish()
         return
       }
-      if Date() >= deadline {
-        // Explicit fallback policy: a browser that has not closed within the
-        // shutdown budget is force-closed (force_close was already requested)
-        // and reported, rather than leaving the application unable to quit.
-        AppLog.cef.error("termination: a browser did not close before the deadline")
-        runtime.record("termination:browser-close-timeout")
-        finish()
-        return
-      }
       // OnBeforeClose schedules the next step. Do not busy-poll while CEF
       // and AppKit finish releasing the browser views.
     }
 
     private func finish() {
       guard !didFinish else { return }
+      guard !runtime.hasLiveBrowsers else {
+        // A completion callback can never be inferred from a timer. If a
+        // future refactor reaches this method too early, wait for the typed
+        // close notification just as step() does.
+        scheduleStep()
+        return
+      }
       didFinish = true
       isRunning = false
       pendingStep?.invalidate()
       pendingStep = nil
-      timeoutTimer?.invalidate()
-      timeoutTimer = nil
       runtime.onLiveSessionDidClose = nil
 
-      // Never call CefShutdown() with a browser still open: Chromium asserts
-      // (EXC_BREAKPOINT/SIGTRAP) and the application dies on quit instead of
-      // exiting. That invariant is worth more than a tidy teardown, so if a
-      // browser could not be closed the process is allowed to exit after
-      // AppKit is told it may finish, and the condition is reported loudly
-      // instead of being hidden.
-      if runtime.hasLiveBrowsers {
-        AppLog.cef.error(
-          "termination: a browser is still open; skipping CefShutdown to avoid a Chromium abort")
-        runtime.record("termination:skipped-cef-shutdown(browser-still-open)")
-      } else {
-        AppLog.cef.info("termination: shutting CEF down")
-        runtime.shutdownCEF()
-        AppLog.app.info("termination: CEF is down; requesting final termination")
-      }
+      AppLog.cef.info("termination: shutting CEF down")
+      runtime.shutdownCEF()
+      AppLog.app.info("termination: CEF is down; requesting final termination")
       runtime.record("termination:finished")
       onFinished()
     }

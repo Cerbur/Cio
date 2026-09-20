@@ -2,37 +2,68 @@
 //  TabSidebarView.swift
 //  NativeBrowser
 //
-//  The temporary vertical tab sidebar (Milestone 3 section 18).
-//
-//  Deliberately plain: a globe placeholder, a title, a loading spinner, a close
-//  button and a "+" control. No favicon downloading, no drag reordering, no
-//  pinning, no Liquid Glass - those are later milestones (sections 18 and 36).
-//
-//  The rows are value views over BrowserTab and call back into the manager; they
-//  never own a BrowserSession, so a sidebar update can never create or destroy a
-//  Chromium browser (section 2).
+//  Plain Milestone 4 sidebar: all Spaces at the top, then the selected Space's
+//  ordered tabs. The rows are value views and all lifecycle work goes through
+//  BrowserWorkspaceStore.
 //
 
+import AppKit
 import SwiftUI
 
 struct TabSidebarView: View {
-  @ObservedObject var manager: BrowserSessionManager
+  @ObservedObject var workspace: BrowserWorkspaceStore
 
   var body: some View {
     VStack(spacing: 0) {
       ScrollView {
-        LazyVStack(spacing: 2) {
-          ForEach(manager.tabs) { tab in
-            TabRowView(
-              tab: tab,
-              isSelected: tab.id == manager.selectedTabID,
-              onSelect: { manager.selectTab(id: tab.id) },
-              onClose: { manager.closeTab(id: tab.id) }
-            )
+        VStack(alignment: .leading, spacing: 0) {
+          Text("Spaces")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+          ForEach(workspace.spaces) { space in
+            SpaceRowView(
+              space: space,
+              isSelected: space.id == workspace.selectedSpaceID,
+              workspace: workspace)
           }
+
+          Button {
+            workspace.createSpace()
+          } label: {
+            Label("New Space", systemImage: "plus")
+              .labelStyle(.titleAndIcon)
+          }
+          .buttonStyle(.borderless)
+          .help("New Space")
+          .accessibilityLabel("New Space")
+          .padding(.horizontal, 12)
+          .padding(.vertical, 7)
+
+          Divider()
+            .padding(.vertical, 5)
+
+          Text(workspace.selectedSpace?.name ?? "Tabs")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 4)
+
+          LazyVStack(spacing: 2) {
+            ForEach(workspace.tabs) { tab in
+              TabRowView(
+                tab: tab,
+                isSelected: tab.id == workspace.selectedTabID,
+                onSelect: { workspace.selectTab(id: tab.id) },
+                onClose: { workspace.closeTab(id: tab.id) })
+            }
+          }
+          .padding(.horizontal, 6)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 8)
+        .padding(.bottom, 8)
       }
       .frame(maxHeight: .infinity)
 
@@ -40,7 +71,7 @@ struct TabSidebarView: View {
 
       HStack(spacing: 6) {
         Button {
-          manager.createTab(url: nil)
+          workspace.createTab(url: nil)
         } label: {
           Label("New Tab", systemImage: "plus")
             .labelStyle(.titleAndIcon)
@@ -58,11 +89,61 @@ struct TabSidebarView: View {
   }
 }
 
-/// One sidebar row. A plain value view: it renders a BrowserTab and reports taps.
-///
-/// The close button is always drawn rather than revealed on hover: the row owns
-/// no view state at all, which keeps it a pure function of the tab it renders and
-/// keeps a sidebar update from being able to affect session ownership.
+private struct SpaceRowView: View {
+  let space: BrowserSpace
+  let isSelected: Bool
+  @ObservedObject var workspace: BrowserWorkspaceStore
+
+  var body: some View {
+    Button {
+      workspace.selectSpace(id: space.id)
+    } label: {
+      HStack(spacing: 7) {
+        Image(systemName: isSelected ? "square.3.layers.3d.top.filled" : "square.3.layers.3d")
+          .font(.system(size: 11))
+          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+          .frame(width: 14)
+        Text(space.name)
+          .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+          .lineLimit(1)
+          .truncationMode(.tail)
+        Spacer(minLength: 4)
+        Text("\(space.tabIDs.count)")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+      .background(
+        RoundedRectangle(cornerRadius: 6)
+          .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .contextMenu {
+      Button("Rename") {
+        promptRename()
+      }
+    }
+  }
+
+  private func promptRename() {
+    let alert = NSAlert()
+    alert.messageText = "Rename Space"
+    alert.informativeText = "Surrounding whitespace is trimmed."
+    let field = NSTextField(string: space.name)
+    field.frame.size = NSSize(width: 240, height: 24)
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Rename")
+    alert.addButton(withTitle: "Cancel")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    workspace.renameSpace(id: space.id, name: field.stringValue)
+  }
+}
+
+/// One sidebar tab row. It renders a BrowserTab and reports actions; it never
+/// owns a BrowserSession or decides which Space a tab belongs to.
 private struct TabRowView: View {
   let tab: BrowserTab
   let isSelected: Bool
@@ -71,8 +152,6 @@ private struct TabRowView: View {
 
   var body: some View {
     HStack(spacing: 6) {
-      // Placeholder favicon: favicon downloading is a later milestone, so every
-      // tab shows the same globe.
       Image(systemName: "globe")
         .font(.system(size: 11))
         .foregroundStyle(.secondary)

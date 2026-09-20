@@ -1,0 +1,386 @@
+//
+//  WorkspaceCollection.swift
+//  NativeBrowser
+//
+//  Pure workspace/domain state for Milestone 4. This file has no AppKit or CEF
+//  dependency and is the only source of truth for Spaces, tab membership,
+//  ordering, selection and recently-closed policy.
+//
+
+import Foundation
+
+/// Why a tab is being removed from the workspace.
+enum WorkspaceTabCloseReason: Equatable, Sendable {
+  case userClosed
+  case applicationTerminating
+}
+
+/// What happened to a tab's selection when it was removed.
+enum WorkspaceTabRemovalOutcome: Equatable, Sendable {
+  case unknownTab
+  case removedSelectionUnchanged
+  case removedSelectionMoved(to: UUID)
+  case removedLast
+}
+
+/// The result the runtime owner needs after a domain close.
+struct WorkspaceTabCloseResult: Equatable, Sendable {
+  var outcome: WorkspaceTabRemovalOutcome
+  var spaceID: UUID?
+  var snapshot: ClosedTabSnapshot?
+  var needsReplacementTab: Bool
+}
+
+/// All in-memory workspace relationships.
+///
+/// The collection owns one tab dictionary and one ordered list per Space. The
+/// dictionary is an identity index only; every ordered traversal goes through a
+/// Space's `tabIDs`, so Space and tab order are deterministic.
+struct WorkspaceCollection: Equatable, Sendable {
+  static let recentlyClosedLimit = 10
+
+  private(set) var spaces: [BrowserSpace]
+  private(set) var selectedSpaceID: UUID
+  private(set) var tabsByID: [UUID: BrowserTab]
+  private(set) var recentlyClosed: [ClosedTabSnapshot]
+
+  /// Creates the normal application starting state: one Main Space, one tab,
+  /// and both levels of selection pointing at that tab.
+  init(initialTab: BrowserTab, spaceName: String = "Main") {
+    let space = BrowserSpace(
+      name: Self.normalizedInitialSpaceName(spaceName),
+      tabIDs: [initialTab.id],
+      selectedTabID: initialTab.id)
+    self.spaces = [space]
+    self.selectedSpaceID = space.id
+    self.tabsByID = [initialTab.id: initialTab]
+    self.recentlyClosed = []
+    validateInvariants()
+  }
+
+  // MARK: - Derived selection and ordering
+
+  var selectedSpace: BrowserSpace? {
+    spaces.first { $0.id == selectedSpaceID }
+  }
+
+  /// The one authoritative effective selected tab for the whole application.
+  var selectedTabID: UUID? {
+    selectedSpace?.selectedTabID
+  }
+
+  var selectedTab: BrowserTab? {
+    selectedTabID.flatMap { tabsByID[$0] }
+  }
+
+  var spaceIDs: [UUID] { spaces.map(\.id) }
+
+  /// All visible tabs in deterministic Space order, then per-Space tab order.
+  var allTabs: [BrowserTab] {
+    spaces.flatMap { tabs(in: $0.id) }
+  }
+
+  var allTabIDs: [UUID] {
+    spaces.flatMap(\.tabIDs)
+  }
+
+  var currentTabs: [BrowserTab] {
+    tabs(in: selectedSpaceID)
+  }
+
+  var currentTabIDs: [UUID] {
+    selectedSpace?.tabIDs ?? []
+  }
+
+  var canReopenClosedTab: Bool { !recentlyClosed.isEmpty }
+
+  func space(withID id: UUID) -> BrowserSpace? {
+    spaces.first { $0.id == id }
+  }
+
+  func tab(withID id: UUID) -> BrowserTab? {
+    tabsByID[id]
+  }
+
+  func tabs(in spaceID: UUID) -> [BrowserTab] {
+    guard let space = space(withID: spaceID) else { return [] }
+    return space.tabIDs.compactMap { tabsByID[$0] }
+  }
+
+  func index(of tabID: UUID, in spaceID: UUID) -> Int? {
+    space(withID: spaceID)?.tabIDs.firstIndex(of: tabID)
+  }
+
+  func spaceID(containing tabID: UUID) -> UUID? {
+    spaces.first { $0.tabIDs.contains(tabID) }?.id
+  }
+
+  func index(of spaceID: UUID) -> Int? {
+    spaces.firstIndex { $0.id == spaceID }
+  }
+
+  // MARK: - Space lifecycle
+
+  /// Appends a new Space with exactly one selected tab.
+  @discardableResult
+  mutating func createSpace(
+    initialTab: BrowserTab,
+    name: String? = nil,
+    select: Bool = true
+  ) -> UUID? {
+    guard tabsByID[initialTab.id] == nil,
+      !spaces.contains(where: { $0.tabIDs.contains(initialTab.id) })
+    else { return nil }
+
+    let spaceID = UUID()
+    let defaultName = name ?? "Space \(spaces.count + 1)"
+    let space = BrowserSpace(
+      id: spaceID,
+      name: Self.safeSpaceName(defaultName, fallback: "Space \(spaces.count + 1)"),
+      tabIDs: [initialTab.id],
+      selectedTabID: initialTab.id)
+    spaces.append(space)
+    tabsByID[initialTab.id] = initialTab
+    if select {
+      selectedSpaceID = spaceID
+    }
+    validateInvariants()
+    return spaceID
+  }
+
+  /// Trims surrounding whitespace. An empty name is rejected, leaving the
+  /// existing name unchanged; this keeps the UI's current name a safe default.
+  @discardableResult
+  mutating func renameSpace(id: UUID, name: String) -> Bool {
+    guard let index = index(of: id) else { return false }
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    guard spaces[index].name != trimmed else { return false }
+    spaces[index].name = trimmed
+    validateInvariants()
+    return true
+  }
+
+  /// Selects an existing Space. Its own selected tab becomes effective
+  /// selection; the caller handles runtime focus and surface transition.
+  @discardableResult
+  mutating func selectSpace(id: UUID) -> Bool {
+    guard spaces.contains(where: { $0.id == id }) else { return false }
+    guard selectedSpaceID != id else { return false }
+    selectedSpaceID = id
+    validateInvariants()
+    return true
+  }
+
+  // MARK: - Tab lifecycle
+
+  /// Inserts a new tab into a specific Space. Selecting is allowed only for the
+  /// currently selected Space; callers that need a cross-Space selection must
+  /// explicitly select the Space first.
+  @discardableResult
+  mutating func insertTab(
+    _ tab: BrowserTab,
+    in spaceID: UUID,
+    at index: Int,
+    select: Bool
+  ) -> Bool {
+    guard tabsByID[tab.id] == nil,
+      let spaceIndex = self.index(of: spaceID)
+    else { return false }
+    guard !select || selectedSpaceID == spaceID else { return false }
+
+    let clamped = min(max(index, 0), spaces[spaceIndex].tabIDs.count)
+    spaces[spaceIndex].tabIDs.insert(tab.id, at: clamped)
+    tabsByID[tab.id] = tab
+    if select || spaces[spaceIndex].selectedTabID == nil {
+      spaces[spaceIndex].selectedTabID = tab.id
+    }
+    validateInvariants()
+    return true
+  }
+
+  @discardableResult
+  mutating func appendTab(_ tab: BrowserTab, in spaceID: UUID, select: Bool) -> Bool {
+    insertTab(tab, in: spaceID, at: space(withID: spaceID)?.tabIDs.count ?? 0, select: select)
+  }
+
+  /// Selects a tab only when it belongs to the currently selected Space.
+  @discardableResult
+  mutating func selectTab(id: UUID) -> Bool {
+    guard let spaceIndex = index(of: selectedSpaceID),
+      spaces[spaceIndex].tabIDs.contains(id)
+    else { return false }
+    guard spaces[spaceIndex].selectedTabID != id else { return false }
+    spaces[spaceIndex].selectedTabID = id
+    tabsByID[id]?.lastActivatedAt = Date()
+    validateInvariants()
+    return true
+  }
+
+  /// Explicitly selects a Space and a tab in one domain operation. This is the
+  /// only pure-model escape hatch for a foreign-Space tab.
+  @discardableResult
+  mutating func select(spaceID: UUID, tabID: UUID) -> Bool {
+    guard let spaceIndex = index(of: spaceID),
+      spaces[spaceIndex].tabIDs.contains(tabID)
+    else { return false }
+
+    let changed = selectedSpaceID != spaceID || spaces[spaceIndex].selectedTabID != tabID
+    selectedSpaceID = spaceID
+    spaces[spaceIndex].selectedTabID = tabID
+    tabsByID[tabID]?.lastActivatedAt = Date()
+    validateInvariants()
+    return changed
+  }
+
+  @discardableResult
+  mutating func selectCurrentTab(at index: Int) -> Bool {
+    guard currentTabIDs.indices.contains(index) else { return false }
+    return selectTab(id: currentTabIDs[index])
+  }
+
+  @discardableResult
+  mutating func selectLastCurrentTab() -> Bool {
+    guard let id = currentTabIDs.last else { return false }
+    return selectTab(id: id)
+  }
+
+  /// Applies metadata from the runtime to exactly one domain tab.
+  @discardableResult
+  mutating func refresh(_ tab: BrowserTab) -> Bool {
+    guard tabsByID[tab.id] != nil, tabsByID[tab.id] != tab else { return false }
+    tabsByID[tab.id] = tab
+    validateInvariants()
+    return true
+  }
+
+  /// Removes one tab from its owning Space and applies the selection policy
+  /// within that Space only.
+  @discardableResult
+  mutating func close(
+    _ tabID: UUID,
+    reason: WorkspaceTabCloseReason
+  ) -> WorkspaceTabCloseResult {
+    guard let spaceID = spaceID(containing: tabID),
+      let spaceIndex = index(of: spaceID),
+      let tabIndex = spaces[spaceIndex].tabIDs.firstIndex(of: tabID),
+      let tab = tabsByID[tabID]
+    else {
+      return WorkspaceTabCloseResult(
+        outcome: .unknownTab,
+        spaceID: nil,
+        snapshot: nil,
+        needsReplacementTab: false)
+    }
+
+    let wasSelected = spaces[spaceIndex].selectedTabID == tabID
+    var snapshot: ClosedTabSnapshot?
+    if reason == .userClosed, tab.url != nil {
+      snapshot = ClosedTabSnapshot(
+        url: tab.url,
+        title: tab.title,
+        spaceID: spaceID,
+        originalIndex: tabIndex)
+      recentlyClosed.append(snapshot!)
+      if recentlyClosed.count > Self.recentlyClosedLimit {
+        recentlyClosed.removeFirst(recentlyClosed.count - Self.recentlyClosedLimit)
+      }
+    }
+
+    spaces[spaceIndex].tabIDs.remove(at: tabIndex)
+    tabsByID.removeValue(forKey: tabID)
+
+    if spaces[spaceIndex].tabIDs.isEmpty {
+      spaces[spaceIndex].selectedTabID = nil
+      validateInvariants()
+      return WorkspaceTabCloseResult(
+        outcome: .removedLast,
+        spaceID: spaceID,
+        snapshot: snapshot,
+        needsReplacementTab: reason == .userClosed)
+    }
+
+    guard wasSelected else {
+      validateInvariants()
+      return WorkspaceTabCloseResult(
+        outcome: .removedSelectionUnchanged,
+        spaceID: spaceID,
+        snapshot: snapshot,
+        needsReplacementTab: false)
+    }
+
+    let nextIndex = tabIndex < spaces[spaceIndex].tabIDs.count
+      ? tabIndex
+      : spaces[spaceIndex].tabIDs.count - 1
+    let nextID = spaces[spaceIndex].tabIDs[nextIndex]
+    spaces[spaceIndex].selectedTabID = nextID
+    validateInvariants()
+    return WorkspaceTabCloseResult(
+      outcome: .removedSelectionMoved(to: nextID),
+      spaceID: spaceID,
+      snapshot: snapshot,
+      needsReplacementTab: false)
+  }
+
+  /// Inserts a fresh tab at a closed snapshot's original index, switches to
+  /// that Space, and selects the new tab. The runtime owner creates the new
+  /// session separately.
+  @discardableResult
+  mutating func restoreTab(
+    _ tab: BrowserTab,
+    from snapshot: ClosedTabSnapshot
+  ) -> Bool {
+    guard tabsByID[tab.id] == nil,
+      let spaceIndex = index(of: snapshot.spaceID)
+    else { return false }
+
+    let space = spaces[spaceIndex]
+    let index = min(max(snapshot.originalIndex, 0), space.tabIDs.count)
+    spaces[spaceIndex].tabIDs.insert(tab.id, at: index)
+    spaces[spaceIndex].selectedTabID = tab.id
+    tabsByID[tab.id] = tab
+    selectedSpaceID = snapshot.spaceID
+    validateInvariants()
+    return true
+  }
+
+  @discardableResult
+  mutating func popRecentlyClosed() -> ClosedTabSnapshot? {
+    recentlyClosed.popLast()
+  }
+
+  // MARK: - Invariants
+
+  /// Public for deterministic unit tests and diagnostics. It never consults a
+  /// runtime object and therefore cannot be made false by a CEF callback.
+  @discardableResult
+  func validateInvariants() -> Bool {
+    guard !spaces.isEmpty,
+      spaces.contains(where: { $0.id == selectedSpaceID })
+    else { return false }
+
+    var seen = Set<UUID>()
+    for space in spaces {
+      guard Set(space.tabIDs).count == space.tabIDs.count else { return false }
+      for tabID in space.tabIDs {
+        guard tabsByID[tabID] != nil, seen.insert(tabID).inserted else { return false }
+      }
+      if let selectedTabID = space.selectedTabID,
+        !space.tabIDs.contains(selectedTabID)
+      {
+        return false
+      }
+    }
+    guard seen == Set(tabsByID.keys) else { return false }
+    return true
+  }
+
+  private static func normalizedInitialSpaceName(_ name: String) -> String {
+    safeSpaceName(name, fallback: "Main")
+  }
+
+  private static func safeSpaceName(_ name: String, fallback: String) -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? fallback : trimmed
+  }
+}
