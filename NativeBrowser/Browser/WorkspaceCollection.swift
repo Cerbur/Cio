@@ -258,6 +258,9 @@ struct WorkspaceCollection: Equatable, Sendable {
     guard spaces.contains(where: { $0.id == id }) else { return false }
     guard selectedSpaceID != id else { return false }
     selectedSpaceID = id
+    if let selectedTabID = space(withID: id)?.selectedTabID {
+      tabsByID[selectedTabID]?.lastActivatedAt = Date()
+    }
     validateInvariants()
     return true
   }

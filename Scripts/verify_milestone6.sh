@@ -87,7 +87,8 @@ else
   rg -n "error:" "$WORK_DIR/build.log" | head -10 || true
 fi
 
-if [ -d "$TEST_BUNDLE" ]; then
+rm -f "$WORK_DIR/tests.log"
+if [ "$BUILD_CODE" -eq 0 ] && [ -d "$TEST_BUNDLE" ]; then
   xcrun xctest "$TEST_BUNDLE" > "$WORK_DIR/tests.log" 2>&1
   TEST_CODE=$?
   if [ "$TEST_CODE" -eq 0 ]; then
@@ -114,7 +115,10 @@ for CASE in \
   testDanglingSelectedSpaceIsRejected \
   testDanglingSelectedTabIsRejected \
   testInvalidURLIsRejected \
-  testMalformedJSONFailsSafely; do
+  testMalformedJSONFailsSafely \
+  testMissingSessionFileStartsFreshMainWorkspace \
+  testSessionStoreLoadsValidSnapshotAndRestoresIt \
+  testSessionStoreRejectsCorruptSnapshotsAndStartsFreshMainWorkspace; do
   check_contains "persistence test: $CASE" "${CASE}]' passed" "$WORK_DIR/tests.log"
 done
 
@@ -170,6 +174,8 @@ for CHECK in \
   startup-restored-domain-before-lazy-activation \
   startup-selected-tab-only-runtime \
   startup-selected-browser-ready \
+  startup-space-order-and-selections-restored \
+  startup-urls-and-titles-restored \
   lazy-tab-had-no-session-before-selection \
   lazy-tab-created-on-first-activation \
   switching-back-reuses-both-sessions \

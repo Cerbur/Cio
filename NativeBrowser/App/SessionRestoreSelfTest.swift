@@ -245,6 +245,32 @@ final class SessionRestoreSelfTest {
           }
         }
 
+        let namesAndOrderRestored = self.workspace.spaces.map(\.name)
+          == ["Main", "Work", "Personal"]
+        let selectionShapeRestored = self.workspace.spaces.count == 3
+          && self.workspace.spaces.enumerated().allSatisfy { index, space in
+            let tabs = self.workspace.tabs(in: space.id)
+            guard tabs.count == 2 else { return false }
+            let expectedSelectedTab = index == 0 ? tabs.first?.id : tabs.last?.id
+            return space.selectedTabID == expectedSelectedTab
+          }
+        let selectedSpaceAndTabRestored = self.workspace.selectedSpace?.name == "Work"
+          && self.workspace.selectedTab?.title == "Work secondary"
+        let secondaryTabs = self.workspace.allTabs.filter { $0.title.hasSuffix("secondary") }
+        let secondaryTitlesRestored = Set(secondaryTabs.map(\.title)) == Set([
+          "Main secondary", "Work secondary", "Personal secondary",
+        ])
+        let secondaryURLsRestored = Set(secondaryTabs.compactMap { $0.url?.path }) == Set([
+          "/main-secondary", "/work-secondary", "/personal-secondary",
+        ])
+        let initialURLsRestored = self.workspace.spaces.allSatisfy { space in
+          guard let url = self.workspace.tabs(in: space.id).first?.url else { return false }
+          return url.scheme == "https"
+            && url.host == "example.com"
+            && url.query?.hasPrefix("code=") == true
+            && url.fragment == "fragment-secret"
+        }
+
         let startupGraphOK = self.workspace.allTabs.count > 1
           && self.manager.liveSessionCount == 1
           && self.initialSelectedTabID == selectedTabID
@@ -260,6 +286,14 @@ final class SessionRestoreSelfTest {
           self.manager.liveSessionCount == 1
             && self.lazyTabID.map { self.manager.session(for: $0) == nil } == true,
           "selected=\(selectedTabID.uuidString) lazy=\(self.lazyTabID?.uuidString ?? "none")")
+        self.report(
+          "startup-space-order-and-selections-restored",
+          namesAndOrderRestored && selectionShapeRestored && selectedSpaceAndTabRestored,
+          "names-and-selection-shape=\(namesAndOrderRestored && selectionShapeRestored) selected-space=\(selectedSpaceAndTabRestored)")
+        self.report(
+          "startup-urls-and-titles-restored",
+          secondaryTitlesRestored && secondaryURLsRestored && initialURLsRestored,
+          "secondary-titles=\(secondaryTitlesRestored) secondary-urls=\(secondaryURLsRestored) initial-urls=\(initialURLsRestored)")
         print(
           "session-restore-self-test: restored graph=\(self.graphDescription()) selected-space=\(self.workspace.selectedSpaceID.uuidString)")
       },
@@ -287,13 +321,16 @@ final class SessionRestoreSelfTest {
       },
       advance: {
         guard let lazyTabID = self.lazyTabID,
+          let lazyTabURL = self.lazyTabURL,
           let session = self.manager.session(for: lazyTabID)
         else { return false }
         self.lazyTabSession = session
         return self.workspace.selectedTabID == lazyTabID
           && session.hasBrowser
           && session.browserCreationCount == 1
-          && (self.lazyTabURL == nil || session.initialURL == self.lazyTabURL)
+          && session.initialURL == lazyTabURL
+          && session.hasFinishedFirstLoad
+          && session.url == lazyTabURL
       },
       finish: { completed in
         self.report(
@@ -354,6 +391,8 @@ final class SessionRestoreSelfTest {
           && self.workspace.selectedTabID == selectedTabID
           && session.hasBrowser
           && session.browserCreationCount == 1
+          && session.hasFinishedFirstLoad
+          && session.url == self.workspace.tab(withID: selectedTabID)?.url
           && self.lazySpaceOtherTabID.map { self.manager.session(for: $0) == nil } == true
       },
       finish: { completed in

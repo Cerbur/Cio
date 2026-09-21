@@ -99,15 +99,4 @@ final class SessionStore {
     }
   }
 
-  @discardableResult
-  func removeSnapshot() -> Bool {
-    guard isEnabled, fileManager.fileExists(atPath: sessionFileURL.path) else { return true }
-    do {
-      try fileManager.removeItem(at: sessionFileURL)
-      return true
-    } catch {
-      AppLog.session.error("workspace session snapshot removal failed")
-      return false
-    }
-  }
 }

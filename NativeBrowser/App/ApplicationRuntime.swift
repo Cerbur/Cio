@@ -120,6 +120,7 @@ final class ApplicationRuntime: ObservableObject {
   /// A typed call rather than a string comparison inside record(_:): the tooling
   /// hooks wait on the flag, not on the trace.
   func noteMainWindowAppeared() {
+    guard !didAppearInWindow else { return }
     didAppearInWindow = true
     record("swiftui:main-window-appeared")
     // AppKit may choose the first native NSTextField as the initial responder

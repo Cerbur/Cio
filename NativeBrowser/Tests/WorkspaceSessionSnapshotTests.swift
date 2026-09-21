@@ -42,6 +42,36 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     return workspace
   }
 
+  private func temporarySessionStore() throws -> (store: SessionStore, directory: URL) {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("NativeBrowser-session-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: directory,
+      withIntermediateDirectories: true)
+    return (
+      SessionStore(dataDirectory: directory, environment: [:], arguments: []),
+      directory)
+  }
+
+  private func encodedSnapshot(_ snapshot: WorkspaceSessionSnapshot) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    return try encoder.encode(snapshot)
+  }
+
+  @MainActor
+  private func assertFreshMainWorkspace(
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let workspace = WorkspaceCollection(
+      initialTab: BrowserTab(url: URL(string: "https://www.google.com")!))
+    XCTAssertEqual(workspace.spaces.count, 1, file: file, line: line)
+    XCTAssertEqual(workspace.spaces.first?.name, "Main", file: file, line: line)
+    XCTAssertEqual(workspace.allTabs.count, 1, file: file, line: line)
+    XCTAssertNotNil(workspace.selectedTabID, file: file, line: line)
+  }
+
   func testFreshWorkspaceSnapshotRoundTrips() throws {
     let original = populatedWorkspace()
     let snapshot = WorkspaceSessionSnapshot(workspace: original)
@@ -231,5 +261,107 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
       try JSONDecoder().decode(
         WorkspaceSessionSnapshot.self,
         from: Data("{ definitely-not-json".utf8)))
+  }
+
+  @MainActor
+  func testMissingSessionFileStartsFreshMainWorkspace() throws {
+    let (store, directory) = try temporarySessionStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    XCTAssertNil(store.loadSnapshot())
+    assertFreshMainWorkspace()
+  }
+
+  @MainActor
+  func testSessionStoreLoadsValidSnapshotAndRestoresIt() throws {
+    let (store, directory) = try temporarySessionStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let snapshot = WorkspaceSessionSnapshot(workspace: populatedWorkspace())
+
+    XCTAssertTrue(store.saveSnapshot(snapshot))
+    let loaded = try XCTUnwrap(store.loadSnapshot())
+    XCTAssertEqual(loaded.schemaVersion, snapshot.schemaVersion)
+    XCTAssertEqual(loaded.selectedSpaceID, snapshot.selectedSpaceID)
+    XCTAssertEqual(loaded.spaces.map(\.id), snapshot.spaces.map(\.id))
+    XCTAssertEqual(loaded.spaces.map(\.name), snapshot.spaces.map(\.name))
+    XCTAssertEqual(
+      loaded.spaces.flatMap(\.tabs).map(\.id),
+      snapshot.spaces.flatMap(\.tabs).map(\.id))
+    XCTAssertEqual(
+      loaded.spaces.flatMap(\.tabs).map(\.title),
+      snapshot.spaces.flatMap(\.tabs).map(\.title))
+    XCTAssertEqual(
+      loaded.spaces.flatMap(\.tabs).map(\.url),
+      snapshot.spaces.flatMap(\.tabs).map(\.url))
+    XCTAssertEqual(
+      loaded.spaces.flatMap(\.tabs).map { Int($0.createdAt.timeIntervalSince1970) },
+      snapshot.spaces.flatMap(\.tabs).map { Int($0.createdAt.timeIntervalSince1970) })
+    XCTAssertEqual(
+      loaded.spaces.flatMap(\.tabs).map { Int($0.lastActivatedAt.timeIntervalSince1970) },
+      snapshot.spaces.flatMap(\.tabs).map { Int($0.lastActivatedAt.timeIntervalSince1970) })
+    let workspace = try WorkspaceCollection(restoring: loaded)
+    XCTAssertEqual(WorkspaceSessionSnapshot(workspace: workspace), loaded)
+  }
+
+  @MainActor
+  func testSessionStoreRejectsCorruptSnapshotsAndStartsFreshMainWorkspace() throws {
+    let spaceID = UUID()
+    let otherSpaceID = UUID()
+    let selectedTabID = UUID()
+    let otherTabID = UUID()
+    let baseTab = PersistedTab(
+      id: selectedTabID,
+      title: "Main",
+      url: firstURL.absoluteString,
+      createdAt: Date(timeIntervalSince1970: 1),
+      lastActivatedAt: Date(timeIntervalSince1970: 2))
+    let otherTab = PersistedTab(
+      id: otherTabID,
+      title: "Other",
+      url: "https://example.com/other",
+      createdAt: Date(timeIntervalSince1970: 3),
+      lastActivatedAt: Date(timeIntervalSince1970: 4))
+    let validSpace = PersistedSpace(
+      id: spaceID,
+      name: "Main",
+      selectedTabID: selectedTabID,
+      tabs: [baseTab])
+
+    let corruptFiles: [(String, Data)] = [
+      ("malformed JSON", Data("{ definitely-not-json".utf8)),
+      ("unsupported schema", try encodedSnapshot(WorkspaceSessionSnapshot(
+        schemaVersion: 999,
+        selectedSpaceID: spaceID,
+        spaces: [validSpace]))),
+      ("duplicate tab IDs", try encodedSnapshot(WorkspaceSessionSnapshot(
+        selectedSpaceID: spaceID,
+        spaces: [
+          validSpace,
+          PersistedSpace(
+            id: otherSpaceID,
+            name: "Other",
+            selectedTabID: selectedTabID,
+            tabs: [otherTab, baseTab]),
+        ]))),
+      ("missing selected Space", try encodedSnapshot(WorkspaceSessionSnapshot(
+        selectedSpaceID: UUID(),
+        spaces: [validSpace]))),
+      ("selected tab outside Space", try encodedSnapshot(WorkspaceSessionSnapshot(
+        selectedSpaceID: spaceID,
+        spaces: [PersistedSpace(
+          id: spaceID,
+          name: "Main",
+          selectedTabID: otherTabID,
+          tabs: [baseTab])]))),
+    ]
+
+    for (label, data) in corruptFiles {
+      let (store, directory) = try temporarySessionStore()
+      defer { try? FileManager.default.removeItem(at: directory) }
+      try data.write(to: store.sessionFileURL, options: [.atomic])
+
+      XCTAssertNil(store.loadSnapshot(), label)
+      assertFreshMainWorkspace(file: #filePath, line: #line)
+    }
   }
 }
