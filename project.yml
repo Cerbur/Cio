@@ -107,6 +107,7 @@ targets:
       - path: NativeBrowser/Browser/BrowserTab.swift
       - path: NativeBrowser/Browser/BrowserSpace.swift
       - path: NativeBrowser/Browser/WorkspaceCollection.swift
+      - path: NativeBrowser/Browser/WorkspaceSessionSnapshot.swift
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.

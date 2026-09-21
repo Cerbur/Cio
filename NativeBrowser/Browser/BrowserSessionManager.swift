@@ -97,7 +97,11 @@ final class BrowserSessionManager: ObservableObject {
   /// Creates exactly one runtime for a domain tab identity. The manager does
   /// not store the tab or decide where it belongs; the workspace store does.
   @discardableResult
-  func createSession(for tabID: UUID, initialURL: URL) -> BrowserSession? {
+  func createSession(
+    for tabID: UUID,
+    initialURL: URL,
+    initialTitle: String = ""
+  ) -> BrowserSession? {
     guard !isTerminating else {
       AppLog.session.error("refusing to create a session while the application is terminating")
       return nil
@@ -107,7 +111,10 @@ final class BrowserSessionManager: ObservableObject {
       return sessions[tabID]
     }
 
-    let session = BrowserSession(tabID: tabID, initialURL: initialURL)
+    let session = BrowserSession(
+      tabID: tabID,
+      initialURL: initialURL,
+      initialTitle: initialTitle)
     session.onLifecycleEvent = { [weak self] event in
       self?.onLifecycleEvent?(event)
     }

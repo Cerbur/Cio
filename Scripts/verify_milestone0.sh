@@ -26,6 +26,9 @@ FRAMEWORKS="$APP/Contents/Frameworks"
 # access on launch and blocks CEF's main thread until it is answered.
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+# M0 verifies CEF lifecycle only. Keep the new M6 workspace snapshot out of
+# this regression run even when the caller reuses DATA_DIR.
+export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }

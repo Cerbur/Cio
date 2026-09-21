@@ -19,20 +19,32 @@ import Foundation
 final class BrowserWorkspaceStore: ObservableObject {
   let homeURL: URL
   let sessionManager: BrowserSessionManager
+  let sessionStore: SessionStore
 
   private var workspace: WorkspaceCollection
+  private var lastSavedSnapshot: WorkspaceSessionSnapshot?
 
   /// Diagnostics and verification hooks. The store forwards runtime lifecycle
   /// events but remains the owner of all domain transitions.
   var onLifecycleEvent: ((String) -> Void)?
 
-  init(initialTabURL: URL) {
+  init(initialTabURL: URL, sessionStore: SessionStore = SessionStore()) {
     homeURL = initialTabURL
+    self.sessionStore = sessionStore
     let manager = BrowserSessionManager()
     sessionManager = manager
 
-    let initialTab = BrowserTab(url: initialTabURL)
-    workspace = WorkspaceCollection(initialTab: initialTab)
+    let loadedSnapshot = sessionStore.loadSnapshot()
+    if let loadedSnapshot, let restored = try? WorkspaceCollection(restoring: loadedSnapshot) {
+      workspace = restored
+      lastSavedSnapshot = loadedSnapshot
+      AppLog.session.info(
+        "workspace restored spaces=\(restored.spaces.count, privacy: .public) tabs=\(restored.allTabs.count, privacy: .public)")
+    } else {
+      let initialTab = BrowserTab(url: initialTabURL)
+      workspace = WorkspaceCollection(initialTab: initialTab)
+      lastSavedSnapshot = nil
+    }
 
     manager.onLifecycleEvent = { [weak self] event in
       self?.onLifecycleEvent?(event)
@@ -47,9 +59,14 @@ final class BrowserWorkspaceStore: ObservableObject {
       self?.openPopupInNewTab(url: url, from: session)
     }
 
-    // The initial runtime exists before the first surface publication. The
-    // browser itself waits until its stable container is in a window.
-    _ = manager.createSession(for: initialTab.id, initialURL: initialTabURL)
+    // Only the effective selected tab gets a runtime during startup. Restored
+    // background tabs remain domain-only until the user activates them.
+    if let selectedTab = workspace.selectedTab {
+      _ = manager.createSession(
+        for: selectedTab.id,
+        initialURL: selectedTab.url ?? initialTabURL,
+        initialTitle: selectedTab.title)
+    }
     publishWorkspace()
   }
 
@@ -103,17 +120,30 @@ final class BrowserWorkspaceStore: ObservableObject {
     sessionManager.session(for: tabID)
   }
 
+  /// The durable projection used by persistence and the process-level restore
+  /// verifier. It deliberately cannot contain runtime-only state.
+  var sessionSnapshot: WorkspaceSessionSnapshot {
+    WorkspaceSessionSnapshot(workspace: workspace)
+  }
+
+  /// Synchronously flushes the current durable domain state. This is called
+  /// before application shutdown starts closing Chromium, and again is safe to
+  /// call when no live sessions exist.
+  func flushSessionPersistence() {
+    persistIfNeeded()
+  }
+
   // MARK: - Space lifecycle
 
   /// Creates and selects a Space with one fresh tab and one fresh runtime.
   @discardableResult
-  func createSpace() -> UUID? {
+  func createSpace(name: String? = nil) -> UUID? {
     guard !isTerminating else { return nil }
 
     let tab = BrowserTab(url: homeURL)
     var createdSpaceID: UUID?
     withSelectionTransition {
-      createdSpaceID = workspace.createSpace(initialTab: tab, select: true)
+      createdSpaceID = workspace.createSpace(initialTab: tab, name: name, select: true)
       guard createdSpaceID != nil else { return }
       _ = sessionManager.createSession(for: tab.id, initialURL: homeURL)
     }
@@ -133,6 +163,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     let changed = workspace.renameSpace(id: id, name: name)
     if changed {
       publishWorkspace()
+      persistIfNeeded()
       emit("space:renamed(\(id.uuidString))")
     }
     return changed
@@ -145,6 +176,9 @@ final class BrowserWorkspaceStore: ObservableObject {
     else { return }
     withSelectionTransition {
       workspace.selectSpace(id: id)
+      if let selectedTab = workspace.selectedTab {
+        _ = ensureSession(for: selectedTab)
+      }
     }
     emit("space:selected(\(id.uuidString))")
   }
@@ -153,26 +187,29 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   /// Creates a tab in the currently selected Space.
   @discardableResult
-  func createTab(url: URL? = nil, select: Bool = true) -> UUID? {
-    createTab(url: url, in: workspace.selectedSpaceID, select: select)
+  func createTab(url: URL? = nil, select: Bool = true, title: String = "") -> UUID? {
+    createTab(url: url, in: workspace.selectedSpaceID, select: select, title: title)
   }
 
   /// Creates a tab in an explicit Space. A background-space popup uses
   /// `select: false`, so it cannot switch Spaces or take keyboard focus.
   @discardableResult
-  func createTab(url: URL?, in spaceID: UUID, select: Bool) -> UUID? {
+  func createTab(url: URL?, in spaceID: UUID, select: Bool, title: String = "") -> UUID? {
     guard !isTerminating,
       workspace.space(withID: spaceID) != nil,
       !select || workspace.selectedSpaceID == spaceID
     else { return nil }
 
-    let tab = BrowserTab(url: url)
+    let tab = BrowserTab(title: title, url: url)
     let initialURL = url ?? homeURL
     var inserted = false
     withSelectionTransition {
       inserted = workspace.appendTab(tab, in: spaceID, select: select)
       guard inserted else { return }
-      _ = sessionManager.createSession(for: tab.id, initialURL: initialURL)
+      _ = sessionManager.createSession(
+        for: tab.id,
+        initialURL: initialURL,
+        initialTitle: title)
     }
     guard inserted else { return nil }
     logTabCreated(tab.id, url: initialURL)
@@ -181,12 +218,14 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   func selectTab(id: UUID) {
     guard workspace.spaceID(containing: id) == workspace.selectedSpaceID,
-      sessionManager.session(for: id) != nil,
       workspace.selectedTabID != id
     else { return }
 
     withSelectionTransition {
       workspace.selectTab(id: id)
+      if let selectedTab = workspace.tab(withID: id) {
+        _ = ensureSession(for: selectedTab)
+      }
     }
     emit("tab:selected")
     AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
@@ -210,10 +249,10 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// Removes a tab from its owning Space, requests its runtime close, and
   /// creates a replacement in that same Space when it was the last user tab.
   func closeTab(id: UUID) {
-    guard !isTerminating, sessionManager.session(for: id) != nil else { return }
+    guard !isTerminating, workspace.tab(withID: id) != nil else { return }
 
     var result: WorkspaceTabCloseResult?
-    var shouldRequestRuntimeClose = false
+    let hadRuntime = sessionManager.session(for: id) != nil
     withSelectionTransition {
       let closeResult = workspace.close(id, reason: .userClosed)
       guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
@@ -224,20 +263,27 @@ final class BrowserWorkspaceStore: ObservableObject {
       // The selection transition must hand keyboard ownership to the incoming
       // tab before CEF is asked to tear down the outgoing runtime. The manager
       // retains that runtime after this closure until OnBeforeClose.
-      shouldRequestRuntimeClose = true
-
       if closeResult.needsReplacementTab {
         let replacement = BrowserTab()
         let inserted = workspace.appendTab(replacement, in: spaceID, select: false)
         if inserted {
-          _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
+          // The active Space keeps its existing invariant: a last-tab close
+          // immediately has a visible replacement. An inactive Space may
+          // leave that replacement domain-only until the Space is selected.
+          if workspace.selectedSpaceID == spaceID {
+            _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
+          }
           logTabCreated(replacement.id, url: homeURL)
         }
+      }
+
+      if let selectedTab = workspace.selectedTab {
+        _ = ensureSession(for: selectedTab)
       }
     }
 
     guard let result, result.outcome != .unknownTab else { return }
-    if shouldRequestRuntimeClose {
+    if hadRuntime {
       sessionManager.requestClose(tabID: id)
     }
     AppLog.session.info(
@@ -261,7 +307,10 @@ final class BrowserWorkspaceStore: ObservableObject {
     withSelectionTransition {
       restored = workspace.restoreTab(tab, from: snapshot)
       guard restored else { return }
-      _ = sessionManager.createSession(for: tab.id, initialURL: snapshot.url ?? homeURL)
+      _ = sessionManager.createSession(
+        for: tab.id,
+        initialURL: snapshot.url ?? homeURL,
+        initialTitle: snapshot.title)
     }
     guard restored else { return nil }
 
@@ -303,8 +352,10 @@ final class BrowserWorkspaceStore: ObservableObject {
     let outgoing = selectedSession
     let previousSelection = workspace.selectedTabID
     let pageHeldKeyboard = outgoing?.ownsPageKeyboard ?? false
+    let beforeSnapshot = sessionSnapshot
 
     let result = change()
+    persistIfNeeded(comparedTo: beforeSnapshot)
 
     guard workspace.selectedTabID != previousSelection else {
       publishWorkspace()
@@ -333,10 +384,16 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   private func refreshTabMetadata(from session: BrowserSession) {
     guard var tab = workspace.tab(withID: session.tabID) else { return }
+    let beforeSnapshot = sessionSnapshot
     if !session.title.isEmpty { tab.title = session.title }
     if session.url != nil { tab.url = session.url }
     tab.isLoading = session.isLoading
     guard workspace.refresh(tab) else { return }
+    // Loading state is intentionally part of the live BrowserTab projection so
+    // the sidebar can render progress, but it is absent from the snapshot. A
+    // URL/title callback therefore persists; a transient loading callback does
+    // not create a write storm.
+    persistIfNeeded(comparedTo: beforeSnapshot)
     objectWillChange.send()
   }
 
@@ -359,6 +416,34 @@ final class BrowserWorkspaceStore: ObservableObject {
   private func publishWorkspace() {
     objectWillChange.send()
     sessionManager.setSelectedSurfaceTabID(workspace.selectedTabID)
+  }
+
+  /// Ensures exactly one runtime for a selected domain tab. This is the only
+  /// path used by lazy restore activation; no placeholder BrowserSession is
+  /// created for an unselected restored tab.
+  @discardableResult
+  private func ensureSession(for tab: BrowserTab) -> BrowserSession? {
+    if let existing = sessionManager.session(for: tab.id) {
+      return existing
+    }
+    return sessionManager.createSession(
+      for: tab.id,
+      initialURL: tab.url ?? homeURL,
+      initialTitle: tab.title)
+  }
+
+  /// Saves only when the durable projection changed since the last successful
+  /// write. The synchronous save is small and is also repeated at termination
+  /// so the final committed URL/title cannot be lost behind a CEF callback.
+  private func persistIfNeeded(comparedTo previous: WorkspaceSessionSnapshot? = nil) {
+    let current = sessionSnapshot
+    if let previous, previous == current {
+      return
+    }
+    guard sessionStore.isEnabled, current != lastSavedSnapshot else { return }
+    if sessionStore.saveSnapshot(current) {
+      lastSavedSnapshot = current
+    }
   }
 
   private func logTabCreated(_ tabID: UUID, url: URL) {

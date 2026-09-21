@@ -58,6 +58,96 @@ struct WorkspaceCollection: Equatable, Sendable {
     validateInvariants()
   }
 
+  /// Reconstructs the pure domain graph from a validated durable snapshot.
+  ///
+  /// Validation happens before any state is assigned to `self`, so callers get
+  /// an all-or-fresh restore decision rather than a partially repaired graph.
+  /// Runtime-only fields are intentionally reset: a relaunch starts with no
+  /// loading state, CEF history or recently-closed stack.
+  init(restoring snapshot: WorkspaceSessionSnapshot) throws {
+    guard snapshot.schemaVersion == WorkspaceSessionSnapshot.currentSchemaVersion else {
+      throw WorkspaceSessionSnapshotError.unsupportedSchema
+    }
+    guard !snapshot.spaces.isEmpty else {
+      throw WorkspaceSessionSnapshotError.noSpaces
+    }
+
+    var restoredSpaces: [BrowserSpace] = []
+    var restoredTabs: [UUID: BrowserTab] = [:]
+    var spaceIDs = Set<UUID>()
+    var tabIDs = Set<UUID>()
+
+    for persistedSpace in snapshot.spaces {
+      guard spaceIDs.insert(persistedSpace.id).inserted else {
+        throw WorkspaceSessionSnapshotError.duplicateSpaceID
+      }
+
+      let name = persistedSpace.name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !name.isEmpty else {
+        throw WorkspaceSessionSnapshotError.emptySpaceName
+      }
+      guard !persistedSpace.tabs.isEmpty else {
+        throw WorkspaceSessionSnapshotError.emptySpace
+      }
+      guard let selectedTabID = persistedSpace.selectedTabID else {
+        throw WorkspaceSessionSnapshotError.missingSelectedTab
+      }
+
+      var orderedTabIDs: [UUID] = []
+      orderedTabIDs.reserveCapacity(persistedSpace.tabs.count)
+      for persistedTab in persistedSpace.tabs {
+        guard tabIDs.insert(persistedTab.id).inserted else {
+          throw WorkspaceSessionSnapshotError.duplicateTabID
+        }
+
+        let url: URL?
+        if let rawURL = persistedTab.url {
+          guard !rawURL.isEmpty, let decodedURL = URL(string: rawURL), decodedURL.scheme != nil else {
+            throw WorkspaceSessionSnapshotError.invalidURL
+          }
+          url = decodedURL
+        } else {
+          url = nil
+        }
+
+        orderedTabIDs.append(persistedTab.id)
+        restoredTabs[persistedTab.id] = BrowserTab(
+          id: persistedTab.id,
+          title: persistedTab.title,
+          url: url,
+          isLoading: false,
+          createdAt: persistedTab.createdAt,
+          lastActivatedAt: persistedTab.lastActivatedAt)
+      }
+
+      guard orderedTabIDs.contains(selectedTabID) else {
+        throw WorkspaceSessionSnapshotError.selectedTabNotInSpace
+      }
+      restoredSpaces.append(
+        BrowserSpace(
+          id: persistedSpace.id,
+          name: name,
+          tabIDs: orderedTabIDs,
+          selectedTabID: selectedTabID))
+    }
+
+    guard spaceIDs.contains(snapshot.selectedSpaceID) else {
+      throw WorkspaceSessionSnapshotError.missingSelectedSpace
+    }
+
+    self.spaces = restoredSpaces
+    self.selectedSpaceID = snapshot.selectedSpaceID
+    self.tabsByID = restoredTabs
+    self.recentlyClosed = []
+
+    guard validateInvariants() else {
+      // The explicit checks above cover the serialized graph. Keep this final
+      // assertion as a defense against future model changes that add another
+      // invariant without updating the restore path.
+      throw WorkspaceSessionSnapshotError.selectedTabNotInSpace
+    }
+  }
+
   // MARK: - Derived selection and ordering
 
   var selectedSpace: BrowserSpace? {

@@ -141,11 +141,15 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private var bridge: BrowserBridge?
   private weak var containerView: ChromiumContainerView?
   private var didStartLoading = false
+  private var didReceiveMainFrameURL = false
 
-  init(tabID: UUID, initialURL: URL) {
+  init(tabID: UUID, initialURL: URL, initialTitle: String = "") {
     self.tabID = tabID
     self.initialURL = initialURL
+    self.title = initialTitle
+    self.url = initialURL
     super.init()
+    addressField.applyBrowserURL(initialURL)
   }
 
   // MARK: - Navigation state
@@ -478,8 +482,13 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
     let value = URL(string: url)
     // Chromium repeats the main-frame URL on several events; only act when it
-    // actually changed so the log and the address field stay quiet.
-    guard value != self.url else { return }
+    // actually changed so the log and the address field stay quiet. The first
+    // callback is still meaningful when a restored session was pre-populated
+    // with the same URL before CEF existed: it confirms the live main frame and
+    // preserves the Milestone 2 lifecycle event.
+    let isFirstMainFrameURL = !didReceiveMainFrameURL
+    didReceiveMainFrameURL = true
+    guard isFirstMainFrameURL || value != self.url else { return }
     self.url = value
     mainFrameURLChangeCount += 1
     addressField.applyBrowserURL(value)

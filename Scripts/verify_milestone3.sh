@@ -33,6 +33,8 @@ EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 # their own profile. Override with DATA_DIR=... if needed.
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+# M3 is an in-memory tabs regression; isolate it from M6 session restore.
+export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }

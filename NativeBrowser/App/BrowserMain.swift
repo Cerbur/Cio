@@ -56,6 +56,11 @@ enum BrowserMain {
       // Milestone 2 integration check. The result is this process's exit code.
       exit(NavigationSelfTest.run(runtime: runtime))
     }
+    if SessionRestoreSelfTest.installIfRequested(runtime: runtime) {
+      NativeBrowserApp.main()
+      AppLog.app.info("the NSApplication run loop returned")
+      return
+    }
     // Milestone 4 multi-Space integration check. It is installed as a driver that
     // runs inside the real application - real window, real surface host, real
     // NSApplication run loop - because that is the configuration in which
@@ -91,6 +96,7 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--navigation-self-test")
       || CommandLine.arguments.contains("--tabs-self-test")
       || CommandLine.arguments.contains("--spaces-self-test")
+      || CommandLine.arguments.contains { $0.hasPrefix("--session-restore-self-test=") }
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }

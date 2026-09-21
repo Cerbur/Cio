@@ -25,6 +25,8 @@ EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 # access on launch and blocks CEF's main thread until it is answered.
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+# M1 verifies one-tab rendering/lifecycle, not workspace restore.
+export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }

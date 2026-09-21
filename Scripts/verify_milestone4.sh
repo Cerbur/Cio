@@ -25,6 +25,8 @@ APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.ap
 EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+# M4 verifies in-memory Spaces and CEF lifecycle; do not load/save M6 state.
+export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }

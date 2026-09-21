@@ -2408,9 +2408,9 @@ later milestone; the invariant is enforced here.
 - **No tab suspension.** Every open tab in every Space keeps a live
   `BrowserSession` and a live `CefBrowser`; only the selected tab's container is
   visible.
-- **No persistence or session restore.** Space names, membership, ordering,
-  selection and the recently-closed stack are in memory only and are gone after
-  relaunch.
+- **No persistence or session restore.** This was the Milestone 4 state and is
+  superseded by the Milestone 6 implementation record in section 65. The
+  recently-closed stack remains in memory only.
 - **No Space deletion.** Milestone 4 supports create, rename and select; it does
   not expose deletion.
 - **Popup semantics are minimal.** Only ordinary `target=_blank` / `window.open`
@@ -2514,3 +2514,154 @@ limitations are intentional: placeholder globe icons remain in place of fetched
 favicons, there is no sidebar collapse control, and the browser surface keeps a
 square native rendering boundary where clipping could risk CEF windowed
 rendering.
+
+## 65. Milestone 6 implementation record: session persistence and lazy restore
+
+Milestone 6 keeps the accepted ownership graph and adds a durable projection
+around the domain owner:
+
+```text
+ApplicationRuntime
+  -> SessionStore                         file IO only
+  -> BrowserWorkspaceStore
+       -> WorkspaceCollection             durable domain + in-memory close stack
+       -> BrowserSessionManager           live Chromium runtimes only
+```
+
+`BrowserTab` and `BrowserSpace` remain CEF-free. A restored tab may now be
+domain-only: it has an identity, title, committed URL and timestamps but no
+`BrowserSession`, `ChromiumContainerView`, `BrowserBridge` or `CefBrowser`.
+Instantiated tabs have the existing runtime graph. A session requested to close
+stays in the manager until typed `OnBeforeClose`, even if its domain tab has
+already been removed.
+
+### Snapshot schema and validation
+
+`WorkspaceSessionSnapshot` is an explicit Codable schema with `schemaVersion: 1`:
+
+```text
+WorkspaceSessionSnapshot
+  schemaVersion
+  selectedSpaceID
+  spaces[]
+
+PersistedSpace
+  id
+  name
+  selectedTabID
+  tabs[]
+
+PersistedTab
+  id
+  title
+  url                 exact URL string, or null
+  createdAt
+  lastActivatedAt
+```
+
+The URL is stored as the complete committed URL string, including path, query
+and fragment. `WorkspaceCollection(restoring:)` validates the schema version,
+non-empty Space graph, unique Space IDs, globally unique tab IDs, selected
+Space membership, selected-tab membership, non-empty Space names, non-empty
+Spaces, and URL decoding. It accepts a snapshot only as a whole. Malformed,
+unsupported or inconsistent data is ignored and the application starts with
+the normal Main + home tab workspace; no raw JSON is logged.
+
+Restore deliberately reconstructs `isLoading` as false and clears the
+recently-closed stack. It does not restore CEF history, back/forward state, form
+state, scroll position, focus, address-field edit text or any Chromium object.
+Session restore preserves the same Space and tab UUIDs. `⌘⇧T` remains a
+different operation: it creates a new tab identity from the in-memory recently
+closed stack.
+
+### Storage and triggers
+
+`SessionStore` writes `session-v1.json` under
+`~/Library/Application Support/NativeBrowser/` by default. When
+`NATIVEBROWSER_DATA_DIR` is set, the file is written directly beneath that
+directory, keeping verification state out of the user's normal profile.
+Writes create the parent directory, encode sorted pretty JSON, use Foundation's
+atomic data-write option and attempt restrictive `0600` permissions. Read,
+decode, validation and write failures log only a generic/sanitized diagnostic
+and never crash the browser.
+
+`BrowserWorkspaceStore` compares the durable snapshot with the last successful
+write. It persists Space creation/rename/selection, tab creation/selection/
+close/reopen, replacement-tab creation, and committed URL/title/timestamp
+changes. Loading progress, loading flags and back/forward changes are omitted
+from the snapshot, so transient CEF callbacks do not cause repeated writes.
+`--disable-session-persistence` and
+`NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1` provide an explicit opt-out for
+older milestone verifiers.
+
+### Startup and lazy activation
+
+The normal startup sequence is:
+
+```text
+SessionStore.loadSnapshot()
+  -> decode + validate
+  -> restore WorkspaceCollection
+  -> create a runtime for effective selected tab only
+  -> SwiftUI window and stable surface host attach
+  -> selected BrowserSession creates its Chromium browser
+```
+
+If the snapshot is invalid or absent, the existing fresh Main workspace path is
+used. All restored Spaces and tabs are present in domain state immediately, but
+only the selected tab is registered with `BrowserSessionManager` at launch.
+Selecting a restored tab or switching to a Space calls the same
+`withSelectionTransition` focus policy as normal selection, but first ensures a
+runtime for the incoming domain tab. The manager then creates one stable
+container and one browser. Re-selecting it reuses the existing session and
+does not create a second browser. The restored URL and title seed the session
+and address field before the first CEF callback, so the toolbar does not flash
+an empty address during lazy activation.
+
+Selection authorization is now domain membership, not runtime existence. A
+background restored tab can therefore be selected and instantiated on demand.
+Closing such a tab removes only its domain state and recently-closed snapshot;
+it never creates a browser just to close it. Closing an instantiated selected
+tab ensures the selected neighbor's runtime before asking the outgoing runtime
+to close. Closing the last tab still creates a replacement in the same Space;
+the active Space creates it immediately, while an inactive Space may leave the
+replacement lazy. Ordinary new tabs and managed popups retain their eager
+current-run behavior.
+
+### Termination and privacy
+
+Before the termination coordinator requests any browser close,
+`ApplicationRuntime` synchronously flushes the current durable snapshot. It
+then closes only the sessions currently held by `BrowserSessionManager`:
+
+```text
+final snapshot flush
+  -> close instantiated BrowserSessions only
+  -> every typed OnBeforeClose
+  -> live runtime count reaches zero
+  -> CefShutdown once
+  -> final AppKit termination
+```
+
+Lazy tabs do not enter shutdown and do not produce close callbacks. Persistence
+failure is non-fatal to this ordering. Full URLs are allowed in the private
+session file because restore requires them; every persistence diagnostic and
+all existing navigation/lifecycle logging continues to use
+`URLLogSanitizer`, and neither raw snapshot JSON nor query/fragment values are
+printed.
+
+### Verification and known limitations
+
+`Scripts/verify_milestone6.sh` builds the CEF-free tests, uses a fresh isolated
+data directory, launches a real seed process, then launches a separate verify
+process against the same directory. The verify phase compares the ordered
+Space/tab UUID graph, checks six domain tabs versus one startup session,
+activates a lazy tab and a lazy Space, closes a never-instantiated tab, and
+asserts three instantiated sessions at shutdown, typed close completion and
+one CEF shutdown. It also checks private file permissions and that a fake query
+secret/fragment never appears in logs.
+
+M6 does not restore the Chromium Back/Forward stack, scroll position, form or
+JavaScript state, recently closed tabs, cookies/password settings, history,
+downloads, crash journals, multiple windows or tab suspension. Existing CEF
+cookie/profile bootstrap settings are unchanged.

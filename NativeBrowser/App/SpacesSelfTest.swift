@@ -868,6 +868,11 @@ final class SpacesSelfTest {
         guard let target = self.closeSpaceID,
           let oldID = self.workspace.tabs(in: target).first?.id
         else { return }
+        // Milestone 6 keeps a last-tab replacement domain-only when its Space
+        // is inactive. Select the target first so this legacy integration
+        // check continues to exercise the immediate active-Space replacement
+        // contract; lazy inactive replacement is covered by the restore test.
+        self.workspace.selectSpace(id: target)
         self.closeLastOldTabID = oldID
         self.closeLastActiveSpaceID = self.workspace.selectedSpaceID
         self.closeLastOtherCounts = Dictionary(

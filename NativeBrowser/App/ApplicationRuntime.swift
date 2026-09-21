@@ -58,6 +58,10 @@ final class ApplicationRuntime: ObservableObject {
   /// single application window.
   let workspaceStore: BrowserWorkspaceStore
 
+  /// Owns only durable workspace file IO. The domain projection remains in the
+  /// workspace store and Chromium objects never cross this boundary.
+  let sessionStore: SessionStore
+
   /// Compatibility projection for application lifecycle tooling. Runtime
   /// ownership remains inside `workspaceStore`; this is not a second owner.
   var sessionManager: BrowserSessionManager { workspaceStore.sessionManager }
@@ -80,7 +84,11 @@ final class ApplicationRuntime: ObservableObject {
   private var isTracingEnabled = false
 
   private init() {
-    let store = BrowserWorkspaceStore(initialTabURL: Self.homeURL)
+    let sessionStore = SessionStore()
+    self.sessionStore = sessionStore
+    let store = BrowserWorkspaceStore(
+      initialTabURL: Self.homeURL,
+      sessionStore: sessionStore)
     workspaceStore = store
     store.onLifecycleEvent = { [weak self] event in
       self?.record(event)
@@ -114,6 +122,11 @@ final class ApplicationRuntime: ObservableObject {
   func noteMainWindowAppeared() {
     didAppearInWindow = true
     record("swiftui:main-window-appeared")
+    // AppKit may choose the first native NSTextField as the initial responder
+    // while SwiftUI installs the toolbar. The browser surface is the launch
+    // target, so explicitly complete the initial hand-off once the real
+    // window exists. Subsequent address-field focus remains user-controlled.
+    workspaceStore.selectedSession?.focusPage()
   }
 
   /// True once the SwiftUI window has reported that it appeared.
@@ -228,6 +241,9 @@ final class ApplicationRuntime: ObservableObject {
   /// Called for ordinary browser teardown; application termination uses
   /// Terminator, which also waits for OnBeforeClose.
   func requestBrowserClosure() {
+    // Persist the durable domain graph before any live Chromium object starts
+    // closing. Lazy tabs have no runtime and therefore need no synthetic close.
+    workspaceStore.flushSessionPersistence()
     guard workspaceStore.hasLiveSessions else {
       AppLog.cef.info("no live Chromium browser to close")
       return
