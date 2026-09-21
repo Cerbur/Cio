@@ -108,6 +108,8 @@ enum Milestone7SelfTest {
         guard let destination = item.destinationURL else { return false }
         return FileManager.default.fileExists(atPath: destination.path)
       }, "download-file-exists")
+      let fileNames = Set(items.map(\.fileName))
+      check(fileNames == ["fixture.bin", "fixture (1).bin"], "download-content-disposition-filenames")
 
       print("m7-self-test: history-entries=\(runtime.historyService.entries.count)")
       print("m7-self-test: downloads=\(items.count) bytes=\(items.map(\.receivedBytes).reduce(0, +))")

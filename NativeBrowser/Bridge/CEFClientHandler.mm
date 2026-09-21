@@ -233,13 +233,23 @@ bool CEFClientHandler::OnBeforeDownload(
   const NSInteger downloadIdentifier = static_cast<NSInteger>(download_item->GetId());
   NSString *sourceURL = NSStringFromCefString(download_item->GetURL());
   NSString *suggestedFileName = NSStringFromCefString(suggested_name);
+  NSString *cefSuggestedFileName =
+      NSStringFromCefString(download_item->GetSuggestedFileName());
+  NSString *contentDisposition =
+      NSStringFromCefString(download_item->GetContentDisposition());
+  NSString *mimeType = NSStringFromCefString(download_item->GetMimeType());
+  NSString *originalURL = NSStringFromCefString(download_item->GetOriginalUrl());
   __weak BrowserBridge *bridge = bridge_;
   CefRefPtr<CefBeforeDownloadCallback> callbackRef = callback;
 
   OnMainThread(^{
     NSString *destination = [bridge downloadDestinationPathForIdentifier:downloadIdentifier
                                                                  sourceURL:sourceURL
-                                                           suggestedFileName:suggestedFileName];
+                                                           suggestedFileName:suggestedFileName
+                                                        cefSuggestedFileName:cefSuggestedFileName
+                                                         contentDisposition:contentDisposition
+                                                                 mimeType:mimeType
+                                                              originalURL:originalURL];
     std::string path = destination != nil ? std::string(destination.UTF8String) : std::string();
     callbackRef->Continue(path, /*show_dialog=*/false);
   });
@@ -259,6 +269,11 @@ void CEFClientHandler::OnDownloadUpdated(
   const NSInteger downloadIdentifier = static_cast<NSInteger>(download_item->GetId());
   NSString *sourceURL = NSStringFromCefString(download_item->GetURL());
   NSString *suggestedFileName = NSStringFromCefString(download_item->GetSuggestedFileName());
+  NSString *cefSuggestedFileName = suggestedFileName;
+  NSString *contentDisposition =
+      NSStringFromCefString(download_item->GetContentDisposition());
+  NSString *mimeType = NSStringFromCefString(download_item->GetMimeType());
+  NSString *originalURL = NSStringFromCefString(download_item->GetOriginalUrl());
   NSString *destinationPath = NSStringFromCefString(download_item->GetFullPath());
   const long long receivedBytes = static_cast<long long>(download_item->GetReceivedBytes());
   const long long totalBytes = static_cast<long long>(download_item->GetTotalBytes());
@@ -279,6 +294,10 @@ void CEFClientHandler::OnDownloadUpdated(
     [bridge browserDidUpdateDownloadWithIdentifier:downloadIdentifier
                                           sourceURL:sourceURL
                                     suggestedFileName:suggestedFileName
+                                  cefSuggestedFileName:cefSuggestedFileName
+                                   contentDisposition:contentDisposition
+                                           mimeType:mimeType
+                                        originalURL:originalURL
                                     destinationPath:destinationPath
                                        receivedBytes:receivedBytes
                                           totalBytes:totalBytes

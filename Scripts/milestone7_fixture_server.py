@@ -38,6 +38,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
                     "Content-Disposition": 'attachment; filename="fixture.bin"',
                 },
             )
+        elif path == "/archive.zip":
+            self._send(200, PAYLOAD, "application/zip")
+        elif path == "/opaque":
+            self._send(200, PAYLOAD, "application/pdf")
         else:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
 

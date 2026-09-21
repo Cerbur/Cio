@@ -37,12 +37,14 @@ struct BrowserToolbarView: View {
         .fill(Color.primary.opacity(0.12))
         .frame(width: 0.5, height: 18)
         .padding(.horizontal, 3)
+        .allowsHitTesting(false)
 
       HStack(spacing: 7) {
         Image(systemName: "globe")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(.secondary)
           .frame(width: 16)
+          .allowsHitTesting(false)
 
         AddressField(
           model: session.addressField,
@@ -56,6 +58,8 @@ struct BrowserToolbarView: View {
         )
         .frame(minWidth: 240, maxWidth: .infinity, minHeight: 22, idealHeight: 24)
         .layoutPriority(1)
+        .contentShape(Rectangle())
+        .allowsHitTesting(true)
       }
       .padding(.horizontal, 9)
       .padding(.vertical, 2)
@@ -68,7 +72,13 @@ struct BrowserToolbarView: View {
               : Color.primary.opacity(0.11),
             lineWidth: interaction.isFocused || session.addressField.isEditing ? 1 : 0.5
           )
+          // The capsule is decorative. If it participates in hit testing it
+          // sits above the embedded NSTextField and can consume a normal mouse
+          // click before AppKit's field editor gets a chance to become first
+          // responder.
+          .allowsHitTesting(false)
       }
+      .allowsHitTesting(true)
 
       if state.isLoading {
         ProgressView()

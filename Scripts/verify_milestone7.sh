@@ -155,6 +155,7 @@ for CHECK in \
   download-destination-containment \
   download-collision-safe-second-file \
   download-file-exists \
+  download-content-disposition-filenames \
   clean-browser-shutdown \
   cef-shutdown-once; do
   check_contains "self-test: $CHECK" "m7-self-test: pass $CHECK" "$SEED_LOG"
@@ -201,9 +202,10 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 expected = sys.argv[2]
-files = sorted(root.glob("download*"))
-assert len(files) == 2, "two collision-safe files"
-assert len({file.name for file in files}) == 2, "unique filenames"
+expected_names = ["fixture.bin", "fixture (1).bin"]
+files = [root / name for name in expected_names]
+assert {file.name for file in root.iterdir() if file.is_file()} == set(expected_names), "exact fixture filenames"
+assert all(file.is_file() for file in files), "two collision-safe files"
 for file in files:
     assert file.resolve().parent == root.resolve(), "contained file"
     assert hashlib.sha256(file.read_bytes()).hexdigest() == expected, "payload hash"

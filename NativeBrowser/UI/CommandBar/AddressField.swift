@@ -51,6 +51,9 @@ struct AddressField: NSViewRepresentable {
     field.textColor = .labelColor
     field.isBezeled = false
     field.drawsBackground = false
+    field.isEditable = true
+    field.isSelectable = true
+    field.isEnabled = true
     // Keep AppKit's native focus ring available; the SwiftUI capsule around the
     // field supplies the additional compact toolbar treatment.
     field.focusRingType = .default
@@ -209,6 +212,18 @@ final class NativeBrowserAddressField: NSTextField {
       onFocusChange?(false)
     }
     return resigned
+  }
+
+  /// SwiftUI's hosting view can leave an embedded AppKit control out of the
+  /// window's responder chain after Chromium has owned the keyboard. Re-enter
+  /// the normal AppKit path at mouse-down time; NSTextField still performs the
+  /// actual caret placement, selection and field-editor handling.
+  override func mouseDown(with event: NSEvent) {
+    if let window, window.firstResponder !== self, window.firstResponder !== currentEditor() {
+      _ = window.makeFirstResponder(self)
+    }
+    configureFieldEditor()
+    super.mouseDown(with: event)
   }
 
   /// True while the field editor is owned by this field, whether or not it is

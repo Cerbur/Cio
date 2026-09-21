@@ -49,6 +49,7 @@ struct BrowserDownloadUpdate: Sendable {
   let downloadID: UInt32
   let sourceURL: URL
   let suggestedFileName: String
+  let metadata: DownloadMetadata
   let destinationURL: URL?
   let receivedBytes: Int64
   let totalBytes: Int64?
@@ -169,7 +170,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// Download events remain value-only at the Swift boundary. The destination
   /// request is synchronous from CEF's perspective but does not retain a CEF
   /// callback in Swift.
-  var onDownloadRequested: ((BrowserSession, UInt32, URL, String) -> String)?
+  var onDownloadRequested: ((BrowserSession, UInt32, URL, String, DownloadMetadata) -> String)?
   var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
 
   /// The most recent completed main-frame URL, used to associate a title that
@@ -609,10 +610,20 @@ extension BrowserSession: BrowserBridgeDelegate {
     _ bridge: BrowserBridge,
     destinationPathForDownloadIdentifier downloadIdentifier: Int,
     sourceURL: String,
-    suggestedFileName: String
+    suggestedFileName: String,
+    cefSuggestedFileName: String,
+    contentDisposition: String,
+    mimeType: String,
+    originalURL: String
   ) -> String {
     guard let value = URL(string: sourceURL), downloadIdentifier >= 0 else { return "" }
-    return onDownloadRequested?(self, UInt32(downloadIdentifier), value, suggestedFileName) ?? ""
+    let metadata = DownloadMetadata(
+      cefSuggestedFileName: cefSuggestedFileName,
+      contentDisposition: contentDisposition,
+      mimeType: mimeType,
+      originalURL: originalURL.isEmpty ? nil : URL(string: originalURL))
+    return onDownloadRequested?(
+      self, UInt32(downloadIdentifier), value, suggestedFileName, metadata) ?? ""
   }
 
   func browserBridge(
@@ -620,6 +631,10 @@ extension BrowserSession: BrowserBridgeDelegate {
     didUpdateDownloadWithIdentifier downloadIdentifier: Int,
     sourceURL: String,
     suggestedFileName: String,
+    cefSuggestedFileName: String,
+    contentDisposition: String,
+    mimeType: String,
+    originalURL: String,
     destinationPath: String,
     receivedBytes: Int64,
     totalBytes: Int64,
@@ -634,6 +649,11 @@ extension BrowserSession: BrowserBridgeDelegate {
       downloadID: UInt32(downloadIdentifier),
       sourceURL: value,
       suggestedFileName: suggestedFileName,
+      metadata: DownloadMetadata(
+        cefSuggestedFileName: cefSuggestedFileName,
+        contentDisposition: contentDisposition,
+        mimeType: mimeType,
+        originalURL: originalURL.isEmpty ? nil : URL(string: originalURL)),
       destinationURL: destinationPath.isEmpty ? nil : URL(fileURLWithPath: destinationPath),
       receivedBytes: receivedBytes,
       totalBytes: hasTotalBytes ? totalBytes : nil,

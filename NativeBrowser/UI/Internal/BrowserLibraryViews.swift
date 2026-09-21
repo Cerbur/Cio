@@ -23,7 +23,7 @@ struct BrowserLibrarySheet: View {
       case .history:
         HistoryLibraryView(history: history, workspace: workspace, dismiss: dismiss)
       case .downloads:
-        DownloadsLibraryView(downloads: downloads)
+        DownloadsLibraryView(downloads: downloads, dismiss: dismiss)
       }
     }
     .frame(minWidth: 620, minHeight: 440)
@@ -46,6 +46,7 @@ private struct HistoryLibraryView: View {
           confirmationState.isShowing = true
         }
         .disabled(history.entries.isEmpty)
+        LibraryCloseButton(title: "Close History", dismiss: dismiss)
       }
       .padding(.horizontal, 22)
       .padding(.vertical, 16)
@@ -134,6 +135,7 @@ private struct HistoryRow: View {
 
 private struct DownloadsLibraryView: View {
   @ObservedObject var downloads: DownloadManager
+  let dismiss: DismissAction
 
   var body: some View {
     VStack(spacing: 0) {
@@ -146,6 +148,7 @@ private struct DownloadsLibraryView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        LibraryCloseButton(title: "Close Downloads", dismiss: dismiss)
       }
       .padding(.horizontal, 22)
       .padding(.vertical, 16)
@@ -166,6 +169,25 @@ private struct DownloadsLibraryView: View {
       }
     }
     .background(Color(nsColor: .windowBackgroundColor))
+  }
+}
+
+private struct LibraryCloseButton: View {
+  let title: String
+  let dismiss: DismissAction
+
+  var body: some View {
+    Button {
+      dismiss()
+    } label: {
+      Image(systemName: "xmark")
+        .font(.system(size: 11, weight: .semibold))
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.borderless)
+    .help(title)
+    .accessibilityLabel(title)
   }
 }
 

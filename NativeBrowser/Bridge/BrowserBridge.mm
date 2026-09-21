@@ -397,16 +397,28 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 
 - (NSString *)downloadDestinationPathForIdentifier:(NSInteger)downloadIdentifier
                                           sourceURL:(NSString *)sourceURL
-                                    suggestedFileName:(NSString *)suggestedFileName {
+                                    suggestedFileName:(NSString *)suggestedFileName
+                                 cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                                  contentDisposition:(NSString *)contentDisposition
+                                          mimeType:(NSString *)mimeType
+                                       originalURL:(NSString *)originalURL {
   return [self.delegate browserBridge:self
       destinationPathForDownloadIdentifier:downloadIdentifier
                                  sourceURL:sourceURL
-                           suggestedFileName:suggestedFileName];
+                           suggestedFileName:suggestedFileName
+                        cefSuggestedFileName:cefSuggestedFileName
+                         contentDisposition:contentDisposition
+                                 mimeType:mimeType
+                              originalURL:originalURL];
 }
 
 - (void)browserDidUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
                                       sourceURL:(NSString *)sourceURL
                                 suggestedFileName:(NSString *)suggestedFileName
+                              cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                               contentDisposition:(NSString *)contentDisposition
+                                       mimeType:(NSString *)mimeType
+                                    originalURL:(NSString *)originalURL
                                 destinationPath:(NSString *)destinationPath
                                    receivedBytes:(long long)receivedBytes
                                       totalBytes:(long long)totalBytes
@@ -419,7 +431,11 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
       didUpdateDownloadWithIdentifier:downloadIdentifier
                             sourceURL:sourceURL
                       suggestedFileName:suggestedFileName
-                      destinationPath:destinationPath
+                    cefSuggestedFileName:cefSuggestedFileName
+                     contentDisposition:contentDisposition
+                             mimeType:mimeType
+                          originalURL:originalURL
+                        destinationPath:destinationPath
                          receivedBytes:receivedBytes
                             totalBytes:totalBytes
                          hasTotalBytes:hasTotalBytes

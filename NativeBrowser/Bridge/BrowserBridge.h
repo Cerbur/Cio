@@ -50,7 +50,11 @@ NS_SWIFT_UI_ACTOR
 - (NSString *)browserBridge:(BrowserBridge *)bridge
     destinationPathForDownloadIdentifier:(NSInteger)downloadIdentifier
                                sourceURL:(NSString *)sourceURL
-                         suggestedFileName:(NSString *)suggestedFileName;
+                         suggestedFileName:(NSString *)suggestedFileName
+                      cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                       contentDisposition:(NSString *)contentDisposition
+                               mimeType:(NSString *)mimeType
+                            originalURL:(NSString *)originalURL;
 
 /// A typed download progress/status update translated from CEF. Empty strings
 /// mean that CEF has not supplied a path yet; no CEF object crosses this API.
@@ -58,6 +62,10 @@ NS_SWIFT_UI_ACTOR
     didUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
                           sourceURL:(NSString *)sourceURL
                     suggestedFileName:(NSString *)suggestedFileName
+                  cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                   contentDisposition:(NSString *)contentDisposition
+                           mimeType:(NSString *)mimeType
+                        originalURL:(NSString *)originalURL
                     destinationPath:(NSString *)destinationPath
                        receivedBytes:(long long)receivedBytes
                           totalBytes:(long long)totalBytes
@@ -179,10 +187,18 @@ NS_SWIFT_UI_ACTOR
 - (void)browserDidFinishMainFrameLoadWithURL:(NSString *)url;
 - (NSString *)downloadDestinationPathForIdentifier:(NSInteger)downloadIdentifier
                                           sourceURL:(NSString *)sourceURL
-                                    suggestedFileName:(NSString *)suggestedFileName;
+                                    suggestedFileName:(NSString *)suggestedFileName
+                                 cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                                  contentDisposition:(NSString *)contentDisposition
+                                          mimeType:(NSString *)mimeType
+                                       originalURL:(NSString *)originalURL;
 - (void)browserDidUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
                                       sourceURL:(NSString *)sourceURL
                                 suggestedFileName:(NSString *)suggestedFileName
+                              cefSuggestedFileName:(NSString *)cefSuggestedFileName
+                               contentDisposition:(NSString *)contentDisposition
+                                       mimeType:(NSString *)mimeType
+                                    originalURL:(NSString *)originalURL
                                 destinationPath:(NSString *)destinationPath
                                    receivedBytes:(long long)receivedBytes
                                       totalBytes:(long long)totalBytes

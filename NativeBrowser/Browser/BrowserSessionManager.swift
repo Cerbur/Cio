@@ -45,7 +45,7 @@ final class BrowserSessionManager: ObservableObject {
 
   /// Application-level download callbacks. The manager remains a runtime
   /// session owner and only forwards value events.
-  var onDownloadRequested: ((BrowserSession, UInt32, URL, String) -> String)?
+  var onDownloadRequested: ((BrowserSession, UInt32, URL, String, DownloadMetadata) -> String)?
   var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
 
   /// Called when the runtime registry changes so the workspace store can redraw
@@ -143,8 +143,10 @@ final class BrowserSessionManager: ObservableObject {
     session.onTitleChanged = { [weak self] session in
       self?.onTitleChanged?(session)
     }
-    session.onDownloadRequested = { [weak self] session, downloadID, sourceURL, suggestedFileName in
-      self?.onDownloadRequested?(session, downloadID, sourceURL, suggestedFileName) ?? ""
+    session.onDownloadRequested = {
+      [weak self] session, downloadID, sourceURL, suggestedFileName, metadata in
+      self?.onDownloadRequested?(
+        session, downloadID, sourceURL, suggestedFileName, metadata) ?? ""
     }
     session.onDownloadUpdated = { [weak self] session, update in
       self?.onDownloadUpdated?(session, update)

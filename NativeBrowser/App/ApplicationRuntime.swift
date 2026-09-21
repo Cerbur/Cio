@@ -126,17 +126,20 @@ final class ApplicationRuntime: ObservableObject {
       // BrowserSession suppresses this callback for CEF's error document.
       self.historyService.updateTitle(for: url, title: session.title)
     }
-    store.sessionManager.onDownloadRequested = { [weak self] _, downloadID, sourceURL, suggestedFileName in
+    store.sessionManager.onDownloadRequested = {
+      [weak self] _, downloadID, sourceURL, suggestedFileName, metadata in
       self?.downloadManager.prepareDownload(
         downloadID: downloadID,
         sourceURL: sourceURL,
-        suggestedFileName: suggestedFileName)?.path ?? ""
+        suggestedFileName: suggestedFileName,
+        metadata: metadata)?.path ?? ""
     }
     store.sessionManager.onDownloadUpdated = { [weak self] _, update in
       self?.downloadManager.update(
         downloadID: update.downloadID,
         sourceURL: update.sourceURL,
         suggestedFileName: update.suggestedFileName,
+        metadata: update.metadata,
         destinationURL: update.destinationURL,
         receivedBytes: update.receivedBytes,
         totalBytes: update.totalBytes,

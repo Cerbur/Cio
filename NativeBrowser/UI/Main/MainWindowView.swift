@@ -124,6 +124,7 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
 private final class WindowChromeView: NSView {
   var onTitlebarContentInsetChange: (CGFloat) -> Void
   private var lastTitlebarContentInset: CGFloat?
+  private var addressFieldMouseMonitor: Any?
 
   init(onTitlebarContentInsetChange: @escaping (CGFloat) -> Void) {
     self.onTitlebarContentInsetChange = onTitlebarContentInsetChange
@@ -138,12 +139,38 @@ private final class WindowChromeView: NSView {
     super.viewDidMoveToWindow()
     configureWindowIfNeeded()
 
+    if addressFieldMouseMonitor == nil, let window {
+      addressFieldMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+        [weak window] event in
+        guard let window, event.window === window else { return event }
+        let location = event.locationInWindow
+        let hit = window.contentView?.hitTest(location)
+        if let field = hit as? NativeBrowserAddressField {
+          // A full-size titled window can route this titlebar-area click
+          // through AppKit before the embedded representable receives it.
+          // Forward only the hit-tested pointer event to the native field;
+          // keyboard events and Cmd-L remain entirely in their normal paths.
+          field.mouseDown(with: event)
+          return nil
+        }
+        return event
+      }
+    }
+
     // SwiftUI can attach the representable before AppKit has installed the
     // standard window buttons. Re-measure on the next run-loop turn so the
     // sidebar gets the actual native titlebar geometry on first display.
     DispatchQueue.main.async { [weak self] in
       self?.configureWindowIfNeeded()
     }
+  }
+
+  override func viewWillMove(toWindow newWindow: NSWindow?) {
+    if newWindow == nil, let addressFieldMouseMonitor {
+      NSEvent.removeMonitor(addressFieldMouseMonitor)
+      self.addressFieldMouseMonitor = nil
+    }
+    super.viewWillMove(toWindow: newWindow)
   }
 
   override func layout() {

@@ -33,11 +33,20 @@ extension View {
     let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
     if #available(macOS 26.0, *) {
-      glassEffect(.regular, in: shape)
+      // Keep the glass purely decorative. Applying it to the content view can
+      // put a glass hit surface above an embedded AppKit control; putting it in
+      // the background preserves the M5.1 appearance without taking the click
+      // away from the native address field.
+      background {
+        Color.clear
+          .glassEffect(.regular, in: shape)
+          .allowsHitTesting(false)
+      }
     } else {
       background(.regularMaterial, in: shape)
         .overlay {
           shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            .allowsHitTesting(false)
         }
     }
   }
@@ -84,6 +93,7 @@ extension View {
   func browserSidebarMaterial() -> some View {
     background(
       BrowserVisualEffectView(material: .sidebar, blendingMode: .withinWindow)
+        .allowsHitTesting(false)
     )
   }
 
@@ -92,6 +102,7 @@ extension View {
   func browserToolbarMaterial() -> some View {
     background(
       BrowserVisualEffectView(material: .headerView, blendingMode: .withinWindow)
+        .allowsHitTesting(false)
     )
   }
 }

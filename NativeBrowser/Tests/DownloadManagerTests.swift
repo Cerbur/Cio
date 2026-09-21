@@ -31,8 +31,57 @@ final class DownloadManagerTests: XCTestCase {
 
   private var sourceURL: URL { URL(string: "http://127.0.0.1:43123/download")! }
 
+  private func metadata(
+    cefSuggestedFileName: String = "",
+    contentDisposition: String = "",
+    mimeType: String = "",
+    originalURL: URL? = nil
+  ) -> DownloadMetadata {
+    DownloadMetadata(
+      cefSuggestedFileName: cefSuggestedFileName,
+      contentDisposition: contentDisposition,
+      mimeType: mimeType,
+      originalURL: originalURL)
+  }
+
   func testSafeFilenameIsPreserved() {
     XCTAssertEqual(DownloadManager.sanitizedFileName("report.pdf"), "report.pdf")
+  }
+
+  func testContentDispositionFilenameOverridesGenericCEFName() {
+    XCTAssertEqual(
+      DownloadManager.resolvedFileName(
+        sourceURL: sourceURL,
+        suggestedFileName: "download",
+        metadata: metadata(
+          cefSuggestedFileName: "download",
+          contentDisposition: "attachment; filename=\"fixture.bin\"",
+          mimeType: "application/octet-stream")),
+      "fixture.bin")
+  }
+
+  func testURLFilenameAndMIMEFallbacksPreserveExtensions() {
+    let archiveURL = URL(string: "http://127.0.0.1:43123/archive.zip")!
+    XCTAssertEqual(
+      DownloadManager.resolvedFileName(
+        sourceURL: archiveURL,
+        suggestedFileName: "download",
+        metadata: metadata(mimeType: "application/zip")),
+      "archive.zip")
+
+    let pdfURL = URL(string: "http://127.0.0.1:43123/")!
+    XCTAssertEqual(
+      DownloadManager.resolvedFileName(
+        sourceURL: pdfURL,
+        suggestedFileName: "download",
+        metadata: metadata(mimeType: "application/pdf")),
+      "download.pdf")
+    XCTAssertEqual(
+      DownloadManager.resolvedFileName(
+        sourceURL: sourceURL,
+        suggestedFileName: "report.pdf",
+        metadata: metadata(mimeType: "application/pdf")),
+      "report.pdf")
   }
 
   func testPathTraversalIsSanitized() {
@@ -68,6 +117,26 @@ final class DownloadManagerTests: XCTestCase {
     let second = try XCTUnwrap(secondManager.prepareDownload(
       downloadID: 2, sourceURL: sourceURL, suggestedFileName: "report.pdf"))
     XCTAssertEqual(second.lastPathComponent, "report (1).pdf")
+  }
+
+  func testFixtureFilenameCollisionKeepsExtension() throws {
+    let manager = manager()
+    let first = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 20, sourceURL: sourceURL, suggestedFileName: "fixture.bin"))
+    let second = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 21, sourceURL: sourceURL, suggestedFileName: "fixture.bin"))
+    XCTAssertEqual(first.lastPathComponent, "fixture.bin")
+    XCTAssertEqual(second.lastPathComponent, "fixture (1).bin")
+  }
+
+  func testCompoundExtensionCollisionKeepsEntireExtension() throws {
+    let manager = manager()
+    let first = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 22, sourceURL: sourceURL, suggestedFileName: "package.tar.gz"))
+    let second = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 23, sourceURL: sourceURL, suggestedFileName: "package.tar.gz"))
+    XCTAssertEqual(first.lastPathComponent, "package.tar.gz")
+    XCTAssertEqual(second.lastPathComponent, "package (1).tar.gz")
   }
 
   func testReservedFilenameGetsUniqueDestinationBeforeFirstFileExists() throws {
