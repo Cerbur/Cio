@@ -28,6 +28,14 @@ check_absent() {
   if grep -qF -e "$2" "$3" 2>/dev/null; then fail "$1 (found: $2)"; else pass "$1"; fi
 }
 
+check_no_native_browser_process() {
+  if pgrep -f -e "$EXECUTABLE" >/dev/null 2>&1; then
+    fail "$1 (NativeBrowser process remains)"
+  else
+    pass "$1"
+  fi
+}
+
 run_with_timeout() {
   local seconds="$1"
   shift
@@ -137,6 +145,7 @@ run_with_timeout 300 "$EXECUTABLE" \
 SEED_CODE=$?
 if [ "$SEED_CODE" -eq 0 ]; then pass "seed process exited 0"; else fail "seed process exited $SEED_CODE"; fi
 if [ "$SEED_CODE" -gt 128 ]; then fail "seed process died from signal $((SEED_CODE - 128))"; fi
+check_no_native_browser_process "seed left no residual NativeBrowser process"
 
 SESSION_FILE="$DATA_DIR/session-v1.json"
 if [ -f "$SESSION_FILE" ]; then pass "session snapshot exists"; else fail "session snapshot is missing"; fi
@@ -169,6 +178,7 @@ run_with_timeout 300 "$EXECUTABLE" \
 VERIFY_CODE=$?
 if [ "$VERIFY_CODE" -eq 0 ]; then pass "verify process exited 0"; else fail "verify process exited $VERIFY_CODE"; fi
 if [ "$VERIFY_CODE" -gt 128 ]; then fail "verify process died from signal $((VERIFY_CODE - 128))"; fi
+check_no_native_browser_process "verify left no residual NativeBrowser process"
 
 for CHECK in \
   startup-restored-domain-before-lazy-activation \
@@ -197,6 +207,8 @@ check_contains "startup has all six domain tabs" \
   "spaces=3 domain-tabs=6 live-sessions=1" "$VERIFY_LOG"
 check_contains "shutdown closes only instantiated sessions" \
   "lifecycle: session:close-all(count=3)" "$VERIFY_LOG"
+check_contains "live session registry reached zero before CEF shutdown" \
+  "lifecycle: termination:browsers-closed" "$VERIFY_LOG"
 check_contains "CEF shutdown is recorded once" \
   "lifecycle: cef:shutdown(clean: true)" "$VERIFY_LOG"
 SHUTDOWN_COUNT="$(grep -cF 'lifecycle: cef:shutdown(clean: true)' "$VERIFY_LOG" 2>/dev/null || true)"
