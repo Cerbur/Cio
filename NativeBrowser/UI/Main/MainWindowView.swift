@@ -32,6 +32,13 @@ struct MainWindowView: View {
         .allowsHitTesting(false)
       )
       .onAppear { runtime.noteMainWindowAppeared() }
+      .sheet(item: $runtime.presentedInternalPanel) { panel in
+        BrowserLibrarySheet(
+          panel: panel,
+          history: runtime.historyService,
+          downloads: runtime.downloadManager,
+          workspace: runtime.workspaceStore)
+      }
   }
 }
 

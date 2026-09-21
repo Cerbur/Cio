@@ -66,6 +66,22 @@ final class ApplicationRuntime: ObservableObject {
   /// ownership remains inside `workspaceStore`; this is not a second owner.
   var sessionManager: BrowserSessionManager { workspaceStore.sessionManager }
 
+  /// History and downloads are application-global concerns, independent of
+  /// Spaces, tabs and runtime session lifetime.
+  let historyService: HistoryService
+  let downloadManager: DownloadManager
+
+  enum InternalBrowserPanel: String, Identifiable {
+    case history
+    case downloads
+
+    var id: String { rawValue }
+  }
+
+  /// The native sheet route keeps the stable Chromium host mounted while an
+  /// internal library is visible.
+  @Published var presentedInternalPanel: InternalBrowserPanel?
+
   @Published private(set) var cefStatus: CEFStatus = .notInitialized
 
   /// Ordered lifecycle milestones. Verification modes print this trace so that
@@ -86,6 +102,8 @@ final class ApplicationRuntime: ObservableObject {
   private init() {
     let sessionStore = SessionStore()
     self.sessionStore = sessionStore
+    self.historyService = HistoryService()
+    self.downloadManager = DownloadManager()
     let store = BrowserWorkspaceStore(
       initialTabURL: Self.homeURL,
       sessionStore: sessionStore)
@@ -96,6 +114,47 @@ final class ApplicationRuntime: ObservableObject {
     store.sessionManager.onLiveSessionDidClose = { [weak self] session in
       self?.onLiveSessionDidClose?(session)
     }
+    store.sessionManager.onMainFrameLoadFinished = { [weak self] session, url in
+      guard let self else { return }
+      self.historyService.recordVisit(url: url, title: session.title)
+    }
+    store.sessionManager.onTitleChanged = { [weak self] session in
+      guard let self, let url = session.url else { return }
+      // OnTitleChange can arrive before OnLoadEnd. The session's current main
+      // frame URL is therefore the in-flight committed candidate; using the
+      // previous successful URL would rename the page that was just left.
+      // BrowserSession suppresses this callback for CEF's error document.
+      self.historyService.updateTitle(for: url, title: session.title)
+    }
+    store.sessionManager.onDownloadRequested = { [weak self] _, downloadID, sourceURL, suggestedFileName in
+      self?.downloadManager.prepareDownload(
+        downloadID: downloadID,
+        sourceURL: sourceURL,
+        suggestedFileName: suggestedFileName)?.path ?? ""
+    }
+    store.sessionManager.onDownloadUpdated = { [weak self] _, update in
+      self?.downloadManager.update(
+        downloadID: update.downloadID,
+        sourceURL: update.sourceURL,
+        suggestedFileName: update.suggestedFileName,
+        destinationURL: update.destinationURL,
+        receivedBytes: update.receivedBytes,
+        totalBytes: update.totalBytes,
+        isInProgress: update.isInProgress,
+        isComplete: update.isComplete,
+        isCancelled: update.isCancelled,
+        isInterrupted: update.isInterrupted)
+    }
+  }
+
+  func showHistory() {
+    workspaceStore.selectedSession?.blur()
+    presentedInternalPanel = .history
+  }
+
+  func showDownloads() {
+    workspaceStore.selectedSession?.blur()
+    presentedInternalPanel = .downloads
   }
 
   /// Records a lifecycle milestone. Enabled by the verification modes.

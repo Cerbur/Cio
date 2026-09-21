@@ -43,6 +43,21 @@ struct NavigationState: Equatable {
   var canGoForward = false
 }
 
+/// A CEF download callback translated into Swift-safe value types. CEF objects
+/// are never retained by BrowserSession or exposed beyond BrowserBridge.
+struct BrowserDownloadUpdate: Sendable {
+  let downloadID: UInt32
+  let sourceURL: URL
+  let suggestedFileName: String
+  let destinationURL: URL?
+  let receivedBytes: Int64
+  let totalBytes: Int64?
+  let isInProgress: Bool
+  let isComplete: Bool
+  let isCancelled: Bool
+  let isInterrupted: Bool
+}
+
 @MainActor
 final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// Runtime identity of this session, distinct from the tab identifier: a tab
@@ -94,6 +109,10 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// the main-frame URL, so this is what proves that a reload reached Chromium.
   private(set) var loadStartCount = 0
 
+  /// Incremented for each successful main-frame OnLoadEnd callback, including
+  /// reloads and Back/Forward loads whose URL may not change.
+  private(set) var successfulMainFrameLoadCount = 0
+
   /// Editing state of the native address field. One per session, so a background
   /// tab's navigation callbacks can never move the selected tab's text.
   let addressField = AddressFieldModel()
@@ -137,6 +156,31 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// `window.open`). The bridge has already cancelled the unmanaged native
   /// window; the manager decides where the URL opens (Milestone 3 section 26).
   var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
+
+  /// Typed successful top-level load event. This is intentionally not derived
+  /// from the address callback: redirects and failed/provisional URLs do not
+  /// represent completed history visits.
+  var onMainFrameLoadFinished: ((BrowserSession, URL) -> Void)?
+
+  /// Title changes update an existing history row without incrementing its
+  /// visit count.
+  var onTitleChanged: ((BrowserSession) -> Void)?
+
+  /// Download events remain value-only at the Swift boundary. The destination
+  /// request is synchronous from CEF's perspective but does not retain a CEF
+  /// callback in Swift.
+  var onDownloadRequested: ((BrowserSession, UInt32, URL, String) -> String)?
+  var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
+
+  /// The most recent completed main-frame URL, used to associate a title that
+  /// arrives after OnLoadEnd with the visit that just completed.
+  private(set) var lastSuccessfulMainFrameURL: URL?
+
+  /// CEF can deliver OnLoadEnd and a title for its built-in error document
+  /// after OnLoadError. Keep that failed navigation separate from the last
+  /// committed page so it cannot create a history row or overwrite the last
+  /// successful page's title.
+  private var lastMainFrameLoadFailed = false
 
   private var bridge: BrowserBridge?
   private weak var containerView: ChromiumContainerView?
@@ -242,6 +286,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// a log or a lifecycle trace in full.
   func load(_ url: URL) {
     guard !isClosed else { return }
+    beginNavigation()
     let loggedURL = URLLogSanitizer.sanitized(url)
     AppLog.navigation.info("load \(loggedURL, privacy: .public)")
     onLifecycleEvent?("navigation:load(\(loggedURL))")
@@ -253,6 +298,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       AppLog.navigation.debug("back ignored: no history entry")
       return
     }
+    beginNavigation()
     AppLog.navigation.info("back")
     onLifecycleEvent?("navigation:back")
     bridge?.goBack()
@@ -263,12 +309,14 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       AppLog.navigation.debug("forward ignored: no forward entry")
       return
     }
+    beginNavigation()
     AppLog.navigation.info("forward")
     onLifecycleEvent?("navigation:forward")
     bridge?.goForward()
   }
 
   func reload() {
+    beginNavigation()
     AppLog.navigation.info("reload")
     onLifecycleEvent?("navigation:reload")
     bridge?.reload()
@@ -278,6 +326,18 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     AppLog.navigation.info("stop")
     onLifecycleEvent?("navigation:stop")
     bridge?.stopLoading()
+  }
+
+  /// Starts a download through CEF's browser host. This is used only by the
+  /// deterministic real-CEF verifier; normal user downloads enter through
+  /// page actions and the same CefDownloadHandler callbacks.
+  func startDownload(_ url: URL) {
+    bridge?.startDownloadURL(url.absoluteString)
+  }
+
+  private func beginNavigation() {
+    lastErrorCode = nil
+    lastMainFrameLoadFailed = false
   }
 
   /// Reload when the page is idle, stop when it is loading (Milestone 2,
@@ -476,6 +536,9 @@ extension BrowserSession: BrowserBridgeDelegate {
     self.title = title
     AppLog.navigation.debug("title changed: \(title, privacy: .public)")
     onLifecycleEvent?("navigation:title(\(title))")
+    if !lastMainFrameLoadFailed {
+      onTitleChanged?(self)
+    }
     onTabMetadataChanged?(self)
   }
 
@@ -521,6 +584,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     failedURL: String
   ) {
     lastErrorCode = errorCode
+    lastMainFrameLoadFailed = true
     // The error code and text are the diagnostics; the failing URL is written
     // out only through the sanitizer (section 5 of the security fix).
     let loggedURL = URLLogSanitizer.sanitized(failedURL)
@@ -531,6 +595,53 @@ extension BrowserSession: BrowserBridgeDelegate {
     if !hasFinishedFirstLoad {
       hasFinishedFirstLoad = true
     }
+  }
+
+  func browserBridge(_ bridge: BrowserBridge, didFinishMainFrameLoadWithURL url: String) {
+    guard !lastMainFrameLoadFailed else { return }
+    guard let value = URL(string: url), HistoryURLPolicy.isRecordable(value) else { return }
+    successfulMainFrameLoadCount += 1
+    lastSuccessfulMainFrameURL = value
+    onMainFrameLoadFinished?(self, value)
+  }
+
+  func browserBridge(
+    _ bridge: BrowserBridge,
+    destinationPathForDownloadIdentifier downloadIdentifier: Int,
+    sourceURL: String,
+    suggestedFileName: String
+  ) -> String {
+    guard let value = URL(string: sourceURL), downloadIdentifier >= 0 else { return "" }
+    return onDownloadRequested?(self, UInt32(downloadIdentifier), value, suggestedFileName) ?? ""
+  }
+
+  func browserBridge(
+    _ bridge: BrowserBridge,
+    didUpdateDownloadWithIdentifier downloadIdentifier: Int,
+    sourceURL: String,
+    suggestedFileName: String,
+    destinationPath: String,
+    receivedBytes: Int64,
+    totalBytes: Int64,
+    hasTotalBytes: Bool,
+    isInProgress: Bool,
+    isComplete: Bool,
+    isCanceled: Bool,
+    isInterrupted: Bool
+  ) {
+    guard let value = URL(string: sourceURL), downloadIdentifier >= 0 else { return }
+    let update = BrowserDownloadUpdate(
+      downloadID: UInt32(downloadIdentifier),
+      sourceURL: value,
+      suggestedFileName: suggestedFileName,
+      destinationURL: destinationPath.isEmpty ? nil : URL(fileURLWithPath: destinationPath),
+      receivedBytes: receivedBytes,
+      totalBytes: hasTotalBytes ? totalBytes : nil,
+      isInProgress: isInProgress,
+      isComplete: isComplete,
+      isCancelled: isCanceled,
+      isInterrupted: isInterrupted)
+    onDownloadUpdated?(self, update)
   }
 
   /// Chromium is asking for the keyboard (`CefFocusHandler::OnSetFocus`).

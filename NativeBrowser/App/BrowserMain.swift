@@ -52,6 +52,9 @@ enum BrowserMain {
     if runBrowserSelfTestIfRequested(runtime: runtime) {
       return
     }
+    if Milestone7SelfTest.installIfRequested(runtime: runtime) {
+      return
+    }
     if CommandLine.arguments.contains("--navigation-self-test") {
       // Milestone 2 integration check. The result is this process's exit code.
       exit(NavigationSelfTest.run(runtime: runtime))
@@ -97,6 +100,7 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--tabs-self-test")
       || CommandLine.arguments.contains("--spaces-self-test")
       || CommandLine.arguments.contains { $0.hasPrefix("--session-restore-self-test=") }
+      || CommandLine.arguments.contains { $0.hasPrefix("--milestone7-self-test=") }
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }

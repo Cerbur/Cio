@@ -12,6 +12,7 @@ import SwiftUI
 
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  @EnvironmentObject private var runtime: ApplicationRuntime
   @Environment(\.browserTitlebarContentInset) private var titlebarContentInset
 
   var body: some View {
@@ -110,7 +111,21 @@ struct TabSidebarView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 14)
-      .padding(.vertical, 11)
+      .padding(.top, 8)
+
+      VStack(spacing: 2) {
+        SidebarUtilityButton(
+          title: "History",
+          systemImage: "clock",
+          action: runtime.showHistory)
+        SidebarUtilityButton(
+          title: "Downloads",
+          systemImage: "arrow.down.circle",
+          badge: runtime.downloadManager.activeDownloadCount,
+          action: runtime.showDownloads)
+      }
+      .padding(.horizontal, 10)
+      .padding(.bottom, 11)
     }
     .frame(width: 248)
     .frame(maxHeight: .infinity)
@@ -121,6 +136,38 @@ struct TabSidebarView: View {
         .frame(width: 0.5)
         .allowsHitTesting(false)
     }
+  }
+}
+
+private struct SidebarUtilityButton: View {
+  let title: String
+  let systemImage: String
+  var badge: Int = 0
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 9) {
+        Image(systemName: systemImage)
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(.secondary)
+          .frame(width: 16)
+        Text(title)
+          .font(.callout)
+        Spacer(minLength: 4)
+        if badge > 0 {
+          Text("\(badge)")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 28)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(title)
+    .accessibilityLabel(title)
   }
 }
 

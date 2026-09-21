@@ -2665,3 +2665,140 @@ M6 does not restore the Chromium Back/Forward stack, scroll position, form or
 JavaScript state, recently closed tabs, cookies/password settings, history,
 downloads, crash journals, multiple windows or tab suspension. Existing CEF
 cookie/profile bootstrap settings are unchanged.
+
+## 66. Milestone 7 implementation record: history and downloads
+
+Milestone 7 keeps the M6 ownership graph and adds two application-scoped
+services. Workspace state remains workspace state; history and downloads do not
+become properties of `BrowserWorkspaceStore` or `BrowserSession`:
+
+```text
+ApplicationRuntime
+  -> BrowserWorkspaceStore
+       -> WorkspaceCollection             Spaces/tabs/selection
+       -> BrowserSessionManager           live Chromium runtimes
+  -> HistoryService
+       -> HistoryStore                    SQLite file IO
+  -> DownloadManager                     process-memory download rows
+```
+
+The typed event flows are:
+
+```text
+CEF OnLoadEnd(main frame, final URL)
+  -> CEFClientHandler
+  -> BrowserBridge
+  -> BrowserSession
+  -> BrowserSessionManager
+  -> ApplicationRuntime.HistoryService.recordVisit()
+  -> HistoryStore SQLite upsert
+
+CEF OnTitleChange
+  -> CEFClientHandler -> BrowserBridge -> BrowserSession
+  -> BrowserSessionManager -> ApplicationRuntime.HistoryService.updateTitle()
+
+CEF CanDownload / OnBeforeDownload / OnDownloadUpdated
+  -> CEFClientHandler
+  -> value-only BrowserBridge callbacks
+  -> BrowserSession -> BrowserSessionManager
+  -> ApplicationRuntime.DownloadManager
+```
+
+No correctness path parses lifecycle strings. CEF objects and callbacks stop at
+the Objective-C++ boundary; Swift receives URLs, identifiers, paths, byte
+counts and boolean state values only.
+
+### History semantics
+
+`HistoryURLPolicy` accepts only `http` and `https`. `CefLoadHandler::OnLoadEnd`
+is filtered to the main frame and is ignored when the session has received a
+main-frame `OnLoadError`. The URL is read from `frame->GetURL()` at load-end,
+after redirects have committed, so a redirect stores its final URL rather than
+the provisional redirect target. A successful reload, Back, Forward or repeat
+navigation records another visit to the exact URL; a failed/provisional load or
+an address edit alone does not.
+
+`OnTitleChange` updates an existing row without incrementing its count. The
+runtime associates that callback with the session's current main-frame URL,
+which matters because CEF may deliver title change before load-end. Error-page
+titles are not allowed to rename the last successful history row.
+
+### SQLite storage
+
+`HistoryStore` uses the system `SQLite3` library and schema version 1. The
+database is `history.sqlite3` under
+`~/Library/Application Support/NativeBrowser/` by default, or directly under
+`NATIVEBROWSER_DATA_DIR` for isolated verification. The `history_entries` table
+stores one row per exact absolute URL, title, visit count, first-visited
+timestamp and last-visited timestamp. Full query strings and fragments are
+stored because they are part of the browser URL identity. The database file is
+set to `0600`; its containing directory is created with `0700` permissions.
+
+History UI reads the published newest-first `HistoryService.entries` projection.
+Clear History issues one native confirmation alert and then deletes all rows.
+There is no search, favicon service, grouping, sync, or separate history
+database.
+
+### Download handling and destination policy
+
+`CEFClientHandler` implements the exact installed CEF `CefDownloadHandler`
+surface: `GetDownloadHandler()`, `CanDownload(...)`,
+`OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>,
+const CefString&, CefRefPtr<CefBeforeDownloadCallback>)`, and
+`OnDownloadUpdated(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem>,
+CefRefPtr<CefDownloadItemCallback>)`. `OnBeforeDownload` selects a path and
+calls `Continue(path, false)`; progress callbacks translate CEF's in-progress,
+complete, cancelled and interrupted flags plus received/total bytes. Active CEF
+download callbacks remain inside the CEF handler so application teardown can
+cancel a still-active download without exposing C++ types to Swift.
+
+Normal destinations use the user's Downloads directory. Tests use
+`NATIVEBROWSER_DOWNLOADS_DIR`. Suggested names are reduced to a single safe
+filename component: separators and control characters are replaced/removed,
+empty/`.`/`..` suggestions fall back to `download`, and existing files receive
+predictable ` (1)`, ` (2)` collision suffixes. Every selected path is checked
+against the configured directory before it is returned to CEF; no overwrite or
+path escape is allowed. Unknown totals publish indeterminate progress.
+
+`DownloadManager` owns `pending`, `downloading`, `completed`, `failed` and
+`cancelled` values, keeps the list in process memory only, and preserves the
+first terminal state if CEF sends a later non-terminal snapshot. Completed rows
+retain the actual destination and are verified to exist. The UI actions use
+`NSWorkspace.open(_:)` and `NSWorkspace.activateFileViewerSelecting(_:)` for
+Open and Show in Finder. There is no user-facing Cancel button in M7; teardown
+cancellation of active CEF callbacks is internal and any resulting CEF state is
+reported as cancelled/failed.
+
+The deterministic integration driver uses the installed CEF browser-host
+`StartDownload` API solely to trigger the real download pipeline twice without
+depending on fixture DOM timing. Normal browser downloads still arrive through
+the same `CefDownloadHandler` callbacks. The fixture is loopback-only, uses a
+known payload and `Content-Disposition`, and the verifier checks names,
+containment, byte count and SHA-256 hash.
+
+### Internal UI lifetime and verification
+
+History and Downloads are native SwiftUI sheets routed from the sidebar footer.
+The sheet is attached around the existing main window content; it does not
+replace or recreate `BrowserSurfaceView`, `BrowserSurfaceHostView`,
+`ChromiumContainerView` or any `BrowserSession`. Opening either panel therefore
+does not change `browserCreationCount`, selected-tab identity, focus ownership
+or CEF surface lifetime.
+
+`Scripts/verify_milestone7.sh` creates fresh isolated data/download/work
+directories, starts `Scripts/milestone7_fixture_server.py` on loopback, builds
+the project and test scheme, runs the unit bundle, runs a real CEF seed process,
+checks sanitized logs and SQLite/filesystem evidence, then launches a separate
+verify process to confirm history persistence and process-memory-only download
+rows. It terminates the fixture server on every exit path. The self-test's
+clean-shutdown assertion is made after the requested browser close has been
+drained by `CefShutdown`, because this installed CEF build can defer
+`OnBeforeClose` after completed attachment downloads; no production ownership
+registry or normal termination coordinator is changed for that diagnostic
+observation.
+
+M7 deliberately does not add history search, favicon fetching, history sync,
+download persistence, resumable downloads, retry management, or a user-facing
+download cancellation control. Origin-tab closure remains governed by the
+installed CEF behavior; `DownloadManager` does not retain a BrowserSession just
+to display a download row.

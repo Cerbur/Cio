@@ -65,6 +65,7 @@ targets:
           - "$(SRCROOT)/ThirdParty"
         OTHER_LDFLAGS:
           - "-lcef_dll_wrapper"
+          - "-lsqlite3"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
           - "@executable_path/../Frameworks"
@@ -109,6 +110,9 @@ targets:
       - path: NativeBrowser/Browser/WorkspaceCollection.swift
       - path: NativeBrowser/Browser/WorkspaceSessionSnapshot.swift
       - path: NativeBrowser/Persistence/SessionStore.swift
+      - path: NativeBrowser/History/HistoryModels.swift
+      - path: NativeBrowser/Persistence/HistoryStore.swift
+      - path: NativeBrowser/Downloads/DownloadManager.swift
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.
@@ -121,6 +125,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowserTests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
+        OTHER_LDFLAGS:
+          - "-lsqlite3"
 
   # Chromium sub-process entry point. The binary produced here is copied into
   # the "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh.

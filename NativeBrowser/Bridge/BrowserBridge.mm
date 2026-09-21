@@ -123,6 +123,15 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   }
 }
 
+- (void)startDownloadURL:(NSString *)url {
+  if (_closed || url.length == 0) {
+    return;
+  }
+  if (CefRefPtr<CefBrowser> browser = _client->browser()) {
+    browser->GetHost()->StartDownload(std::string(url.UTF8String));
+  }
+}
+
 #pragma mark - View integration
 
 - (void)setFocus:(BOOL)focused {
@@ -214,6 +223,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   if (_closed || _closeRequested) {
     return;
   }
+  _client->CancelActiveDownloads();
   _closeRequested = YES;
   _releasesFirstResponderOnClose = applicationTerminating;
 
@@ -379,6 +389,44 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
           didFailLoadWithError:errorText
                      errorCode:errorCode
                      failedURL:failedURL];
+}
+
+- (void)browserDidFinishMainFrameLoadWithURL:(NSString *)url {
+  [self.delegate browserBridge:self didFinishMainFrameLoadWithURL:url];
+}
+
+- (NSString *)downloadDestinationPathForIdentifier:(NSInteger)downloadIdentifier
+                                          sourceURL:(NSString *)sourceURL
+                                    suggestedFileName:(NSString *)suggestedFileName {
+  return [self.delegate browserBridge:self
+      destinationPathForDownloadIdentifier:downloadIdentifier
+                                 sourceURL:sourceURL
+                           suggestedFileName:suggestedFileName];
+}
+
+- (void)browserDidUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
+                                      sourceURL:(NSString *)sourceURL
+                                suggestedFileName:(NSString *)suggestedFileName
+                                destinationPath:(NSString *)destinationPath
+                                   receivedBytes:(long long)receivedBytes
+                                      totalBytes:(long long)totalBytes
+                                   hasTotalBytes:(BOOL)hasTotalBytes
+                                    isInProgress:(BOOL)isInProgress
+                                      isComplete:(BOOL)isComplete
+                                      isCanceled:(BOOL)isCanceled
+                                   isInterrupted:(BOOL)isInterrupted {
+  [self.delegate browserBridge:self
+      didUpdateDownloadWithIdentifier:downloadIdentifier
+                            sourceURL:sourceURL
+                      suggestedFileName:suggestedFileName
+                      destinationPath:destinationPath
+                         receivedBytes:receivedBytes
+                            totalBytes:totalBytes
+                         hasTotalBytes:hasTotalBytes
+                          isInProgress:isInProgress
+                            isComplete:isComplete
+                            isCanceled:isCanceled
+                         isInterrupted:isInterrupted];
 }
 
 - (void)browserDidRequestPopup:(NSString *)url {

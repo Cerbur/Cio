@@ -38,6 +38,16 @@ final class BrowserSessionManager: ObservableObject {
   /// Popup callback. The workspace store resolves the source session's Space.
   var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
 
+  /// Application-level history callback. The manager forwards typed events but
+  /// does not own history records.
+  var onMainFrameLoadFinished: ((BrowserSession, URL) -> Void)?
+  var onTitleChanged: ((BrowserSession) -> Void)?
+
+  /// Application-level download callbacks. The manager remains a runtime
+  /// session owner and only forwards value events.
+  var onDownloadRequested: ((BrowserSession, UInt32, URL, String) -> String)?
+  var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
+
   /// Called when the runtime registry changes so the workspace store can redraw
   /// its status bar without becoming a second runtime registry.
   var onRuntimeStateChanged: (() -> Void)?
@@ -126,6 +136,18 @@ final class BrowserSessionManager: ObservableObject {
     }
     session.onOpenNewTabRequest = { [weak self] session, url in
       self?.onOpenNewTabRequest?(session, url)
+    }
+    session.onMainFrameLoadFinished = { [weak self] session, url in
+      self?.onMainFrameLoadFinished?(session, url)
+    }
+    session.onTitleChanged = { [weak self] session in
+      self?.onTitleChanged?(session)
+    }
+    session.onDownloadRequested = { [weak self] session, downloadID, sourceURL, suggestedFileName in
+      self?.onDownloadRequested?(session, downloadID, sourceURL, suggestedFileName) ?? ""
+    }
+    session.onDownloadUpdated = { [weak self] session, update in
+      self?.onDownloadUpdated?(session, update)
     }
 
     sessions[tabID] = session

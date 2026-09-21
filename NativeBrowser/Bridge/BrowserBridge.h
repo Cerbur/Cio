@@ -38,6 +38,35 @@ NS_SWIFT_UI_ACTOR
                errorCode:(NSInteger)errorCode
                failedURL:(NSString *)failedURL;
 
+/// A top-level frame completed successfully. The URL comes from the frame at
+/// OnLoadEnd time, so redirects resolve to the final committed URL. This is
+/// intentionally separate from didUpdateURL: address changes also include
+/// provisional and failed navigations.
+- (void)browserBridge:(BrowserBridge *)bridge
+    didFinishMainFrameLoadWithURL:(NSString *)url;
+
+/// Returns the destination selected by the application-level DownloadManager.
+/// The value is a full path, not a user-visible URL.
+- (NSString *)browserBridge:(BrowserBridge *)bridge
+    destinationPathForDownloadIdentifier:(NSInteger)downloadIdentifier
+                               sourceURL:(NSString *)sourceURL
+                         suggestedFileName:(NSString *)suggestedFileName;
+
+/// A typed download progress/status update translated from CEF. Empty strings
+/// mean that CEF has not supplied a path yet; no CEF object crosses this API.
+- (void)browserBridge:(BrowserBridge *)bridge
+    didUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
+                          sourceURL:(NSString *)sourceURL
+                    suggestedFileName:(NSString *)suggestedFileName
+                    destinationPath:(NSString *)destinationPath
+                       receivedBytes:(long long)receivedBytes
+                          totalBytes:(long long)totalBytes
+                       hasTotalBytes:(BOOL)hasTotalBytes
+                        isInProgress:(BOOL)isInProgress
+                          isComplete:(BOOL)isComplete
+                          isCanceled:(BOOL)isCanceled
+                       isInterrupted:(BOOL)isInterrupted;
+
 /// Chromium requested a popup (`target=_blank`, `window.open`).
 ///
 /// The unmanaged native CEF window has already been cancelled; `url` is the
@@ -94,6 +123,11 @@ NS_SWIFT_UI_ACTOR
 - (void)reload;
 - (void)stopLoading;
 
+/// Starts a download through the browser's real CEF download pipeline. The
+/// verification harness uses this to avoid making download correctness depend
+/// on the fixture page's DOM or synthetic input dispatch.
+- (void)startDownloadURL:(NSString *)url;
+
 /// Gives keyboard focus to the page, or releases it.
 - (void)setFocus:(BOOL)focused;
 
@@ -142,6 +176,21 @@ NS_SWIFT_UI_ACTOR
 - (void)browserDidFailLoadWithError:(NSString *)errorText
                           errorCode:(NSInteger)errorCode
                           failedURL:(NSString *)failedURL;
+- (void)browserDidFinishMainFrameLoadWithURL:(NSString *)url;
+- (NSString *)downloadDestinationPathForIdentifier:(NSInteger)downloadIdentifier
+                                          sourceURL:(NSString *)sourceURL
+                                    suggestedFileName:(NSString *)suggestedFileName;
+- (void)browserDidUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
+                                      sourceURL:(NSString *)sourceURL
+                                suggestedFileName:(NSString *)suggestedFileName
+                                destinationPath:(NSString *)destinationPath
+                                   receivedBytes:(long long)receivedBytes
+                                      totalBytes:(long long)totalBytes
+                                   hasTotalBytes:(BOOL)hasTotalBytes
+                                    isInProgress:(BOOL)isInProgress
+                                      isComplete:(BOOL)isComplete
+                                      isCanceled:(BOOL)isCanceled
+                                   isInterrupted:(BOOL)isInterrupted;
 - (void)browserDidRequestPopup:(NSString *)url;
 /// CefFocusHandler::OnSetFocus: Chromium is requesting keyboard focus. Answered
 /// by the delegate; a closing or closed bridge never allows it.

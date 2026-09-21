@@ -10,6 +10,7 @@
 #include <string>
 
 #include "include/cef_browser.h"
+#include "include/cef_download_item.h"
 #include "include/cef_frame.h"
 
 namespace {
@@ -37,6 +38,15 @@ void OnMainThread(void (^block)(void)) {
 }  // namespace
 
 CEFClientHandler::CEFClientHandler(BrowserBridge *bridge) : bridge_(bridge) {}
+
+void CEFClientHandler::CancelActiveDownloads() {
+  for (auto &entry : active_downloads_) {
+    if (entry.second != nullptr) {
+      entry.second->Cancel();
+    }
+  }
+  active_downloads_.clear();
+}
 
 void CEFClientHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                      const CefString &title) {
@@ -164,6 +174,21 @@ void CEFClientHandler::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
   });
 }
 
+void CEFClientHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                                 CefRefPtr<CefFrame> frame,
+                                 int httpStatusCode) {
+  if (frame == nullptr || !frame->IsMain()) {
+    return;
+  }
+  // GetURL() is read at completion time, after redirects have committed. Do
+  // not log it: the complete URL may contain credentials or a token.
+  NSString *url = NSStringFromCefString(frame->GetURL());
+  __weak BrowserBridge *bridge = bridge_;
+  OnMainThread(^{
+    [bridge browserDidFinishMainFrameLoadWithURL:url];
+  });
+}
+
 void CEFClientHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
                                    CefRefPtr<CefFrame> frame,
                                    ErrorCode errorCode,
@@ -184,5 +209,83 @@ void CEFClientHandler::OnLoadError(CefRefPtr<CefBrowser> browser,
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
     [bridge browserDidFailLoadWithError:text errorCode:code failedURL:url];
+  });
+}
+
+bool CEFClientHandler::CanDownload(CefRefPtr<CefBrowser> browser,
+                                   const CefString &url,
+                                   const CefString &request_method) {
+  // The application has no policy that blocks a browser download. Returning
+  // this explicitly keeps the installed CEF download flow on the typed path
+  // instead of relying on CefDownloadHandler's default implementation.
+  return true;
+}
+
+bool CEFClientHandler::OnBeforeDownload(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefDownloadItem> download_item,
+    const CefString &suggested_name,
+    CefRefPtr<CefBeforeDownloadCallback> callback) {
+  if (download_item == nullptr || callback == nullptr) {
+    return false;
+  }
+
+  const NSInteger downloadIdentifier = static_cast<NSInteger>(download_item->GetId());
+  NSString *sourceURL = NSStringFromCefString(download_item->GetURL());
+  NSString *suggestedFileName = NSStringFromCefString(suggested_name);
+  __weak BrowserBridge *bridge = bridge_;
+  CefRefPtr<CefBeforeDownloadCallback> callbackRef = callback;
+
+  OnMainThread(^{
+    NSString *destination = [bridge downloadDestinationPathForIdentifier:downloadIdentifier
+                                                                 sourceURL:sourceURL
+                                                           suggestedFileName:suggestedFileName];
+    std::string path = destination != nil ? std::string(destination.UTF8String) : std::string();
+    callbackRef->Continue(path, /*show_dialog=*/false);
+  });
+  // We call Continue ourselves, synchronously or asynchronously on the main
+  // actor. Returning true prevents CEF's Alloy default from cancelling it.
+  return true;
+}
+
+void CEFClientHandler::OnDownloadUpdated(
+    CefRefPtr<CefBrowser> browser,
+    CefRefPtr<CefDownloadItem> download_item,
+    CefRefPtr<CefDownloadItemCallback> callback) {
+  if (download_item == nullptr) {
+    return;
+  }
+
+  const NSInteger downloadIdentifier = static_cast<NSInteger>(download_item->GetId());
+  NSString *sourceURL = NSStringFromCefString(download_item->GetURL());
+  NSString *suggestedFileName = NSStringFromCefString(download_item->GetSuggestedFileName());
+  NSString *destinationPath = NSStringFromCefString(download_item->GetFullPath());
+  const long long receivedBytes = static_cast<long long>(download_item->GetReceivedBytes());
+  const long long totalBytes = static_cast<long long>(download_item->GetTotalBytes());
+  const BOOL hasTotalBytes = totalBytes > 0;
+  const BOOL isInProgress = download_item->IsInProgress();
+  const BOOL isComplete = download_item->IsComplete();
+  const BOOL isCanceled = download_item->IsCanceled();
+  const BOOL isInterrupted = download_item->IsInterrupted();
+
+  if (callback != nullptr && isInProgress && !isCanceled && !isInterrupted) {
+    active_downloads_[static_cast<uint32_t>(downloadIdentifier)] = callback;
+  } else {
+    active_downloads_.erase(static_cast<uint32_t>(downloadIdentifier));
+  }
+
+  __weak BrowserBridge *bridge = bridge_;
+  OnMainThread(^{
+    [bridge browserDidUpdateDownloadWithIdentifier:downloadIdentifier
+                                          sourceURL:sourceURL
+                                    suggestedFileName:suggestedFileName
+                                    destinationPath:destinationPath
+                                       receivedBytes:receivedBytes
+                                          totalBytes:totalBytes
+                                       hasTotalBytes:hasTotalBytes
+                                        isInProgress:isInProgress
+                                          isComplete:isComplete
+                                          isCanceled:isCanceled
+                                       isInterrupted:isInterrupted];
   });
 }
