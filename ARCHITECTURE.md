@@ -2802,3 +2802,98 @@ download persistence, resumable downloads, retry management, or a user-facing
 download cancellation control. Origin-tab closure remains governed by the
 installed CEF behavior; `DownloadManager` does not retain a BrowserSession just
 to display a download row.
+
+## Milestone 8 stability and release hardening
+
+M8 keeps the accepted ownership graph unchanged and hardens the seams around
+it. A normal tab close is now a typed state machine: the workspace keeps its
+`BrowserTab` while `BrowserBridge` calls `TryCloseBrowser()`, CEF runs the
+beforeunload path, and only `DoClose`/the typed acceptance callback commits the
+domain removal. A native CEF beforeunload dialog is allowed to resolve the
+request. Cancelling it returns the session to the open state and leaves the tab
+and runtime intact. Application termination is a separate policy: it cancels
+active CEF downloads, calls `CloseBrowser(force_close=true)`, waits for every
+typed `OnBeforeClose`, and never creates replacement tabs.
+
+The quit sequence is: flush the durable workspace snapshot, request closure of
+the instantiated `BrowserSession` values only, pump until the manager's live
+session count is zero, call `CefShutdown()` once, then let AppKit terminate.
+Lazy restored tabs remain domain-only and are not instantiated during quit.
+`ApplicationRuntime.shutdownCEF()` refuses the call while a live session
+exists. Production termination has a five-second diagnostic watchdog that
+reports the live count and elapsed time but never forces an unsafe shutdown.
+The unbounded drain used by process-level self-tests follows the same rule; a
+test-only browser-view release hook is not a production timeout fallback.
+
+CEF renderer termination is observed through the installed
+`CefRequestHandler::OnRenderProcessTerminated` callback. The event carries only
+the typed status/code into Swift, marks the affected session as crashed, and
+shows a small reload overlay while keeping the app and other tabs alive.
+Reload clears that state and uses the existing navigation path. Network errors
+continue to settle as navigation failures without entering History, and the
+address field remains a native editable control.
+
+Session and History persistence still degrade safely on malformed, missing or
+unwritable storage: the workspace falls back to a fresh domain graph and
+history failures remain local to History. Canonical session/history files are
+`0600` and their containing directories are `0700`. Download destination
+resolution now records an explicit failed item when the configured directory
+cannot be created or a safe contained path cannot be selected. Download names
+remain sanitized, collision-safe and rooted inside the configured Downloads
+directory. Closing a tab does not retain a `BrowserSession` solely for a
+download row. During application quit, active CEF downloads are cancelled so
+browser teardown takes precedence; the resulting CEF cancelled/interrupted
+state is reflected in the in-memory `DownloadManager` row.
+
+`WindowChromeView` removes its local mouse monitor on every window move and
+installs at most one monitor for the current window. It forwards a click only
+when hit-testing finds the actual native address field, preserving toolbar,
+titlebar and window-drag behavior. Selection changes still run through the
+existing focus state machine; a background close clears focus only when the
+responder belongs to that browser, while termination releases the responder
+unconditionally.
+
+Diagnostic URL output is passed through `URLLogSanitizer`: scheme, authority and
+parameter names may remain visible, while user-info, query values, fragments
+and non-root path contents are replaced with redacted markers. Raw page titles,
+raw download URLs, session JSON and History rows are not emitted by the
+production diagnostic paths. Exact URLs and titles remain available where they
+are semantically required by session/history persistence and the address bar.
+CEF bridge logging does not format page URLs or titles.
+
+The project now has explicit Debug and Release configurations. Debug defines
+`DEBUG=1`, uses unoptimized incremental Swift, permits the development mock
+keychain switch by default, and retains verification flags as opt-in command
+line behavior. Release uses optimized whole-module Swift/C++, hardened runtime,
+dSYM information, stripping and product validation. Release does not add
+`--use-mock-keychain` implicitly; the switch may be supplied explicitly by an
+isolated verification run, while a signed product must use its real keychain
+policy. The checked-in CEF framework and wrapper are arm64-only, so the
+release candidate is intentionally arm64-only until an x86_64 CEF distribution
+is supplied.
+
+The Release build uses `CFBundleShortVersionString=0.1.0` and
+`CFBundleVersion=1` for both the app and generated helper bundles. The runtime
+packager validates the exact helper set required by this installed CEF build:
+the framework plus `NativeBrowser Helper`, `Helper (Alerts)`, `Helper (GPU)`,
+`Helper (Plugin)` and `Helper (Renderer)`. It verifies helper version metadata
+and nested code signing locally. Release uses the existing local/ad-hoc
+identity and the checked-in `NativeBrowser.entitlements` file for the locally
+validated hardened-runtime allowances: JIT, unsigned executable memory and
+CEF library validation. Those allowances require a fresh review and likely
+tightening with the final Developer ID-signed CEF bundle; Developer ID
+identity, notarization, stapling, DMG/archive production and distribution
+policy remain M9 work. There is no approved product AppIcon asset in this
+repository, so the production icon remains an M9 branding item.
+
+The deterministic fixture server now also exposes `/beforeunload`, `/popup`
+and `/slow-download` in addition to the M7 pages. `Milestone8SelfTest` drives
+20+ tabs across five Spaces, rapid selection, background close/reopen and
+100 History/Downloads panel state iterations; its lazy seed/verify phases
+persist 50 domain tabs, verify one initial live session, activate selected tabs
+across Spaces, and then exercise the same typed termination path. Shell
+watchdogs in `Scripts/verify_milestone8.sh` and
+`Scripts/verify_release_candidate.sh` are external test infrastructure only.
+The beforeunload confirmation itself and real Chinese IME composition remain
+manual GUI checks when the automation environment cannot interact with the
+native dialog/input method reliably.

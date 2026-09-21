@@ -140,12 +140,10 @@ void CEFClientHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 }
 
 bool CEFClientHandler::DoClose(CefRefPtr<CefBrowser> browser) {
-  NSLog(@"[browser] DoClose %d", browser->GetIdentifier());
   // The application owns the window that hosts the browser view, so handle the
-  // close notification here instead of letting CEF send it to the window
-  // (performClose: does nothing when the window is not key, which would leave
-  // the browser alive indefinitely). Removing the Chromium view from the view
-  // hierarchy completes the close and OnBeforeClose() follows.
+  // close notification here instead of letting CEF send it to the window.
+  // Removing the Chromium view from the view hierarchy completes the close and
+  // OnBeforeClose() follows.
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
     [bridge completeClose];
@@ -154,11 +152,45 @@ bool CEFClientHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 }
 
 void CEFClientHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
-  NSLog(@"[browser] OnBeforeClose %d", browser->GetIdentifier());
   browser_ = nullptr;
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
     [bridge browserDidClose];
+  });
+}
+
+bool CEFClientHandler::OnBeforeUnloadDialog(
+    CefRefPtr<CefBrowser> browser,
+    const CefString &message_text,
+    bool is_reload,
+    CefRefPtr<CefJSDialogCallback> callback) {
+  // Use CEF's native confirmation UI. We only observe the dialog lifecycle so
+  // Swift can distinguish accepted and cancelled ordinary tab closes.
+  before_unload_dialog_open_ = true;
+  return false;
+}
+
+void CEFClientHandler::OnDialogClosed(CefRefPtr<CefBrowser> browser) {
+  if (!before_unload_dialog_open_) {
+    return;
+  }
+  before_unload_dialog_open_ = false;
+  __weak BrowserBridge *bridge = bridge_;
+  OnMainThread(^{
+    [bridge browserDidCloseBeforeUnloadDialog];
+  });
+}
+
+void CEFClientHandler::OnRenderProcessTerminated(
+    CefRefPtr<CefBrowser> browser,
+    TerminationStatus status,
+    int error_code,
+    const CefString &error_string) {
+  __weak BrowserBridge *bridge = bridge_;
+  const NSInteger statusValue = static_cast<NSInteger>(status);
+  const NSInteger errorCode = static_cast<NSInteger>(error_code);
+  OnMainThread(^{
+    [bridge browserDidTerminateRendererWithStatus:statusValue errorCode:errorCode];
   });
 }
 

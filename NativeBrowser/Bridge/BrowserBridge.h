@@ -98,6 +98,12 @@ NS_SWIFT_UI_ACTOR
 - (BOOL)browserBridge:(BrowserBridge *)bridge
     allowsFocusRequestFromSystem:(BOOL)fromSystem;
 
+- (void)browserBridgeDidAcceptClose:(BrowserBridge *)bridge;
+- (void)browserBridgeDidCancelClose:(BrowserBridge *)bridge;
+- (void)browserBridge:(BrowserBridge *)bridge
+    didTerminateRendererWithStatus:(NSInteger)status
+                         errorCode:(NSInteger)errorCode;
+
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 
 @end
@@ -211,6 +217,11 @@ NS_SWIFT_UI_ACTOR
 /// CefFocusHandler::OnSetFocus: Chromium is requesting keyboard focus. Answered
 /// by the delegate; a closing or closed bridge never allows it.
 - (BOOL)browserRequestsFocusFromSystem:(BOOL)fromSystem;
+- (void)browserDidAcceptClose;
+- (void)browserDidCancelClose;
+- (void)browserDidCloseBeforeUnloadDialog;
+- (void)browserDidTerminateRendererWithStatus:(NSInteger)status
+                                     errorCode:(NSInteger)errorCode;
 - (void)browserDidClose;
 
 @end

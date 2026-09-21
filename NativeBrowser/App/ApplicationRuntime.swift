@@ -94,7 +94,13 @@ final class ApplicationRuntime: ObservableObject {
   /// browser closed (Milestone 3 section 7).
   var onLiveSessionDidClose: ((BrowserSession) -> Void)?
 
+  /// Optional launch-driver hook used by the direct browser self-test. It
+  /// fires only after the real SwiftUI window and stable surface host exist.
+  var onMainWindowAppeared: (() -> Void)?
+
   private var messagePumpTimer: Timer?
+  private var terminationWatchdogTimer: Timer?
+  private var terminationWatchdogStartedAt: Date?
   private var didShutDownCEF = false
   private var cefShutdownInvocations = 0
   private var isTracingEnabled = false
@@ -128,11 +134,21 @@ final class ApplicationRuntime: ObservableObject {
     }
     store.sessionManager.onDownloadRequested = {
       [weak self] _, downloadID, sourceURL, suggestedFileName, metadata in
-      self?.downloadManager.prepareDownload(
+      guard let self else { return "" }
+      guard let destination = self.downloadManager.prepareDownload(
         downloadID: downloadID,
         sourceURL: sourceURL,
         suggestedFileName: suggestedFileName,
-        metadata: metadata)?.path ?? ""
+        metadata: metadata)
+      else {
+        self.downloadManager.recordFailedDownload(
+          downloadID: downloadID,
+          sourceURL: sourceURL,
+          suggestedFileName: suggestedFileName,
+          metadata: metadata)
+        return ""
+      }
+      return destination.path
     }
     store.sessionManager.onDownloadUpdated = { [weak self] _, update in
       self?.downloadManager.update(
@@ -190,6 +206,7 @@ final class ApplicationRuntime: ObservableObject {
     // target, so explicitly complete the initial hand-off once the real
     // window exists. Subsequent address-field focus remains user-controlled.
     workspaceStore.selectedSession?.focusPage()
+    onMainWindowAppeared?()
   }
 
   /// True once the SwiftUI window has reported that it appeared.
@@ -322,8 +339,18 @@ final class ApplicationRuntime: ObservableObject {
   ///
   /// MUST NOT be called while Chromium is on the stack: CefShutdown() re-enters
   /// CEF and trips a Chromium CHECK (see Terminator).
-  func shutdownCEF() {
-    guard !didShutDownCEF else { return }
+  @discardableResult
+  func shutdownCEF() -> Bool {
+    guard !didShutDownCEF else { return true }
+    guard !workspaceStore.hasLiveSessions else {
+      // This is a hard safety boundary. A timer, a missing callback or a
+      // returning NSApplication loop must never turn a live-browser condition
+      // into CefShutdown; the caller must keep pumping until OnBeforeClose.
+      record("cef:shutdown-refused(live=\(workspaceStore.liveSessionCount))")
+      AppLog.cef.error(
+        "refusing CefShutdown while \(self.workspaceStore.liveSessionCount, privacy: .public) browser session(s) remain live")
+      return false
+    }
     didShutDownCEF = true
     cefShutdownInvocations += 1
     markShutdownPhase("T5")
@@ -332,6 +359,7 @@ final class ApplicationRuntime: ObservableObject {
     markShutdownPhase("T6")
     record("cef:shutdown(clean: \(!CEFProcessHost.isInitialized))")
     AppLog.cef.info("CEF shutdown requested")
+    return true
   }
 
   // MARK: - Shutdown timing
@@ -350,11 +378,34 @@ final class ApplicationRuntime: ObservableObject {
     NBShutdownTimingEnable()
   }
 
-  /// Starts the main-thread liveness detector (see ShutdownTiming.h) during
-  /// termination, so a freeze shows up as a growing gap in the diagnostics.
+  /// Starts non-destructive production diagnostics during termination. The
+  /// watchdog reports a stuck/slow close but never forces CefShutdown.
   func startLivenessWatchdog() {
-    guard shutdownTimingEnabled else { return }
-    NBShutdownTimingStartLivenessWatchdog()
+    stopLivenessWatchdog()
+    let startedAt = Date()
+    terminationWatchdogStartedAt = startedAt
+    let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, let startedAt = self.terminationWatchdogStartedAt else { return }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        AppLog.cef.warning(
+          "termination watchdog: waiting for browser close callbacks live=\(self.workspaceStore.liveSessionCount, privacy: .public) elapsed=\(elapsed, privacy: .public)s")
+      }
+    }
+    terminationWatchdogTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+    if shutdownTimingEnabled {
+      NBShutdownTimingStartLivenessWatchdog()
+    }
+  }
+
+  func stopLivenessWatchdog() {
+    terminationWatchdogTimer?.invalidate()
+    terminationWatchdogTimer = nil
+    terminationWatchdogStartedAt = nil
+    if shutdownTimingEnabled {
+      NBShutdownTimingStopLivenessWatchdog()
+    }
   }
 
   /// Records a timestamp for a shutdown phase on the shared monotonic epoch
@@ -452,6 +503,7 @@ final class ApplicationRuntime: ObservableObject {
       pendingStep?.invalidate()
       pendingStep = nil
       runtime.onLiveSessionDidClose = nil
+      runtime.stopLivenessWatchdog()
 
       AppLog.cef.info("termination: shutting CEF down")
       runtime.shutdownCEF()

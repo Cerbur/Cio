@@ -153,6 +153,50 @@ final class DownloadManager: ObservableObject {
     return destination
   }
 
+  /// Records a terminal failure when CEF asks for a destination but the
+  /// configured download directory cannot be created or safely resolved. A
+  /// visible failed row is preferable to silently losing the download event.
+  @discardableResult
+  func recordFailedDownload(
+    downloadID: UInt32,
+    sourceURL: URL,
+    suggestedFileName: String,
+    metadata: DownloadMetadata = .empty,
+    now: Date = Date()
+  ) -> DownloadItem {
+    let resolvedFileName = Self.resolvedFileName(
+      sourceURL: sourceURL,
+      suggestedFileName: suggestedFileName,
+      metadata: metadata)
+
+    if let existingID = itemIDsByCEFDownloadID[downloadID],
+      let index = items.firstIndex(where: { $0.id == existingID })
+    {
+      var item = items[index]
+      if !item.state.isTerminal {
+        item.state = .failed
+        item.finishedAt = now
+      }
+      items[index] = item
+      return item
+    }
+
+    let item = DownloadItem(
+      id: UUID(),
+      cefDownloadID: downloadID,
+      fileName: Self.sanitizedFileName(resolvedFileName),
+      sourceURL: sourceURL,
+      destinationURL: nil,
+      receivedBytes: 0,
+      totalBytes: nil,
+      state: .failed,
+      startedAt: now,
+      finishedAt: now)
+    items.insert(item, at: 0)
+    itemIDsByCEFDownloadID[downloadID] = item.id
+    return item
+  }
+
   /// Applies one real CEF progress callback. Repeated callbacks update the
   /// existing item by CEF identifier instead of appending another row.
   func update(

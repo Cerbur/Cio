@@ -10,6 +10,7 @@
 #import "CEFClientHandler.h"
 #import "ShutdownTiming.h"
 
+#include <cstdio>
 #include <string>
 
 #include "include/cef_browser.h"
@@ -46,6 +47,11 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   /// the view; the bridge must not keep it alive.
   __weak NSView *_parentView;
   BOOL _closed;
+  /// YES while an ordinary tab-close request is waiting for beforeunload.
+  /// The workspace remains intact until CEF reports acceptance.
+  BOOL _ordinaryCloseRequested;
+  /// YES once CEF has accepted the close and DoClose/OnBeforeClose is expected.
+  BOOL _closeCommitted;
   BOOL _closeRequested;
   /// YES once the Chromium view has been released. Releasing it more than once
   /// is not safe: the first release is what destroys the browser, so a second
@@ -71,7 +77,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   // CefShutdown() requires that no browser outlives the application; a bridge
   // that is deallocated with a live browser means -close was skipped.
   if (_client->browser()) {
-    NSLog(@"[browser] bridge deallocated with a live Chromium browser");
+    fprintf(stderr, "[browser] bridge deallocated with a live Chromium browser\n");
   }
 }
 
@@ -135,7 +141,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 #pragma mark - View integration
 
 - (void)setFocus:(BOOL)focused {
-  if (_closeRequested) {
+  if (_closeRequested || _ordinaryCloseRequested) {
     NBShutdownTimingReport(@"focus:refused(closeRequested)", 0);
     return;
   }
@@ -158,11 +164,10 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
       [browserView.window makeFirstResponder:nil];
     }
   }
-  NSLog(@"[browser] focus %@", focused ? @"granted" : @"released");
 }
 
 - (void)resizeToBounds:(NSRect)bounds {
-  if (_closeRequested) {
+  if (_closeRequested || _ordinaryCloseRequested) {
     NBShutdownTimingReport(@"resize:refused(closeRequested)", 0);
     return;
   }
@@ -180,9 +185,6 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   browser->GetHost()->WasResized();
   if (!NSEqualSizes(_lastReportedSize, _parentView.bounds.size)) {
     _lastReportedSize = _parentView.bounds.size;
-    NSLog(@"[browser] resized: container=%.0fx%.0f view=%.0fx%.0f",
-          NSWidth(_parentView.bounds), NSHeight(_parentView.bounds),
-          NSWidth(browserView.bounds), NSHeight(browserView.bounds));
   }
 }
 
@@ -194,7 +196,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 /// CEF is running, so DoClose/OnBeforeClose never arrive (observed as a hang
 /// until CefShutdown forces the teardown).
 - (void)reparentToView:(NSView *)view {
-  if (view == nil || _closed || _closeRequested) {
+  if (view == nil || _closed || _closeRequested || _ordinaryCloseRequested) {
     NBShutdownTimingReport(
         _closeRequested ? @"reparent:refused(closeRequested)" : @"reparent:refused", 0);
     return;
@@ -214,39 +216,67 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   browserView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   [view addSubview:browserView];
   browser->GetHost()->WasResized();
-  NSLog(@"[browser] re-parented the Chromium view into a new container");
 }
 
 #pragma mark - Lifecycle
 
 - (void)closeForApplicationTermination:(BOOL)applicationTerminating {
-  if (_closed || _closeRequested) {
+  if (_closed) {
     return;
   }
-  _client->CancelActiveDownloads();
-  _closeRequested = YES;
-  _releasesFirstResponderOnClose = applicationTerminating;
+
+  if (!applicationTerminating) {
+    if (_closeRequested || _ordinaryCloseRequested) {
+      return;
+    }
+    _ordinaryCloseRequested = YES;
+    _releasesFirstResponderOnClose = NO;
+  } else {
+    // Termination overrides a pending ordinary close. It is the only path that
+    // may bypass beforeunload and cancel active downloads immediately.
+    _ordinaryCloseRequested = NO;
+    _client->CancelActiveDownloads();
+    _closeRequested = YES;
+    _releasesFirstResponderOnClose = YES;
+  }
 
   CefRefPtr<CefBrowser> browser = _client->browser();
   if (!browser) {
-    // Never created (or already gone): release the bridge immediately.
+    // Never created (or already gone): an ordinary request is accepted because
+    // there is no renderer that can cancel it.
+    if (!applicationTerminating) {
+      [self browserDidAcceptClose];
+    }
     [self browserDidClose];
     return;
   }
   NBShutdownTimingMark(@"T1-CloseBrowser");
-  NSLog(@"[browser] closing Chromium browser %d", browser->GetIdentifier());
-
-  // force_close: skip the beforeunload handler so quitting is never blocked.
-  // The browser is destroyed by CEFClientHandler::DoClose() ->
-  // -completeClose, which releases the Chromium view. Reported as a real
-  // timestamp (not a mark) so a CloseBrowser that does not return is visible.
   NBShutdownTimingReport(@"CloseBrowser:begin", NBShutdownTimingNow());
-  browser->GetHost()->CloseBrowser(/*force_close=*/true);
+  if (applicationTerminating) {
+    // force_close: skip the beforeunload handler so quitting is never blocked.
+    browser->GetHost()->CloseBrowser(/*force_close=*/true);
+  } else {
+    // TryCloseBrowser runs beforeunload and reports whether the close is ready
+    // to proceed. For this embedded child view, complete the ready case with
+    // the same force-close ordering used by application termination; a false
+    // result means that a native beforeunload confirmation is still pending.
+    const bool closeReady = browser->GetHost()->TryCloseBrowser();
+    NBShutdownTimingReport(
+        closeReady ? @"TryCloseBrowser:ready" : @"TryCloseBrowser:pending", 0);
+    if (closeReady) {
+      browser->GetHost()->CloseBrowser(/*force_close=*/true);
+    }
+  }
   NBShutdownTimingReport(@"CloseBrowser:end", NBShutdownTimingNow());
-  NSLog(@"[browser] CloseBrowser returned");
 }
 
 - (void)releaseBrowserView {
+  // This escape hatch is reserved for deterministic self-tests after a
+  // termination close has already been requested. Production shutdown waits
+  // for CEF's typed OnBeforeClose path and never calls it as a timeout.
+  if (!_closeRequested) {
+    return;
+  }
   [self completeClose];
 }
 
@@ -313,7 +343,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 - (void)createBrowserWithURL:(NSString *)url {
   NSView *parent = _parentView;
   if (parent == nil) {
-    NSLog(@"[browser] cannot create a browser without a parent view");
+    fprintf(stderr, "[browser] cannot create a browser without a parent view\n");
     return;
   }
 
@@ -334,12 +364,8 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   CefBrowserHost::CreateBrowser(windowInfo, _client, std::string(url.UTF8String),
                                 settings, nullptr, nullptr);
   // The URL is deliberately absent here: a browser URL may carry a token or an
-  // OAuth code, and this NSLog goes to the unified log and to standard error,
-  // both of which are captured by the verification scripts. The same load is
-  // reported by BrowserSession through AppLog in sanitized form
-  // (NativeBrowser/App/URLLogSanitizer.swift), so no diagnostic is lost by not
-  // formatting the URL a second time in Objective-C++.
-  NSLog(@"[browser] creating Chromium browser");
+  // OAuth code. BrowserSession reports the load through the centralized
+  // sanitizer instead.
 }
 
 #pragma mark - Events from the CEF layer
@@ -357,7 +383,6 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
       browserView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     }
   }
-  NSLog(@"[browser] Chromium browser created");
   [self.delegate browserBridgeDidCreateBrowser:self];
 }
 
@@ -446,7 +471,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 }
 
 - (void)browserDidRequestPopup:(NSString *)url {
-  if (_closed || _closeRequested || url.length == 0) {
+  if (_closed || _closeRequested || _ordinaryCloseRequested || url.length == 0) {
     return;
   }
   // Deliberately no logging here: a popup URL can carry an OAuth code. The
@@ -458,19 +483,75 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   // A closed or closing browser never takes the keyboard; the delegate decides
   // for a live one, because only it knows whether this surface is still the
   // visible selected one (Milestone 3 focus fix).
-  if (_closed || _closeRequested) {
+  if (_closed || _closeRequested || _ordinaryCloseRequested) {
     return NO;
   }
   return [self.delegate browserBridge:self allowsFocusRequestFromSystem:fromSystem];
+}
+
+- (void)browserDidAcceptClose {
+  if (_closed || _closeCommitted || !_ordinaryCloseRequested) {
+    return;
+  }
+  _ordinaryCloseRequested = NO;
+  _closeCommitted = YES;
+  _closeRequested = YES;
+  [self.delegate browserBridgeDidAcceptClose:self];
+  NBShutdownTimingMark(@"ordinary-close-accepted");
+  // The embedded child view has no top-level window whose close notification
+  // can finish CEF's non-forced CloseBrowser(false) sequence. Acceptance is
+  // delivered asynchronously after DoClose has unwound, so it is now safe to
+  // force the final host teardown without bypassing beforeunload.
+  if (CefRefPtr<CefBrowser> browser = _client->browser()) {
+    NBShutdownTimingMark(@"ordinary-close-force");
+    browser->GetHost()->CloseBrowser(/*force_close=*/true);
+  } else {
+    NBShutdownTimingMark(@"ordinary-close-no-browser");
+  }
+}
+
+- (void)browserDidCancelClose {
+  if (_closed || _closeRequested || !_ordinaryCloseRequested) {
+    return;
+  }
+  _ordinaryCloseRequested = NO;
+  [self.delegate browserBridgeDidCancelClose:self];
+}
+
+- (void)browserDidCloseBeforeUnloadDialog {
+  // OnDialogClosed precedes DoClose for an accepted dialog. Deferring two main
+  // queue turns lets the deferred DoClose acceptance commit first; if no
+  // DoClose follows, the request is a user cancellation and the workspace
+  // remains unchanged.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self browserDidCancelClose];
+    });
+  });
+}
+
+- (void)browserDidTerminateRendererWithStatus:(NSInteger)status
+                                     errorCode:(NSInteger)errorCode {
+  if (_closed) {
+    return;
+  }
+  [self.delegate browserBridge:self
+      didTerminateRendererWithStatus:status
+                           errorCode:errorCode];
 }
 
 - (void)browserDidClose {
   if (_closed) {
     return;
   }
+  if (_ordinaryCloseRequested) {
+    // A view hierarchy teardown can bypass DoClose. Once OnBeforeClose is
+    // observed the close is necessarily accepted, so do not leave the domain
+    // tab behind waiting for a callback that CEF will never send.
+    [self browserDidAcceptClose];
+  }
   _closed = YES;
   NBShutdownTimingMark(@"T3");
-  NSLog(@"[browser] Chromium browser destroyed");
   [self.delegate browserBridgeDidClose:self];
 }
 

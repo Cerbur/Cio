@@ -183,16 +183,16 @@ check_parsed "127.0.0.1:8080 becomes http" \
 # The probe prints URLs in sanitized form (URLLogSanitizer): the query value
 # never appears in its output, and neither does the raw query text.
 check_parsed "words become a Google search with the query value redacted" \
-  "parsed-as-search https://www.google.com/search?q=<redacted>" "swift objective-c++ cef"
+  "parsed-as-search https://www.google.com/<path>?q=<redacted>" "swift objective-c++ cef"
 check_parsed "a sentence becomes a search with the query value redacted" \
-  "parsed-as-search https://www.google.com/search?q=<redacted>" "how does chromium work"
+  "parsed-as-search https://www.google.com/<path>?q=<redacted>" "how does chromium work"
 check_parsed "a Chinese query becomes a search with the query value redacted" \
-  "parsed-as-search https://www.google.com/search?q=<redacted>" "浏览器 Chromium CEF"
+  "parsed-as-search https://www.google.com/<path>?q=<redacted>" "浏览器 Chromium CEF"
 check_parsed "a token URL keeps its parameter name and redacts the value" \
   "parsed-as-url http://127.0.0.1:3080/?token=<redacted>" \
   "http://127.0.0.1:3080/?token=test-token_123-abc"
 check_parsed "a fragment is redacted" \
-  "parsed-as-url https://example.com/callback#<redacted>" \
+  "parsed-as-url https://example.com/<path>#<redacted>" \
   "https://example.com/callback#test-fragment"
 check_parsed "empty input does not navigate" "parsed-as-empty" ""
 check_parsed "whitespace-only input does not navigate" "parsed-as-empty" "   "

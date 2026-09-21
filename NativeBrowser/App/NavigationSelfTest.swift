@@ -77,7 +77,7 @@ enum NavigationSelfTest {
     let initialLoaded = wait(until: { session.hasFinishedFirstLoad }, timeout: 45)
     report(
       "initial-load", initialLoaded && session.lastErrorCode == nil,
-      "url=\(URLLogSanitizer.sanitized(session.url)) title=\(session.title)")
+      "url=\(URLLogSanitizer.sanitized(session.url)) title-present=\(!session.title.isEmpty)")
 
     let initialURL = session.url?.absoluteString ?? ""
     report(
@@ -85,7 +85,7 @@ enum NavigationSelfTest {
       "url=\(URLLogSanitizer.sanitized(initialURL))")
 
     let title = session.title
-    report("initial-title", !title.isEmpty, "title=\(title)")
+    report("initial-title", !title.isEmpty, "title-present=\(!title.isEmpty)")
 
     let createdAfterFirstLoad = session.browserCreationCount
     report(
@@ -111,7 +111,7 @@ enum NavigationSelfTest {
       }, timeout: 45)
     report(
       "url-navigation", secondLoaded,
-      "url=\(URLLogSanitizer.sanitized(session.url)) title=\(session.title)")
+      "url=\(URLLogSanitizer.sanitized(session.url)) title-present=\(!session.title.isEmpty)")
     report(
       "address-field-tracks-url",
       session.addressField.editText == secondURL.absoluteString,
@@ -234,18 +234,20 @@ enum NavigationSelfTest {
       "browser-closed", freshSession?.isClosed ?? false,
       "isClosed=\(freshSession?.isClosed ?? false) seconds=\(String(format: "%.2f", closeSeconds))")
     // The remaining browser is the one that navigated through this whole test.
-    // Chromium defers destroying a browser in this harness once its renderer has
-    // done real work (the Milestone 2 notes recorded the same behaviour), and
-    // the application's own quit runs - section 6 below and section 4 of
-    // Scripts/verify_milestone3.sh - are what check that a navigated browser is
-    // destroyed before CefShutdown. Here the window is closed and CEF is shut
-    // down, exactly as Milestone 2 did.
+    // Close every live session through the same force-close termination path as
+    // the application, then keep pumping until all typed close callbacks arrive.
+    // CefShutdown is never used as a timeout drain.
+    runtime.requestBrowserClosure()
+    while runtime.hasLiveBrowsers {
+      runtime.pumpMessageLoop()
+      RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
     window.close()
-    runtime.shutdownCEF()
+    _ = runtime.shutdownCEF()
     report("cef-clean-shutdown", !CEFProcessHost.isInitialized, "cefInitialized=false")
 
     print(
-      "navigation-self-test: checks=\(checks) failures=\(failures) browser-creations=\(session.browserCreationCount) title=\(session.title)"
+      "navigation-self-test: checks=\(checks) failures=\(failures) browser-creations=\(session.browserCreationCount) title-present=\(!session.title.isEmpty)"
     )
     runtime.emitLifecycleTrace()
     return failures == 0 ? 0 : 2

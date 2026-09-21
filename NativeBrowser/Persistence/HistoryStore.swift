@@ -151,6 +151,9 @@ final class HistoryStore {
         at: directory,
         withIntermediateDirectories: true,
         attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
+      try? fileManager.setAttributes(
+        [.posixPermissions: NSNumber(value: Int16(0o700))],
+        ofItemAtPath: directory.path)
     }
 
     var opened: OpaquePointer?

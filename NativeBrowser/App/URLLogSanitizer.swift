@@ -28,11 +28,11 @@ import Foundation
 
 /// Turns a URL into the form that may be logged or traced.
 ///
-/// Kept visible: scheme, the *presence* of user-info, host, port, path and query
-/// parameter names.
+/// Kept visible: scheme, the *presence* of user-info, host, port, a coarse path
+/// marker and query parameter names.
 ///
-/// Removed: user name, password, every query parameter value, and the whole
-/// fragment (fragments routinely carry "access_token=...").
+/// Removed: user name, password, path contents, every query parameter value, and
+/// the whole fragment (fragments routinely carry "access_token=...").
 ///
 /// The policy is applied consistently, so the same URL always produces the same
 /// log text:
@@ -40,9 +40,9 @@ import Foundation
 ///     http://127.0.0.1:3080/?token=abcdef
 ///         -> http://127.0.0.1:3080/?token=<redacted>
 ///     https://example.com/oauth/callback?code=secret&state=abc#private
-///         -> https://example.com/oauth/callback?code=<redacted>&state=<redacted>#<redacted>
+///         -> https://example.com/<path>?code=<redacted>&state=<redacted>#<redacted>
 ///     https://user:password@example.com/path
-///         -> https://<redacted>@example.com/path
+///         -> https://<redacted>@example.com/<path>
 ///
 enum URLLogSanitizer {
   /// Written where a value was removed.
@@ -64,8 +64,8 @@ enum URLLogSanitizer {
   /// The log form of `rawURL`.
   ///
   /// The string is split from the right - fragment, then query, then the
-  /// hierarchical part - so every component keeps its original percent-encoding
-  /// and only the removable pieces are replaced.
+  /// hierarchical part - so the remaining scheme, authority and query names
+  /// keep their original percent-encoding while sensitive pieces are replaced.
   static func sanitized(_ rawURL: String) -> String {
     guard !rawURL.isEmpty else { return "" }
 
@@ -116,8 +116,9 @@ enum URLLogSanitizer {
     guard let slash = hierarchical.firstIndex(of: "/") else {
       return "\(scheme)://\(sanitizedAuthority(hierarchical))"
     }
-    return
-      "\(scheme)://\(sanitizedAuthority(hierarchical[..<slash]))\(hierarchical[slash...])"
+    let path = hierarchical[slash...]
+    let pathMarker = path == "/" ? "/" : "/<path>"
+    return "\(scheme)://\(sanitizedAuthority(hierarchical[..<slash]))\(pathMarker)"
   }
 
   /// Replaces the user-info of an authority ("user:password@host:port").

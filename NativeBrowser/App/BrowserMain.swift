@@ -50,11 +50,19 @@ enum BrowserMain {
       return
     }
     if runBrowserSelfTestIfRequested(runtime: runtime) {
+      NativeBrowserApp.main()
+      AppLog.app.info("the NSApplication run loop returned")
+      if runtime.hasLiveBrowsers {
+        drainBrowserClosure(runtime: runtime)
+      }
+      _ = runtime.shutdownCEF()
       return
     }
-    if Milestone7SelfTest.installIfRequested(runtime: runtime) {
-      return
-    }
+    _ = Milestone7SelfTest.installIfRequested(runtime: runtime)
+    // M8's driver is a run-loop resident state machine, like SpacesSelfTest.
+    // Install it and continue into the real NSApplication run loop; the driver
+    // exits only after its typed lifecycle checks finish.
+    _ = Milestone8SelfTest.installIfRequested(runtime: runtime)
     if CommandLine.arguments.contains("--navigation-self-test") {
       // Milestone 2 integration check. The result is this process's exit code.
       exit(NavigationSelfTest.run(runtime: runtime))
@@ -62,6 +70,10 @@ enum BrowserMain {
     if SessionRestoreSelfTest.installIfRequested(runtime: runtime) {
       NativeBrowserApp.main()
       AppLog.app.info("the NSApplication run loop returned")
+      if runtime.hasLiveBrowsers {
+        drainBrowserClosure(runtime: runtime)
+      }
+      _ = runtime.shutdownCEF()
       return
     }
     // Milestone 4 multi-Space integration check. It is installed as a driver that
@@ -79,17 +91,14 @@ enum BrowserMain {
 
     // Safety net for the path where the run loop returned without
     // -applicationShouldTerminate: having run (for example a failed launch).
-    // It is a no-op after a normal termination, and it never runs CefShutdown
-    // while a browser is still open.
+    // It keeps pumping until every typed OnBeforeClose callback arrives; there
+    // is deliberately no timeout that could turn a live-browser state into
+    // CefShutdown.
     if runtime.hasLiveBrowsers {
       AppLog.cef.error("run loop returned with a live browser; requesting closure")
-      runtime.requestBrowserClosure()
-      if !runtime.hasLiveBrowsers {
-        runtime.shutdownCEF()
-      }
-    } else {
-      runtime.shutdownCEF()
+      drainBrowserClosure(runtime: runtime)
     }
+    _ = runtime.shutdownCEF()
   }
 
   /// True when the process was launched by the milestone verification tooling.
@@ -101,6 +110,7 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--spaces-self-test")
       || CommandLine.arguments.contains { $0.hasPrefix("--session-restore-self-test=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--milestone7-self-test=") }
+      || CommandLine.arguments.contains { $0.hasPrefix("--milestone8-self-test=") }
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--navigate-after=") }
@@ -112,19 +122,6 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--log-shutdown-timing")
   }
 
-  /// The window the self-tests drive. It is a real, key window: Chromium
-  /// destroys a browser when its host view deallocates, and a view in a window
-  /// that was never ordered in front is not torn down the same way.
-  private static func makeTestWindow(title: String) -> NSWindow {
-    let window = NSWindow(
-      contentRect: NSRect(x: 0, y: 0, width: 1024, height: 768),
-      styleMask: [.titled, .closable, .resizable],
-      backing: .buffered,
-      defer: false)
-    window.title = title
-    return window
-  }
-
   /// Milestone 1 integration check: builds the real window and surface host,
   /// loads the configured page, waits for Chromium to report the load finished,
   /// then closes the browser and shuts CEF down.
@@ -133,27 +130,21 @@ enum BrowserMain {
   /// loaded, no navigation error was reported and the browser was destroyed.
   private static func runBrowserSelfTestIfRequested(runtime: ApplicationRuntime) -> Bool {
     guard CommandLine.arguments.contains("--browser-self-test") else { return false }
+    // Drive the real SwiftUI window. A synthetic direct-executable parent
+    // window does not receive the same AppKit teardown callbacks as the
+    // product's stable surface host.
+    runtime.onMainWindowAppeared = {
+      Self.performBrowserSelfTest(runtime: runtime)
+    }
+    return true
+  }
 
+  private static func performBrowserSelfTest(runtime: ApplicationRuntime) -> Never {
     let workspace = runtime.workspaceStore
-    let manager = workspace.sessionManager
-    let window = makeTestWindow(title: "NativeBrowser self-test")
-    let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
-    host.autoresizingMask = [.width, .height]
-    window.contentView = host
-    // The browser view needs a window to render into; keep the test window
-    // behind everything else.
-    window.orderBack(nil)
-    workspace.attachSurfaceHost(host)
-
     guard let session = workspace.selectedSession else {
       print("browser-self-test: no tab was created")
       exit(2)
     }
-
-    // CEF is pumped from the application run loop, which the self-test drives
-    // itself instead of starting SwiftUI.
-    runtime.startMessagePump()
-
     let loadDeadline = Date().addingTimeInterval(45)
     while Date() < loadDeadline, !session.hasFinishedFirstLoad {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -163,37 +154,38 @@ enum BrowserMain {
     // Self-test output is a trace that ends up in a log file, so the URL is
     // reported in its sanitized form (see URLLogSanitizer).
     print(
-      "browser-self-test: loaded=\(loaded) title=\(session.title) url=\(URLLogSanitizer.sanitized(session.url))"
+      "browser-self-test: loaded=\(loaded) title-present=\(!session.title.isEmpty) url=\(URLLogSanitizer.sanitized(session.url))"
     )
     runtime.record("selftest:loaded=\(loaded)")
 
     // Resize check: the window, the AppKit surface host, the container and the
     // Chromium view must all track each other (ARCHITECTURE.md section 9).
     let resizedSize = NSSize(width: 900, height: 620)
-    window.setContentSize(resizedSize)
+    let window = NSApp.windows.first(where: { $0.title == "NativeBrowser" })
+      ?? NSApp.keyWindow
+    window?.setContentSize(resizedSize)
     let resizeDeadline = Date().addingTimeInterval(1.0)
     while Date() < resizeDeadline {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
-    let hostSize = host.bounds.size
+    let hostSize = window?.contentView?.bounds.size ?? .zero
     print(
       "browser-self-test: resized-container=\(Int(hostSize.width))x\(Int(hostSize.height))"
     )
     runtime.record(
       "selftest:resized=\(Int(hostSize.width))x\(Int(hostSize.height))")
 
-    // Close the browser the same way the application does at termination:
-    // request the close, pump, then let the runtime finish and shut CEF down.
+    // Exercise the real application termination coordinator. It cancels the
+    // initial request, closes every live browser, waits for typed OnBeforeClose
+    // callbacks, shuts CEF down once, and asks AppKit to terminate again.
     let closeStart = Date()
-    session.close()
-    let closeDeadline = Date().addingTimeInterval(5)
-    while Date() < closeDeadline, !session.isClosed {
+    runtime.onMainWindowAppeared = nil
+    NSApplication.shared.terminate(nil)
+    let closeDeadline = Date().addingTimeInterval(30)
+    while Date() < closeDeadline, !runtime.hasShutDownCEF {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
-    window.close()
-    runtime.shutdownCEF()
-
-    let closed = session.isClosed
+    let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownCEF
     let closeDuration = Date().timeIntervalSince(closeStart)
     print(
       "browser-self-test: browser-closed=\(closed) close-seconds=\(String(format: "%.2f", closeDuration))"
@@ -201,6 +193,20 @@ enum BrowserMain {
     runtime.record("selftest:closed=\(closed)")
     runtime.emitLifecycleTrace()
     exit(loaded && closed ? 0 : 2)
+  }
+
+  /// Requests force-close semantics only as part of application termination,
+  /// then keeps the CEF message pump alive until every session has reached its
+  /// typed close callback. This intentionally has no deadline or fallback to
+  /// CefShutdown.
+  private static func drainBrowserClosure(runtime: ApplicationRuntime) {
+    runtime.startLivenessWatchdog()
+    defer { runtime.stopLivenessWatchdog() }
+    runtime.requestBrowserClosure()
+    while runtime.hasLiveBrowsers {
+      runtime.pumpMessageLoop()
+      RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
   }
 
   // MARK: - Tooling hooks
@@ -362,7 +368,13 @@ enum BrowserMain {
       while Date() < deadline {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
       }
-      // No browser exists in this mode, so there is nothing to close first.
+      // The workspace still owns its initial BrowserSession even though no
+      // Chromium view was attached. Close that typed runtime before the hard
+      // CefShutdown guard is reached; a session object is still live ownership
+      // from the application's perspective.
+      if runtime.hasLiveBrowsers {
+        drainBrowserClosure(runtime: runtime)
+      }
       runtime.shutdownCEF()
     }
 

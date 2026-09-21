@@ -59,6 +59,14 @@ struct BrowserDownloadUpdate: Sendable {
   let isInterrupted: Bool
 }
 
+private enum BrowserSessionCloseState {
+  case open
+  case userClosePending
+  case accepted
+  case applicationTerminating
+  case closed
+}
+
 @MainActor
 final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// Runtime identity of this session, distinct from the tab identifier: a tab
@@ -80,6 +88,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   @Published private(set) var canGoBack = false
   @Published private(set) var canGoForward = false
   @Published private(set) var lastErrorCode: Int?
+  @Published private(set) var rendererCrashed = false
 
   /// True once the Chromium browser object exists.
   @Published private(set) var hasBrowser = false
@@ -148,6 +157,14 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// be discarded before CEF has finished with it.
   var onClosed: ((BrowserSession) -> Void)?
 
+  /// CEF accepted an ordinary user close after beforeunload completed. The
+  /// workspace commits the domain removal only after this signal.
+  var onCloseAccepted: ((BrowserSession) -> Void)?
+
+  /// CEF cancelled an ordinary close, usually because the user rejected the
+  /// beforeunload confirmation. The workspace remains unchanged.
+  var onCloseCancelled: ((BrowserSession) -> Void)?
+
   /// Typed notification that a Chromium callback changed state the tab list
   /// shows. Carries this session, so one browser's callback can only ever update
   /// its own tab (Milestone 3 section 13).
@@ -187,6 +204,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private weak var containerView: ChromiumContainerView?
   private var didStartLoading = false
   private var didReceiveMainFrameURL = false
+  private var closeState: BrowserSessionCloseState = .open
 
   init(tabID: UUID, initialURL: URL, initialTitle: String = "") {
     self.tabID = tabID
@@ -339,6 +357,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private func beginNavigation() {
     lastErrorCode = nil
     lastMainFrameLoadFailed = false
+    rendererCrashed = false
   }
 
   /// Reload when the page is idle, stop when it is loading (Milestone 2,
@@ -374,6 +393,18 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.setFocus(false)
   }
 
+  /// Clears all focus owned by this tab before its domain identity leaves the
+  /// workspace. AppKit's field editor is shared by every native address field,
+  /// so leaving it alive while the selected tab is removed can make the
+  /// replacement tab inherit an editing session.
+  func releaseFocusBeforeTabRemoval() {
+    wantsPageFocus = false
+    isEditingAddressField = false
+    addressField.endEditing()
+    containerView?.window?.makeFirstResponder(nil)
+    bridge?.setFocus(false)
+  }
+
   /// Completes the close by releasing the Chromium view, which is what
   /// destroys the browser. Used when CEF does not deliver DoClose (see
   /// BrowserBridge.releaseBrowserView). Safe to call more than once.
@@ -391,7 +422,30 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// native address field.
   func close(terminating: Bool = false) {
     guard !isClosed else { return }
+    if terminating {
+      // Termination must retain an ordinary close that CEF has accepted but
+      // has not yet completed with OnBeforeClose. The workspace may already
+      // have installed a last-tab replacement by then, while this runtime
+      // still remains live and must stay in the close barrier until its typed
+      // callback arrives.
+      guard closeState != .applicationTerminating else { return }
+      let closeWasAlreadyAccepted = closeState == .accepted
+      closeState = .applicationTerminating
+      // CEF has already entered its normal close sequence. Calling
+      // CloseBrowser(true) again at this point can interrupt the pending
+      // platform-view teardown; keep pumping until its typed OnBeforeClose
+      // arrives. Termination still force-closes the open/beforeunload-pending
+      // cases below.
+      if closeWasAlreadyAccepted {
+        return
+      }
+    } else {
+      guard closeState == .open else { return }
+      closeState = .userClosePending
+    }
     guard let bridge else {
+      notifyCloseAccepted()
+      closeState = .closed
       isClosed = true
       // Reported before the typed callback below so the lifecycle trace keeps
       // the "browser:closed" -> "termination:browsers-closed" order the
@@ -476,7 +530,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       if didStartLoading, !hasFinishedFirstLoad {
         hasFinishedFirstLoad = true
         emit(
-          "browser:first-load-finished(title=\(self.title), url=\(URLLogSanitizer.sanitized(self.url)))"
+          "browser:first-load-finished(title-present=\(!self.title.isEmpty), url=\(URLLogSanitizer.sanitized(self.url)))"
         )
       }
     }
@@ -488,11 +542,12 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
 extension BrowserSession: ChromiumContainerViewDelegate {
   func containerViewDidAddToWindow(_ view: ChromiumContainerView) {
+    guard !isClosed else { return }
     createBrowserIfPossible()
   }
 
   func containerViewDidResize(_ view: ChromiumContainerView) {
-    guard view.window != nil else { return }
+    guard !isClosed, view.window != nil else { return }
     bridge?.resize(toBounds: view.bounds)
   }
 
@@ -501,7 +556,7 @@ extension BrowserSession: ChromiumContainerViewDelegate {
     // the view stays in the hierarchy and Chromium keeps running. Coming back,
     // the browser is simply told its geometry again so the first frame after the
     // switch matches the container.
-    guard isVisible, view.window != nil else { return }
+    guard !isClosed, isVisible, view.window != nil else { return }
     bridge?.resize(toBounds: view.bounds)
   }
 }
@@ -510,8 +565,10 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 
 extension BrowserSession: BrowserBridgeDelegate {
   func browserBridgeDidCreateBrowser(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
     browserCreationCount += 1
     hasBrowser = true
+    rendererCrashed = false
     containerView?.setBrowserAttached(true)
     emit("browser:created(count=\(browserCreationCount))")
     // Clicking and typing must reach the page without an extra click first
@@ -533,10 +590,11 @@ extension BrowserSession: BrowserBridgeDelegate {
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateTitle title: String) {
+    guard acceptsCallback(from: bridge) else { return }
     guard self.title != title else { return }
     self.title = title
-    AppLog.navigation.debug("title changed: \(title, privacy: .public)")
-    onLifecycleEvent?("navigation:title(\(title))")
+    AppLog.navigation.debug("title changed (present=\(!title.isEmpty, privacy: .public))")
+    onLifecycleEvent?("navigation:title(present=\(!title.isEmpty))")
     if !lastMainFrameLoadFailed {
       onTitleChanged?(self)
     }
@@ -544,6 +602,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
+    guard acceptsCallback(from: bridge) else { return }
     let value = URL(string: url)
     // Chromium repeats the main-frame URL on several events; only act when it
     // actually changed so the log and the address field stay quiet. The first
@@ -570,11 +629,13 @@ extension BrowserSession: BrowserBridgeDelegate {
     canGoBack: Bool,
     canGoForward: Bool
   ) {
+    guard acceptsCallback(from: bridge) else { return }
     updateNavigationState(
       isLoading: isLoading, canGoBack: canGoBack, canGoForward: canGoForward)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateLoadingProgress progress: Double) {
+    guard acceptsCallback(from: bridge) else { return }
     loadingProgress = progress
   }
 
@@ -584,14 +645,16 @@ extension BrowserSession: BrowserBridgeDelegate {
     errorCode: Int,
     failedURL: String
   ) {
+    guard acceptsCallback(from: bridge) else { return }
     lastErrorCode = errorCode
     lastMainFrameLoadFailed = true
     // The error code and text are the diagnostics; the failing URL is written
     // out only through the sanitizer (section 5 of the security fix).
     let loggedURL = URLLogSanitizer.sanitized(failedURL)
-    emit("navigation:failed(code=\(errorCode), url=\(loggedURL), text=\(errorText))")
+    emit(
+      "navigation:failed(code=\(errorCode), url=\(loggedURL), text-present=\(!errorText.isEmpty))")
     AppLog.navigation.error(
-      "load failed: \(errorText, privacy: .public) (\(errorCode, privacy: .public)) url=\(loggedURL, privacy: .public)"
+      "load failed (code=\(errorCode, privacy: .public), text-present=\(!errorText.isEmpty, privacy: .public)) url=\(loggedURL, privacy: .public)"
     )
     if !hasFinishedFirstLoad {
       hasFinishedFirstLoad = true
@@ -599,11 +662,36 @@ extension BrowserSession: BrowserBridgeDelegate {
   }
 
   func browserBridge(_ bridge: BrowserBridge, didFinishMainFrameLoadWithURL url: String) {
+    guard acceptsCallback(from: bridge) else { return }
     guard !lastMainFrameLoadFailed else { return }
     guard let value = URL(string: url), HistoryURLPolicy.isRecordable(value) else { return }
     successfulMainFrameLoadCount += 1
     lastSuccessfulMainFrameURL = value
     onMainFrameLoadFinished?(self, value)
+  }
+
+  func browserBridgeDidAcceptClose(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    notifyCloseAccepted()
+  }
+
+  func browserBridgeDidCancelClose(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge), closeState == .userClosePending else { return }
+    closeState = .open
+    emit("browser:close-cancelled")
+    onCloseCancelled?(self)
+  }
+
+  func browserBridge(
+    _ bridge: BrowserBridge,
+    didTerminateRendererWithStatus status: Int,
+    errorCode: Int
+  ) {
+    guard acceptsCallback(from: bridge) else { return }
+    rendererCrashed = true
+    AppLog.browser.error(
+      "renderer terminated (status=\(status, privacy: .public), code=\(errorCode, privacy: .public))")
+    emit("renderer:terminated(status=\(status), code=\(errorCode))")
   }
 
   func browserBridge(
@@ -616,6 +704,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     mimeType: String,
     originalURL: String
   ) -> String {
+    guard acceptsCallback(from: bridge) else { return "" }
     guard let value = URL(string: sourceURL), downloadIdentifier >= 0 else { return "" }
     let metadata = DownloadMetadata(
       cefSuggestedFileName: cefSuggestedFileName,
@@ -644,6 +733,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     isCanceled: Bool,
     isInterrupted: Bool
   ) {
+    guard acceptsCallback(from: bridge) else { return }
     guard let value = URL(string: sourceURL), downloadIdentifier >= 0 else { return }
     let update = BrowserDownloadUpdate(
       downloadID: UInt32(downloadIdentifier),
@@ -688,6 +778,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, allowsFocusRequestFromSystem fromSystem: Bool)
     -> Bool
   {
+    guard acceptsCallback(from: bridge) else { return false }
     let allowed = !isClosed && isSurfaceVisible && ownsPageKeyboard
     AppLog.browser.debug(
       "focus request id=\(self.tabID.uuidString, privacy: .public) source=\(fromSystem ? "system" : "navigation", privacy: .public) visible=\(self.isSurfaceVisible, privacy: .public) wants-page-focus=\(self.wantsPageFocus, privacy: .public) allowed=\(allowed, privacy: .public)"
@@ -699,17 +790,36 @@ extension BrowserSession: BrowserBridgeDelegate {
   /// native CEF window; the URL is handed to the runtime owner so it can open as
   /// a managed tab instead (Milestone 3 section 26).
   func browserBridge(_ bridge: BrowserBridge, didRequestNewTabWithURL url: String) {
-    guard !isClosed else { return }
+    guard acceptsCallback(from: bridge) else { return }
     onOpenNewTabRequest?(self, url)
   }
 
   func browserBridgeDidClose(_ bridge: BrowserBridge) {
-    guard !isClosed else { return }
+    guard acceptsCallback(from: bridge) else { return }
+    if closeState == .userClosePending {
+      notifyCloseAccepted()
+    }
+    closeState = .closed
     isClosed = true
     hasBrowser = false
     // Order matters: the diagnostic trace first, then the typed ownership
     // callback the manager releases this session from.
     emit("browser:closed")
     onClosed?(self)
+  }
+
+  private func notifyCloseAccepted() {
+    guard !isClosed, closeState != .accepted else { return }
+    closeState = .accepted
+    emit("browser:close-accepted")
+    onCloseAccepted?(self)
+  }
+
+  /// CEF can deliver queued callbacks after a browser has started closing. The
+  /// bridge identity and the session's closed bit together reject callbacks
+  /// from a stale runtime before they can mutate navigation, focus, history or
+  /// download state.
+  private func acceptsCallback(from bridge: BrowserBridge) -> Bool {
+    !isClosed && self.bridge === bridge
   }
 }

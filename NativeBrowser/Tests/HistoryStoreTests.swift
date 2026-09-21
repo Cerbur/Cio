@@ -148,4 +148,16 @@ final class HistoryStoreTests: XCTestCase {
     XCTAssertEqual(store.databaseURL.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL)
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.databaseURL.path))
   }
+
+  func testDatabaseAndParentDirectoryArePrivateWhenSupported() throws {
+    let store = try makeStore()
+    let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+    let databaseAttributes = try FileManager.default.attributesOfItem(atPath: store.databaseURL.path)
+    if let permissions = directoryAttributes[.posixPermissions] as? NSNumber {
+      XCTAssertEqual(permissions.intValue & 0o777, 0o700)
+    }
+    if let permissions = databaseAttributes[.posixPermissions] as? NSNumber {
+      XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+    }
+  }
 }

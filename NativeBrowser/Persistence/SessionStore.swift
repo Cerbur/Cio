@@ -77,7 +77,13 @@ final class SessionStore {
       try fileManager.createDirectory(
         at: parent,
         withIntermediateDirectories: true,
-        attributes: nil)
+        attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
+      // createDirectory attributes are ignored when the directory already
+      // exists. Re-apply the private mode so a pre-existing support directory
+      // cannot silently weaken the session snapshot boundary.
+      try? fileManager.setAttributes(
+        [.posixPermissions: NSNumber(value: Int16(0o700))],
+        ofItemAtPath: parent.path)
 
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

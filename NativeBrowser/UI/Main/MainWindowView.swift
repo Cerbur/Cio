@@ -82,11 +82,37 @@ private struct BrowserContentColumn: View {
         Color.clear.frame(height: 46)
       }
 
-      BrowserSurfaceFrame {
-        // The runtime manager retains one container per live session. The
-        // workspace store publishes only the effective selected tab; Space
-        // switches therefore change visibility without recreating Chromium.
-        BrowserSurfaceView(manager: workspace.sessionManager)
+      ZStack {
+        BrowserSurfaceFrame {
+          // The runtime manager retains one container per live session. The
+          // workspace store publishes only the effective selected tab; Space
+          // switches therefore change visibility without recreating Chromium.
+          BrowserSurfaceView(manager: workspace.sessionManager)
+        }
+
+        if let session = workspace.selectedSession, session.rendererCrashed {
+          VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+              .font(.system(size: 28))
+              .accessibilityHidden(true)
+            Text("This page stopped responding")
+              .font(.headline)
+            Text("The page process ended unexpectedly. Reload to start it again.")
+              .multilineTextAlignment(.center)
+              .foregroundStyle(.secondary)
+            Button("Reload") {
+              session.reload()
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("renderer-crash-reload")
+          }
+          .padding(28)
+          .frame(maxWidth: 360)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+          .shadow(radius: 12)
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Page stopped responding")
+        }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -145,13 +171,17 @@ private final class WindowChromeView: NSView {
         guard let window, event.window === window else { return event }
         let location = event.locationInWindow
         let hit = window.contentView?.hitTest(location)
-        if let field = hit as? NativeBrowserAddressField {
-          // A full-size titled window can route this titlebar-area click
-          // through AppKit before the embedded representable receives it.
-          // Forward only the hit-tested pointer event to the native field;
-          // keyboard events and Cmd-L remain entirely in their normal paths.
-          field.mouseDown(with: event)
-          return nil
+        var candidate = hit
+        while let view = candidate {
+          if let field = view as? NativeBrowserAddressField {
+            // A full-size titled window can route this titlebar-area click
+            // through AppKit before the embedded representable receives it.
+            // Forward only the hit-tested pointer event to the native field;
+            // keyboard events and Cmd-L remain entirely in their normal paths.
+            field.mouseDown(with: event)
+            return nil
+          }
+          candidate = view.superview
         }
         return event
       }
@@ -166,11 +196,15 @@ private final class WindowChromeView: NSView {
   }
 
   override func viewWillMove(toWindow newWindow: NSWindow?) {
-    if newWindow == nil, let addressFieldMouseMonitor {
+    removeAddressFieldMouseMonitor()
+    super.viewWillMove(toWindow: newWindow)
+  }
+
+  private func removeAddressFieldMouseMonitor() {
+    if let addressFieldMouseMonitor {
       NSEvent.removeMonitor(addressFieldMouseMonitor)
       self.addressFieldMouseMonitor = nil
     }
-    super.viewWillMove(toWindow: newWindow)
   }
 
   override func layout() {

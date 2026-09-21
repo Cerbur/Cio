@@ -50,6 +50,7 @@ enum Milestone7SelfTest {
     }
 
     runtime.startMessagePump()
+
     var failures = 0
     func check(_ condition: Bool, _ name: String) {
       if condition {

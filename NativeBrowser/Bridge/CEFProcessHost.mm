@@ -12,6 +12,7 @@
 
 #import "CEFProcessHost.h"
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -81,12 +82,22 @@ std::vector<char *> gArgumentPointers;
 /// verification scripts.
 ///
 /// With this switch Chromium uses an in-memory key instead, so no keychain item
-/// is read or written and the dialog never appears. Nothing is lost for the
-/// current milestones: CefSettings already sets persist_session_cookies = false,
-/// and password storage / account sync are explicitly out of scope
-/// (ARCHITECTURE.md section 2). Revisit when the browser is properly signed for
-/// distribution (section 34) or before saved passwords are implemented.
+/// is read or written and the dialog never appears. It is a Debug-only default;
+/// Release never adds it implicitly. Release verification passes the switch
+/// explicitly because this milestone does not claim a signed/notarized product
+/// identity. Revisit before enabling saved passwords or account sync.
 constexpr char kMockKeychainSwitch[] = "use-mock-keychain";
+
+bool HasCommandLineSwitch(const std::vector<std::string> &arguments,
+                          const char *switch_name) {
+  const std::string prefix = std::string("--") + switch_name;
+  for (const std::string &argument : arguments) {
+    if (argument == prefix || argument.rfind(prefix + "=", 0) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
 
 void BuildMainArgs() {
   if (!gArgumentPointers.empty()) {
@@ -98,9 +109,14 @@ void BuildMainArgs() {
     const char *utf8 = argument.UTF8String;
     gArguments.emplace_back(utf8 != nullptr ? utf8 : "");
   }
-  // Appended rather than replaced: a switch already present on the command line
-  // wins, because Chromium keeps the last occurrence of a switch.
-  gArguments.emplace_back(std::string("--") + kMockKeychainSwitch);
+#if defined(DEBUG)
+  // Development builds are ad-hoc signed and must avoid a keychain prompt. A
+  // caller-provided switch remains supported, while Release has no implicit
+  // mock-keychain behavior.
+  if (!HasCommandLineSwitch(gArguments, kMockKeychainSwitch)) {
+    gArguments.emplace_back(std::string("--") + kMockKeychainSwitch);
+  }
+#endif
   gArgumentPointers.reserve(gArguments.size());
   for (std::string &argument : gArguments) {
     gArgumentPointers.push_back(argument.data());
@@ -123,7 +139,7 @@ BOOL EnsureFrameworkLoaded(NSError **error) {
   auto *loader = new CefScopedLibraryLoader();
   if (!loader->LoadInMain()) {
     delete loader;
-    NSLog(@"[cef] failed to load the Chromium Embedded Framework from the app bundle");
+    fprintf(stderr, "[cef] failed to load the Chromium Embedded Framework\n");
     if (error != nullptr) {
       *error = [NSError
           errorWithDomain:@"NativeBrowser.CEF"
@@ -228,8 +244,7 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   NSError *directoryError = nil;
   if (!EnsureDirectory(cachePath, &directoryError) ||
       !EnsureDirectory(logDirectory, &directoryError)) {
-    NSLog(@"[cef] unable to create data directory at %@: %@", dataDirectory,
-          directoryError.localizedDescription);
+    fprintf(stderr, "[cef] unable to prepare private data directories\n");
   }
 
   const CefMainArgs main_args = CreateMainArgs();
@@ -275,7 +290,7 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
                                      @"CefInitialize() returned false."
                                }];
     }
-    NSLog(@"[cef] CefInitialize failed");
+    fprintf(stderr, "[cef] CefInitialize failed\n");
     return NO;
   }
 
@@ -284,7 +299,7 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
       [NSString stringWithFormat:@"CEF %s (Chromium %d.%d.%d.%d)", CEF_VERSION,
                                  CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR,
                                  CHROME_VERSION_BUILD, CHROME_VERSION_PATCH];
-  NSLog(@"[cef] initialized (%@), cache=%@", gVersionString, cachePath);
+  fprintf(stderr, "[cef] initialized\n");
   return YES;
 }
 
@@ -296,7 +311,7 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
            @"CefShutdown() must be called on the main thread.");
   gState = RuntimeState::kNotInitialized;
   CefShutdown();
-  NSLog(@"[cef] shutdown complete");
+  fprintf(stderr, "[cef] shutdown complete\n");
 }
 
 + (BOOL)isInitialized {

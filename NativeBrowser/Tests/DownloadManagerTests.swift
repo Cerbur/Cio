@@ -269,4 +269,19 @@ final class DownloadManagerTests: XCTestCase {
     XCTAssertEqual(manager.items.count, 1)
     XCTAssertEqual(manager.items.first?.receivedBytes, 1)
   }
+
+  func testDestinationFailureCreatesExplicitFailedRow() throws {
+    let unavailablePath = directory.appendingPathComponent("not-a-directory")
+    FileManager.default.createFile(atPath: unavailablePath.path, contents: Data([1]))
+    let manager = DownloadManager(downloadsDirectory: unavailablePath)
+
+    let item = manager.recordFailedDownload(
+      downloadID: 99,
+      sourceURL: sourceURL,
+      suggestedFileName: "blocked.bin")
+    XCTAssertEqual(item.state, .failed)
+    XCTAssertNil(item.destinationURL)
+    XCTAssertEqual(manager.items.count, 1)
+    XCTAssertEqual(try XCTUnwrap(manager.items.first).cefDownloadID, 99)
+  }
 }

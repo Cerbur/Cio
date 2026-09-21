@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		The locally packaged CEF framework is ad-hoc signed and has no
+		Developer ID Team ID. Hardened Runtime otherwise rejects the runtime
+		framework before CefInitialize. M9 must re-audit this entitlement with
+		the final Developer ID signing identity.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<!-- CEF's V8 renderer reserves and emits executable JIT code. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

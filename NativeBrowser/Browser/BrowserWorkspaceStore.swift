@@ -58,6 +58,20 @@ final class BrowserWorkspaceStore: ObservableObject {
     manager.onOpenNewTabRequest = { [weak self] session, url in
       self?.openPopupInNewTab(url: url, from: session)
     }
+    manager.onCloseAccepted = { [weak self] session in
+      self?.commitAcceptedClose(for: session.tabID)
+    }
+    manager.onCloseCancelled = { [weak self] session in
+      guard let self else { return }
+      self.emit("tab:close-cancelled")
+      AppLog.session.info(
+        "tab close cancelled id=\(session.tabID.uuidString, privacy: .public)")
+    }
+    manager.onSessionDidClose = { [weak self] session in
+      guard let self else { return }
+      self.reconcileUnexpectedClose(for: session.tabID)
+      self.activateSelectedTabRuntimeIfNeeded()
+    }
 
     // Only the effective selected tab gets a runtime during startup. Restored
     // background tabs remain domain-only until the user activates them.
@@ -246,50 +260,24 @@ final class BrowserWorkspaceStore: ObservableObject {
     return selectedTabID == id
   }
 
-  /// Removes a tab from its owning Space, requests its runtime close, and
-  /// creates a replacement in that same Space when it was the last user tab.
+  /// Requests a runtime close. The domain tab remains visible until CEF
+  /// accepts the request, because a beforeunload dialog may cancel it.
   func closeTab(id: UUID) {
-    guard !isTerminating, workspace.tab(withID: id) != nil else { return }
+    guard !isTerminating, workspace.tab(withID: id) != nil,
+      !sessionManager.isClosing(tabID: id)
+    else { return }
 
-    var result: WorkspaceTabCloseResult?
-    let hadRuntime = sessionManager.session(for: id) != nil
-    withSelectionTransition {
-      let closeResult = workspace.close(id, reason: .userClosed)
-      guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
-        result = closeResult
-        return
-      }
-      result = closeResult
-      // The selection transition must hand keyboard ownership to the incoming
-      // tab before CEF is asked to tear down the outgoing runtime. The manager
-      // retains that runtime after this closure until OnBeforeClose.
-      if closeResult.needsReplacementTab {
-        let replacement = BrowserTab()
-        let inserted = workspace.appendTab(replacement, in: spaceID, select: false)
-        if inserted {
-          // The active Space keeps its existing invariant: a last-tab close
-          // immediately has a visible replacement. An inactive Space may
-          // leave that replacement domain-only until the Space is selected.
-          if workspace.selectedSpaceID == spaceID {
-            _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
-          }
-          logTabCreated(replacement.id, url: homeURL)
-        }
-      }
-
-      if let selectedTab = workspace.selectedTab {
-        _ = ensureSession(for: selectedTab)
-      }
+    guard sessionManager.session(for: id) != nil else {
+      // Lazy-restored tabs have no renderer and therefore no beforeunload path.
+      commitTabClose(id: id, reason: .userClosed)
+      return
     }
 
-    guard let result, result.outcome != .unknownTab else { return }
-    if hadRuntime {
-      sessionManager.requestClose(tabID: id)
-    }
+    sessionManager.requestClose(tabID: id)
     AppLog.session.info(
-      "tab closing id=\(id.uuidString, privacy: .public) live=\(self.sessionManager.liveSessionCount, privacy: .public)"
+      "tab close requested id=\(id.uuidString, privacy: .public) live=\(self.sessionManager.liveSessionCount, privacy: .public)"
     )
-    emit("tab:closed")
+    emit("tab:close-requested")
   }
 
   func closeSelectedTab() {
@@ -381,6 +369,85 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   // MARK: - Domain/runtime callbacks
+
+  private func commitAcceptedClose(for tabID: UUID) {
+    guard !isTerminating else { return }
+    commitTabClose(id: tabID, reason: .userClosed)
+  }
+
+  private func reconcileUnexpectedClose(for tabID: UUID) {
+    guard !isTerminating, workspace.tab(withID: tabID) != nil,
+      !sessionManager.isClosePending(tabID: tabID)
+    else { return }
+    AppLog.session.warning(
+      "runtime closed before a workspace close request; reconciling tab id=\(tabID.uuidString, privacy: .public)")
+    commitTabClose(id: tabID, reason: .userClosed)
+  }
+
+  /// Completes the last-tab replacement after the old runtime has reached
+  /// OnBeforeClose. This is intentionally event-driven; no timer or guessed
+  /// delay is used to coordinate two Chromium browser lifetimes.
+  private func activateSelectedTabRuntimeIfNeeded() {
+    guard !isTerminating, let selectedTab, selectedSession == nil else { return }
+    _ = ensureSession(for: selectedTab)
+    publishWorkspace()
+  }
+
+  /// Commits the pure-domain removal after CEF acceptance, or immediately for a
+  /// lazy tab that has no live browser. Runtime ownership remains in the
+  /// manager until OnBeforeClose; this method never releases it early.
+  private func commitTabClose(id: UUID, reason: WorkspaceTabCloseReason) {
+    guard workspace.tab(withID: id) != nil else { return }
+
+    if workspace.selectedTabID == id {
+      // A selected close can race with the native address field's shared field
+      // editor. Clear it before the tab leaves the domain so the replacement
+      // tab never inherits an orphaned editing session.
+      sessionManager.session(for: id)?.releaseFocusBeforeTabRemoval()
+    }
+
+    var result: WorkspaceTabCloseResult?
+    withSelectionTransition {
+      let closeResult = workspace.close(id, reason: reason)
+      guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
+        result = closeResult
+        return
+      }
+      result = closeResult
+      if closeResult.needsReplacementTab {
+        let replacement = BrowserTab()
+        let inserted = workspace.appendTab(replacement, in: spaceID, select: false)
+        if inserted {
+          // The active Space keeps its existing invariant: a last-tab close
+          // immediately has a visible replacement. An inactive Space may
+          // leave that replacement domain-only until the Space is selected.
+          if workspace.selectedSpaceID == spaceID,
+            !sessionManager.isClosing(tabID: id)
+          {
+            _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
+          }
+          logTabCreated(replacement.id, url: homeURL)
+        }
+      }
+
+      if let selectedTab = workspace.selectedTab,
+        !sessionManager.isClosing(tabID: id)
+      {
+        // When the selected tab was the Space's last tab, its replacement is
+        // created in the domain immediately but its Chromium runtime waits for
+        // the closing session's OnBeforeClose. Creating a new CEF view from
+        // inside the old DoClose callback can re-enter the view hierarchy and
+        // strand the closing browser.
+        _ = ensureSession(for: selectedTab)
+      }
+    }
+
+    guard let result, result.outcome != .unknownTab else { return }
+    AppLog.session.info(
+      "tab closed id=\(id.uuidString, privacy: .public) live=\(self.sessionManager.liveSessionCount, privacy: .public)"
+    )
+    emit("tab:closed")
+  }
 
   private func refreshTabMetadata(from session: BrowserSession) {
     guard var tab = workspace.tab(withID: session.tabID) else { return }

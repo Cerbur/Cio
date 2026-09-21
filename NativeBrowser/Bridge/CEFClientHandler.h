@@ -16,6 +16,8 @@
 #include <map>
 
 #include "include/cef_client.h"
+#include "include/cef_jsdialog_handler.h"
+#include "include/cef_request_handler.h"
 
 @class BrowserBridge;
 
@@ -24,7 +26,9 @@ class CEFClientHandler final : public CefClient,
                                public CefFocusHandler,
                                public CefLifeSpanHandler,
                                public CefLoadHandler,
-                               public CefDownloadHandler {
+                               public CefDownloadHandler,
+                               public CefJSDialogHandler,
+                               public CefRequestHandler {
  public:
   explicit CEFClientHandler(BrowserBridge *bridge);
 
@@ -43,6 +47,8 @@ class CEFClientHandler final : public CefClient,
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
+  CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
   // CefFocusHandler
   bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override;
@@ -73,6 +79,19 @@ class CEFClientHandler final : public CefClient,
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
   bool DoClose(CefRefPtr<CefBrowser> browser) override;
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
+
+  // CefJSDialogHandler
+  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                            const CefString &message_text,
+                            bool is_reload,
+                            CefRefPtr<CefJSDialogCallback> callback) override;
+  void OnDialogClosed(CefRefPtr<CefBrowser> browser) override;
+
+  // CefRequestHandler
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                 TerminationStatus status,
+                                 int error_code,
+                                 const CefString &error_string) override;
 
   // CefLoadHandler
   void OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
@@ -107,6 +126,7 @@ class CEFClientHandler final : public CefClient,
 
   CefRefPtr<CefBrowser> browser_;
   std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> active_downloads_;
+  bool before_unload_dialog_open_ = false;
 
   IMPLEMENT_REFCOUNTING(CEFClientHandler);
   DISALLOW_COPY_AND_ASSIGN(CEFClientHandler);

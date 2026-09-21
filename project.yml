@@ -39,7 +39,40 @@ settings:
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
     DEVELOPMENT_TEAM: ""
-    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # The checked-in CEF distribution and wrapper are arm64-only. Keep the
+    # generated app/helper architecture aligned with that runtime; producing a
+    # universal artifact requires a separate x86_64 CEF distribution.
+    ARCHS: arm64
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      SWIFT_COMPILATION_MODE: incremental
+      GCC_OPTIMIZATION_LEVEL: "0"
+      GCC_PREPROCESSOR_DEFINITIONS:
+        - "$(inherited)"
+        - DEBUG=1
+      DEBUG_INFORMATION_FORMAT: dwarf
+      ONLY_ACTIVE_ARCH: YES
+      ENABLE_HARDENED_RUNTIME: NO
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+      STRIP_INSTALLED_PRODUCT: NO
+      VALIDATE_PRODUCT: NO
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+      GCC_OPTIMIZATION_LEVEL: "3"
+      GCC_PREPROCESSOR_DEFINITIONS:
+        - "$(inherited)"
+        - NDEBUG=1
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      ONLY_ACTIVE_ARCH: NO
+      ENABLE_HARDENED_RUNTIME: YES
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+      STRIP_INSTALLED_PRODUCT: YES
+      COPY_PHASE_STRIP: YES
+      VALIDATE_PRODUCT: YES
 
 targets:
   NativeBrowser:
@@ -57,6 +90,8 @@ targets:
       base:
         PRODUCT_NAME: NativeBrowser
         PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowser
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: NativeBrowser/Resources/Info.plist
         SWIFT_OBJC_BRIDGING_HEADER: NativeBrowser/Bridge/NativeBrowser-Bridging-Header.h
         HEADER_SEARCH_PATHS:
@@ -70,6 +105,9 @@ targets:
           - "$(inherited)"
           - "@executable_path/../Frameworks"
         COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Release:
+          CODE_SIGN_ENTITLEMENTS: NativeBrowser/Resources/NativeBrowser.entitlements
     scheme:
       configVariants: []
       # The scheme is committed as a template (SchemeTemplates/) because the
@@ -144,3 +182,6 @@ targets:
           - "$(SRCROOT)/ThirdParty"
         OTHER_LDFLAGS:
           - "-lcef_dll_wrapper"
+      configs:
+        Release:
+          CODE_SIGN_ENTITLEMENTS: NativeBrowser/Resources/NativeBrowser.entitlements

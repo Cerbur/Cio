@@ -31,6 +31,8 @@ APP_NAME="${APP_NAME%.app}"
 HELPER_PRODUCT="$BUILT_PRODUCTS_DIR/NativeBrowserHelper"
 BUNDLE_ID="$PRODUCT_BUNDLE_IDENTIFIER"
 MINIMUM_SYSTEM_VERSION="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
+MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-1}"
 CEF_VERSION="$(sed -n 's/^#define CEF_VERSION "\(.*\)"/\1/p' "$CEF_ROOT/include/cef_version.h")"
 
 if [ ! -d "$CEF_RELEASE/$FRAMEWORK_NAME" ]; then
@@ -100,9 +102,9 @@ for INDEX in "${!HELPER_SUFFIXES[@]}"; do
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$MARKETING_VERSION</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$CURRENT_PROJECT_VERSION</string>
 	<key>LSEnvironment</key>
 	<dict>
 		<key>MallocNanoZone</key>
@@ -121,6 +123,22 @@ for INDEX in "${!HELPER_SUFFIXES[@]}"; do
 PLIST
 done
 
+EXPECTED_HELPER_COUNT="${#HELPER_SUFFIXES[@]}"
+ACTUAL_HELPER_COUNT="$(find "$FRAMEWORKS_DIR" -maxdepth 1 -name "$APP_NAME Helper*.app" -type d | wc -l | tr -d ' ')"
+if [ "$ACTUAL_HELPER_COUNT" -ne "$EXPECTED_HELPER_COUNT" ]; then
+  echo "error: expected $EXPECTED_HELPER_COUNT CEF helper bundles, found $ACTUAL_HELPER_COUNT" >&2
+  exit 1
+fi
+for INDEX in "${!HELPER_SUFFIXES[@]}"; do
+  HELPER_NAME="$APP_NAME Helper${HELPER_SUFFIXES[$INDEX]}"
+  HELPER_INFO="$FRAMEWORKS_DIR/$HELPER_NAME.app/Contents/Info.plist"
+  if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$HELPER_INFO")" != "$MARKETING_VERSION" ] ||
+     [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$HELPER_INFO")" != "$CURRENT_PROJECT_VERSION" ]; then
+    echo "error: helper version metadata does not match app version for $HELPER_NAME" >&2
+    exit 1
+  fi
+done
+
 # ---------------------------------------------------------------------------
 # 3. Sign nested code (inside out) when signing is enabled. Xcode signs the
 #    outer app bundle itself after this phase.
@@ -128,14 +146,20 @@ done
 SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:-}}"
 if [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ] && [ -n "$SIGN_IDENTITY" ]; then
   SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --timestamp=none)
+  HELPER_SIGN_ARGS=("${SIGN_ARGS[@]}")
   if [ "${ENABLE_HARDENED_RUNTIME:-NO}" = "YES" ]; then
     SIGN_ARGS+=(--options runtime)
+    HELPER_SIGN_ARGS+=(--options runtime)
+    ENTITLEMENTS_FILE="$SRCROOT/NativeBrowser/Resources/NativeBrowser.entitlements"
+    if [ -f "$ENTITLEMENTS_FILE" ]; then
+      HELPER_SIGN_ARGS+=(--entitlements "$ENTITLEMENTS_FILE")
+    fi
   fi
   echo "Signing CEF runtime with identity '$SIGN_IDENTITY' ..."
   codesign "${SIGN_ARGS[@]}" "$FRAMEWORK_DIR/Versions/A/Libraries/"*.dylib 2>/dev/null || true
   codesign "${SIGN_ARGS[@]}" "$FRAMEWORK_DIR"
   for INDEX in "${!HELPER_SUFFIXES[@]}"; do
-    codesign "${SIGN_ARGS[@]}" "$FRAMEWORKS_DIR/$APP_NAME Helper${HELPER_SUFFIXES[$INDEX]}.app"
+    codesign "${HELPER_SIGN_ARGS[@]}" "$FRAMEWORKS_DIR/$APP_NAME Helper${HELPER_SUFFIXES[$INDEX]}.app"
   done
 
   # Xcode signs the outer bundle after this phase. Its code signing task can be

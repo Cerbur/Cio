@@ -31,7 +31,7 @@ final class URLLogSanitizerTests: XCTestCase {
       "https://example.com/callback?code=oauth-secret&state=state-secret")
     XCTAssertFalse(output.contains("oauth-secret"))
     XCTAssertFalse(output.contains("state-secret"))
-    XCTAssertEqual(output, "https://example.com/callback?code=<redacted>&state=<redacted>")
+    XCTAssertEqual(output, "https://example.com/<path>?code=<redacted>&state=<redacted>")
   }
 
   /// An item with no "=" is a bare value, so there is no name to keep.
@@ -57,7 +57,7 @@ final class URLLogSanitizerTests: XCTestCase {
     let utf8 = URLLogSanitizer.sanitized("https://www.google.com/search?q=%E6%B5%8F%E8%A7%88%E5%99%A8")
     XCTAssertFalse(utf8.contains("%E6%B5%8F%E8%A7%88%E5%99%A8"))
     XCTAssertFalse(utf8.contains("浏览器"))
-    XCTAssertEqual(utf8, "https://www.google.com/search?q=<redacted>")
+    XCTAssertEqual(utf8, "https://www.google.com/<path>?q=<redacted>")
   }
 
   // MARK: - Credentials and fragments
@@ -67,20 +67,20 @@ final class URLLogSanitizerTests: XCTestCase {
     let output = URLLogSanitizer.sanitized("https://user:password@example.com/path")
     XCTAssertFalse(output.contains("user"))
     XCTAssertFalse(output.contains("password"))
-    XCTAssertEqual(output, "https://<redacted>@example.com/path")
+    XCTAssertEqual(output, "https://<redacted>@example.com/<path>")
   }
 
   func testUserInfoWithoutAPasswordIsRedacted() {
     let output = URLLogSanitizer.sanitized("https://someone@example.com/path")
     XCTAssertFalse(output.contains("someone"))
-    XCTAssertEqual(output, "https://<redacted>@example.com/path")
+    XCTAssertEqual(output, "https://<redacted>@example.com/<path>")
   }
 
   /// D. The fragment is removed as a whole.
   func testFragmentIsRedacted() {
     let output = URLLogSanitizer.sanitized("https://example.com/path#secret-fragment")
     XCTAssertFalse(output.contains("secret-fragment"))
-    XCTAssertEqual(output, "https://example.com/path#<redacted>")
+    XCTAssertEqual(output, "https://example.com/<path>#<redacted>")
   }
 
   func testFragmentCarryingATokenIsRedacted() {
@@ -88,43 +88,44 @@ final class URLLogSanitizerTests: XCTestCase {
       "https://example.com/callback#access_token=oauth-secret&state=state-secret")
     XCTAssertFalse(output.contains("oauth-secret"))
     XCTAssertFalse(output.contains("state-secret"))
-    XCTAssertEqual(output, "https://example.com/callback#<redacted>")
+    XCTAssertEqual(output, "https://example.com/<path>#<redacted>")
   }
 
   /// An "@" in the path is a path, not user-info.
   func testAtSignInThePathIsNotTreatedAsUserInfo() {
     XCTAssertEqual(
       URLLogSanitizer.sanitized("https://example.com/@user/profile"),
-      "https://example.com/@user/profile")
+      "https://example.com/<path>")
   }
 
   // MARK: - Useful structure is preserved
 
-  /// E. Nothing sensitive is present, so the URL survives unchanged.
+  /// E. Even without obvious credentials, path contents are reduced to a
+  /// coarse marker so a reset or invite token cannot leak through a route.
   func testURLWithoutSensitivePartsIsUnchanged() {
-    XCTAssertEqual(URLLogSanitizer.sanitized("https://example.com/path"), "https://example.com/path")
+    XCTAssertEqual(URLLogSanitizer.sanitized("https://example.com/path"), "https://example.com/<path>")
     XCTAssertEqual(URLLogSanitizer.sanitized("https://example.com"), "https://example.com")
     XCTAssertEqual(
       URLLogSanitizer.sanitized("http://127.0.0.1:3080/dashboard"),
-      "http://127.0.0.1:3080/dashboard")
+      "http://127.0.0.1:3080/<path>")
   }
 
   func testSchemeHostPortAndPathStayVisible() {
     let output = URLLogSanitizer.sanitized("http://127.0.0.1:3080/deep/link%20name?token=super-secret")
-    XCTAssertTrue(output.hasPrefix("http://127.0.0.1:3080/deep/link%20name?"))
+    XCTAssertTrue(output.hasPrefix("http://127.0.0.1:3080/<path>?"))
     XCTAssertFalse(output.contains("super-secret"))
   }
 
   func testEncodedPathIsPreservedExactly() {
     XCTAssertEqual(
       URLLogSanitizer.sanitized("https://example.com/a%20b/c?x=1"),
-      "https://example.com/a%20b/c?x=<redacted>")
+      "https://example.com/<path>?x=<redacted>")
   }
 
   func testURLOverloadAndStringOverloadAgree() {
     let url = URL(string: "https://example.com/callback?code=oauth-secret")!
     XCTAssertEqual(URLLogSanitizer.sanitized(url), URLLogSanitizer.sanitized(url.absoluteString))
-    XCTAssertEqual(URLLogSanitizer.sanitized(url), "https://example.com/callback?code=<redacted>")
+    XCTAssertEqual(URLLogSanitizer.sanitized(url), "https://example.com/<path>?code=<redacted>")
   }
 
   func testMissingURLLogsAsNilRatherThanAnEmptyField() {
@@ -174,7 +175,7 @@ final class URLLogSanitizerTests: XCTestCase {
   func testSearchURLFromTheAddressFieldKeepsOnlyTheParameterName() {
     let url = GoogleSearchEngine().searchURL(for: "浏览器 Chromium CEF")
     let output = URLLogSanitizer.sanitized(url)
-    XCTAssertEqual(output, "https://www.google.com/search?q=<redacted>")
+    XCTAssertEqual(output, "https://www.google.com/<path>?q=<redacted>")
     XCTAssertFalse(output.contains("浏览器"))
   }
 }

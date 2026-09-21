@@ -410,15 +410,15 @@ project.yml                    # XcodeGen project definition (source of truth)
     the single policy:
 
     ```text
-    kept:     scheme, host, port, path, query parameter names
+    kept:     scheme, host, port, a root/coarse path marker, query parameter names
     redacted: user name, password, every query value, the whole fragment
 
     http://127.0.0.1:3080/?token=abcdef
         -> http://127.0.0.1:3080/?token=<redacted>
     https://example.com/callback?code=x&state=y#z
-        -> https://example.com/callback?code=<redacted>&state=<redacted>#<redacted>
+        -> https://example.com/<path>?code=<redacted>&state=<redacted>#<redacted>
     https://user:password@example.com/path
-        -> https://<redacted>@example.com/path
+        -> https://<redacted>@example.com/<path>
     ```
 
     It is applied to OSLog messages, to the lifecycle trace (which the

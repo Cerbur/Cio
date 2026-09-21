@@ -31,6 +31,15 @@ final class BrowserSessionManager: ObservableObject {
   /// The callback carries the exact session released by OnBeforeClose.
   var onLiveSessionDidClose: ((BrowserSession) -> Void)?
 
+  /// CEF accepted or cancelled an ordinary user close. The workspace store
+  /// uses these callbacks to delay domain removal until acceptance.
+  var onCloseAccepted: ((BrowserSession) -> Void)?
+  var onCloseCancelled: ((BrowserSession) -> Void)?
+
+  /// Fallback notification for an unexpected browser teardown. The workspace
+  /// can reconcile a still-present domain tab without releasing ownership early.
+  var onSessionDidClose: ((BrowserSession) -> Void)?
+
   /// Runtime metadata callback. BrowserWorkspaceStore uses the session identity
   /// to update exactly one BrowserTab in the pure domain model.
   var onTabMetadataChanged: ((BrowserSession) -> Void)?
@@ -60,6 +69,8 @@ final class BrowserSessionManager: ObservableObject {
   private var sessionOrder: [UUID] = []
   /// Sessions requested to close, retained until the typed OnBeforeClose path.
   private var closingTabIDs: [UUID] = []
+  /// Ordinary close requests waiting for CEF's beforeunload result.
+  private var pendingCloseTabIDs: [UUID] = []
   private var containers: [UUID: ChromiumContainerView] = [:]
   private weak var surfaceHost: BrowserSurfaceHostView?
   private var selectedSurfaceTabID: UUID?
@@ -85,7 +96,7 @@ final class BrowserSessionManager: ObservableObject {
   var liveSessionOrder: [UUID] {
     var seen = Set<UUID>()
     var order: [UUID] = []
-    for tabID in sessionOrder + closingTabIDs
+    for tabID in sessionOrder + pendingCloseTabIDs + closingTabIDs
     where sessions[tabID] != nil && seen.insert(tabID).inserted {
       order.append(tabID)
     }
@@ -93,7 +104,11 @@ final class BrowserSessionManager: ObservableObject {
   }
 
   func isClosing(tabID: UUID) -> Bool {
-    closingTabIDs.contains(tabID)
+    closingTabIDs.contains(tabID) || pendingCloseTabIDs.contains(tabID)
+  }
+
+  func isClosePending(tabID: UUID) -> Bool {
+    pendingCloseTabIDs.contains(tabID)
   }
 
   /// The Chromium identifier of every live session that has completed browser
@@ -134,6 +149,12 @@ final class BrowserSessionManager: ObservableObject {
     session.onClosed = { [weak self] session in
       self?.sessionDidClose(session)
     }
+    session.onCloseAccepted = { [weak self] session in
+      self?.sessionDidAcceptClose(session)
+    }
+    session.onCloseCancelled = { [weak self] session in
+      self?.sessionDidCancelClose(session)
+    }
     session.onOpenNewTabRequest = { [weak self] session, url in
       self?.onOpenNewTabRequest?(session, url)
     }
@@ -166,9 +187,13 @@ final class BrowserSessionManager: ObservableObject {
 
     if terminating {
       isTerminating = true
-    }
-    if !closingTabIDs.contains(tabID) {
-      closingTabIDs.append(tabID)
+      pendingCloseTabIDs.removeAll { $0 == tabID }
+      if !closingTabIDs.contains(tabID) {
+        closingTabIDs.append(tabID)
+      }
+    } else {
+      guard !isClosePending(tabID: tabID), !closingTabIDs.contains(tabID) else { return }
+      pendingCloseTabIDs.append(tabID)
     }
     session.close(terminating: terminating)
     syncSurface()
@@ -185,6 +210,7 @@ final class BrowserSessionManager: ObservableObject {
     emit("session:close-all(count=\(live.count))")
 
     for session in live where !session.isClosed {
+      pendingCloseTabIDs.removeAll { $0 == session.tabID }
       if !closingTabIDs.contains(session.tabID) {
         closingTabIDs.append(session.tabID)
       }
@@ -256,12 +282,32 @@ final class BrowserSessionManager: ObservableObject {
 
   // MARK: - Runtime callbacks
 
+  private func sessionDidAcceptClose(_ session: BrowserSession) {
+    guard sessions[session.tabID] === session else { return }
+    pendingCloseTabIDs.removeAll { $0 == session.tabID }
+    if !closingTabIDs.contains(session.tabID) {
+      closingTabIDs.append(session.tabID)
+    }
+    emit("session:close-accepted")
+    onCloseAccepted?(session)
+    syncSurface()
+  }
+
+  private func sessionDidCancelClose(_ session: BrowserSession) {
+    guard sessions[session.tabID] === session else { return }
+    pendingCloseTabIDs.removeAll { $0 == session.tabID }
+    emit("session:close-cancelled")
+    onCloseCancelled?(session)
+    syncSurface()
+  }
+
   private func sessionDidClose(_ session: BrowserSession) {
     let tabID = session.tabID
     guard sessions[tabID] === session else { return }
 
     sessions.removeValue(forKey: tabID)
     sessionOrder.removeAll { $0 == tabID }
+    pendingCloseTabIDs.removeAll { $0 == tabID }
     closingTabIDs.removeAll { $0 == tabID }
     liveSessionCount = sessions.count
     onRuntimeStateChanged?()
@@ -276,6 +322,7 @@ final class BrowserSessionManager: ObservableObject {
       container.removeFromSuperview()
     }
     syncSurface()
+    onSessionDidClose?(session)
     onLiveSessionDidClose?(session)
   }
 
