@@ -9,6 +9,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$REPO_ROOT/build/DerivedData/Build/Products/Release/NativeBrowser.app"
 EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+DEBUG_EXECUTABLE="$REPO_ROOT/build/DerivedData/Build/Products/Debug/NativeBrowser.app/Contents/MacOS/NativeBrowser"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data/release-candidate}"
 DOWNLOADS_DIR="${DOWNLOADS_DIR:-$REPO_ROOT/build/verification-downloads/release-candidate}"
 WORK_DIR="$REPO_ROOT/build/verification/release-candidate"
@@ -50,22 +51,32 @@ check_no_native_browser_process() {
   fi
 }
 
+report_preexisting_processes() {
+  local label="$1"
+  local executable="$2"
+  local pids
+  pids="$(pgrep -f "$executable" 2>/dev/null || true)"
+  if [ -n "$pids" ]; then
+    printf 'preflight: %s process(es): %s\n' "$label" "$pids"
+  else
+    printf 'preflight: %s process(es): none\n' "$label"
+  fi
+}
+
+report_preexisting_processes "Debug NativeBrowser" "$DEBUG_EXECUTABLE"
+PREEXISTING_RELEASE_PIDS="$(pgrep -f "$EXECUTABLE" 2>/dev/null || true)"
+if [ -n "$PREEXISTING_RELEASE_PIDS" ]; then
+  fail "Release preflight has no stale exact Release process (pids: $PREEXISTING_RELEASE_PIDS)"
+  echo "error: stop the stale exact Release process before running the verifier" >&2
+  exit 1
+else
+  pass "Release preflight has no stale exact Release process"
+fi
+
 run_with_timeout() {
   local seconds="$1"
   shift
-  "$@" &
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$waited" -ge "$seconds" ]; then
-      kill -9 "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  wait "$pid"
+  python3 "$REPO_ROOT/Scripts/run_gui_process_with_timeout.py" "$seconds" "$@"
 }
 
 cleanup() {
@@ -322,7 +333,7 @@ run_with_timeout 300 "$EXECUTABLE" \
   --home-url="$RESTORE_HOME_URL" > "$RESTORE_SEED_LOG" 2>&1
 RESTORE_SEED_CODE=$?
 if [ "$RESTORE_SEED_CODE" -eq 0 ]; then pass "Release session-restore seed exited 0"; else fail "Release session-restore seed exited $RESTORE_SEED_CODE"; fi
-for check in seeded-three-spaces-and-two-tabs seed-runtimes-created seed-clean-shutdown; do
+for check in window-appeared seeded-three-spaces-and-two-tabs seed-runtimes-created seed-clean-shutdown; do
   check_contains "Release restore seed: $check" "session-restore-self-test: pass $check" "$RESTORE_SEED_LOG"
 done
 check_contains "Release restore seed persisted six domain tabs" "domain-tabs=6" "$RESTORE_SEED_LOG"
@@ -348,6 +359,7 @@ run_with_timeout 300 "$EXECUTABLE" \
 RESTORE_VERIFY_CODE=$?
 if [ "$RESTORE_VERIFY_CODE" -eq 0 ]; then pass "Release session-restore verify exited 0"; else fail "Release session-restore verify exited $RESTORE_VERIFY_CODE"; fi
 for check in \
+  window-appeared \
   startup-restored-domain-before-lazy-activation \
   startup-selected-tab-only-runtime \
   startup-selected-browser-ready \
