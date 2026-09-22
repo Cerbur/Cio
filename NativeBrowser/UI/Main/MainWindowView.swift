@@ -257,7 +257,12 @@ private final class WindowChromeView: NSView {
     window.titleVisibility = .hidden
     window.toolbarStyle = .unifiedCompact
 
-    let leadingControlInset = measuredTitlebarLeadingControlInset(for: window)
+    guard let leadingControlInset = measuredTitlebarLeadingControlInset(for: window) else {
+      // The standard buttons can be installed by AppKit one layout pass after
+      // this representable enters the window. Leave the value uncommitted so
+      // the next layout pass can publish the real horizontal exclusion.
+      return
+    }
     guard lastTitlebarLeadingControlInset != leadingControlInset else { return }
     lastTitlebarLeadingControlInset = leadingControlInset
     onTitlebarLeadingControlInsetChange(leadingControlInset)
@@ -266,8 +271,9 @@ private final class WindowChromeView: NSView {
   /// Measures the right edge of the actual native traffic-light controls in
   /// the full-size content view's coordinate system. The toolbar uses this as
   /// a horizontal exclusion region; no vertical titlebar value is used for it.
-  private func measuredTitlebarLeadingControlInset(for window: NSWindow) -> CGFloat {
-    guard let contentView = window.contentView else { return 0 }
+  private func measuredTitlebarLeadingControlInset(for window: NSWindow) -> CGFloat? {
+    guard let contentView = window.contentView else { return nil }
+    let contentViewFrameInWindow = contentView.convert(contentView.bounds, to: nil)
 
     let buttonTypes: [NSWindow.ButtonType] = [
       .closeButton,
@@ -276,9 +282,13 @@ private final class WindowChromeView: NSView {
     ]
     let buttonFrames = buttonTypes.compactMap { type -> NSRect? in
       guard let button = window.standardWindowButton(type) else { return nil }
-      return button.convert(button.bounds, to: contentView)
+      // A standard window button lives in AppKit's titlebar hierarchy rather
+      // than below the SwiftUI content view. Convert to the window base
+      // coordinate system first, then normalize to the content view's origin.
+      return button.convert(button.bounds, to: nil)
     }
-    guard let rightEdge = buttonFrames.map(\.maxX).max() else { return 0 }
+    guard let rightEdgeInWindow = buttonFrames.map(\.maxX).max() else { return nil }
+    let rightEdge = rightEdgeInWindow - contentViewFrameInWindow.minX
 
     // Derive a small breathing space from the native button size instead of
     // assuming a traffic-light x-coordinate or a fixed window layout.
