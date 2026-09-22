@@ -190,7 +190,13 @@ enum BrowserMain {
     // callbacks, shuts CEF down once, and asks AppKit to terminate again.
     let closeStart = Date()
     runtime.onMainWindowAppeared = nil
-    NSApplication.shared.terminate(nil)
+    // `noteMainWindowAppeared()` invokes this self-test from SwiftUI's
+    // `.onAppear` callback. Defer the first termination request until that
+    // callback has unwound so AppKit can deliver the close through its normal
+    // application delegate path.
+    DispatchQueue.main.async {
+      NSApplication.shared.terminate(nil)
+    }
     let closeDeadline = Date().addingTimeInterval(30)
     while Date() < closeDeadline, !runtime.hasShutDownCEF {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
