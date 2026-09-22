@@ -61,6 +61,10 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   /// window's first responder is released unconditionally (the Milestone 2
   /// Cmd+Q fix). See -closeForApplicationTermination:.
   BOOL _releasesFirstResponderOnClose;
+  /// The native confirmation currently resolving CEF's beforeunload callback.
+  /// Its result is explicit; dialog dismissal is never interpreted as a close
+  /// choice.
+  __strong NSAlert *_beforeUnloadAlert;
   NSSize _lastReportedSize;
 }
 
@@ -76,7 +80,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 - (void)dealloc {
   // CefShutdown() requires that no browser outlives the application; a bridge
   // that is deallocated with a live browser means -close was skipped.
-  if (_client->browser()) {
+  if (_client != nullptr && _client->browser()) {
     fprintf(stderr, "[browser] bridge deallocated with a live Chromium browser\n");
   }
 }
@@ -138,6 +142,22 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   }
 }
 
+- (void)sendTestUserActivation {
+  if (_closed) {
+    return;
+  }
+  if (CefRefPtr<CefBrowser> browser = _client->browser()) {
+    CefMouseEvent event;
+    event.x = kInitialWidth / 2;
+    event.y = kInitialHeight / 2;
+    event.modifiers = 0;
+    browser->GetHost()->SendMouseClickEvent(
+        event, MBT_LEFT, /*mouseUp=*/false, /*clickCount=*/1);
+    browser->GetHost()->SendMouseClickEvent(
+        event, MBT_LEFT, /*mouseUp=*/true, /*clickCount=*/1);
+  }
+}
+
 #pragma mark - View integration
 
 - (void)setFocus:(BOOL)focused {
@@ -157,6 +177,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     if (focused) {
       // Chromium only receives key events when its view is first responder.
       [browserView.window makeFirstResponder:browserView];
+      fprintf(stderr, "[browser] focus granted\n");
     } else if (NBResponderBelongsToView(browserView.window.firstResponder, browserView)) {
       // Only this browser's own responder is cleared. Releasing focus from a
       // tab that is being switched away from must not disturb the native
@@ -234,6 +255,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   } else {
     // Termination overrides a pending ordinary close. It is the only path that
     // may bypass beforeunload and cancel active downloads immediately.
+    [self dismissBeforeUnloadDialogForApplicationTermination];
     _ordinaryCloseRequested = NO;
     _client->CancelActiveDownloads();
     _closeRequested = YES;
@@ -256,16 +278,11 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     // force_close: skip the beforeunload handler so quitting is never blocked.
     browser->GetHost()->CloseBrowser(/*force_close=*/true);
   } else {
-    // TryCloseBrowser runs beforeunload and reports whether the close is ready
-    // to proceed. For this embedded child view, complete the ready case with
-    // the same force-close ordering used by application termination; a false
-    // result means that a native beforeunload confirmation is still pending.
-    const bool closeReady = browser->GetHost()->TryCloseBrowser();
-    NBShutdownTimingReport(
-        closeReady ? @"TryCloseBrowser:ready" : @"TryCloseBrowser:pending", 0);
-    if (closeReady) {
-      browser->GetHost()->CloseBrowser(/*force_close=*/true);
-    }
+    // CloseBrowser(false) is the documented cancelable request and enters
+    // CefJSDialogHandler::OnBeforeUnloadDialog; the explicit native response
+    // below then decides whether to force the final close.
+    NBShutdownTimingReport(@"CloseBrowser:cancelable", 0);
+    browser->GetHost()->CloseBrowser(/*force_close=*/false);
   }
   NBShutdownTimingReport(@"CloseBrowser:end", NBShutdownTimingNow());
 }
@@ -276,6 +293,13 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   // for CEF's typed OnBeforeClose path and never calls it as a timeout.
   if (!_closeRequested) {
     return;
+  }
+  // A self-test may reach this hook after DoClose has detached the view but
+  // before CEF has completed the browser's close sequence. Re-issue the
+  // force-close request while retaining the browser handle, then perform the
+  // idempotent view release. Production termination never calls this hook.
+  if (CefRefPtr<CefBrowser> browser = _client->browser()) {
+    browser->GetHost()->CloseBrowser(/*force_close=*/true);
   }
   [self completeClose];
 }
@@ -518,16 +542,95 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   [self.delegate browserBridgeDidCancelClose:self];
 }
 
-- (void)browserDidCloseBeforeUnloadDialog {
-  // OnDialogClosed precedes DoClose for an accepted dialog. Deferring two main
-  // queue turns lets the deferred DoClose acceptance commit first; if no
-  // DoClose follows, the request is a user cancellation and the workspace
-  // remains unchanged.
-  dispatch_async(dispatch_get_main_queue(), ^{
+- (void)browserDidRequestBeforeUnloadDialog:(NSString *)message {
+  if (_closed || _closeRequested || !_ordinaryCloseRequested) {
+    _client->ContinueBeforeUnload(false);
+    return;
+  }
+  if (_beforeUnloadAlert != nil) {
+    return;
+  }
+
+  NSWindow *window = _parentView.window;
+  if (window == nil) {
+    _client->ContinueBeforeUnload(false);
+    [self browserDidCancelClose];
+    return;
+  }
+
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Leave this page?";
+  alert.informativeText = message.length > 0
+      ? message
+      : @"Any unsaved changes may be lost.";
+  [alert addButtonWithTitle:@"Stay"];
+  [alert addButtonWithTitle:@"Leave"];
+  _beforeUnloadAlert = alert;
+
+  __weak BrowserBridge *weakSelf = self;
+  [alert beginSheetModalForWindow:window
+                completionHandler:^(NSModalResponse response) {
+    BrowserBridge *strongSelf = weakSelf;
+    if (strongSelf == nil || strongSelf->_beforeUnloadAlert != alert) {
+      return;
+    }
+    strongSelf->_beforeUnloadAlert = nil;
+    const BOOL accept = response == NSAlertSecondButtonReturn;
+    // Continue() is the source of truth for CEF's beforeunload result. Only
+    // after delivering that explicit result do we notify BrowserSession, which
+    // commits an accepted close exactly once or returns to open on cancel.
+    strongSelf->_client->ContinueBeforeUnload(accept);
+    if (accept) {
+      [strongSelf browserDidAcceptClose];
+    } else {
+      [strongSelf browserDidCancelClose];
+    }
+  }];
+
+  // The integration driver still presents the real native sheet, but supplies
+  // an explicit button choice through the environment so both result branches
+  // can run unattended. This is test input, never production close logic.
+  NSString *automatedResponse =
+      NSProcessInfo.processInfo.environment[@"NATIVEBROWSER_BEFOREUNLOAD_AUTORESPONSE"];
+  BOOL hasAutomatedResponse = [automatedResponse isEqualToString:@"cancel"] ||
+      [automatedResponse isEqualToString:@"accept"];
+  if (hasAutomatedResponse) {
+    const BOOL accept = [automatedResponse isEqualToString:@"accept"];
     dispatch_async(dispatch_get_main_queue(), ^{
-      [self browserDidCancelClose];
+      NSButton *button = alert.buttons[accept ? 1 : 0];
+      [button performClick:nil];
     });
-  });
+  }
+}
+
+- (void)browserDidResetBeforeUnloadDialog {
+  NSAlert *alert = _beforeUnloadAlert;
+  _beforeUnloadAlert = nil;
+  if (alert != nil && alert.window.sheetParent != nil) {
+    [alert.window.sheetParent endSheet:alert.window
+                            returnCode:NSModalResponseCancel];
+  }
+  if (!_closed && !_closeRequested && _ordinaryCloseRequested) {
+    [self browserDidCancelClose];
+  }
+}
+
+- (void)dismissBeforeUnloadDialogForApplicationTermination {
+  NSAlert *alert = _beforeUnloadAlert;
+  _beforeUnloadAlert = nil;
+  if (alert == nil) {
+    return;
+  }
+  // The termination path is intentionally independent of the user-close
+  // state machine. Resolve the CEF callback as stay, dismiss the native sheet,
+  // and then let CloseBrowser(force_close=true) finish teardown.
+  _client->ContinueBeforeUnload(false);
+  if (alert.window.sheetParent != nil) {
+    [alert.window.sheetParent endSheet:alert.window
+                            returnCode:NSModalResponseCancel];
+  } else {
+    [alert.window orderOut:nil];
+  }
 }
 
 - (void)browserDidTerminateRendererWithStatus:(NSInteger)status

@@ -37,7 +37,11 @@ enum Milestone7SelfTest {
     let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
     host.autoresizingMask = [.width, .height]
     window.contentView = host
-    window.orderBack(nil)
+    // Keep the host in a real key window. CEF's Alloy child-view teardown is
+    // not equivalent for a view in a never-ordered window, and the close gate
+    // must observe the typed OnBeforeClose callback rather than rely on process
+    // exit to release the platform view.
+    window.makeKeyAndOrderFront(nil)
     workspace.attachSurfaceHost(host)
 
     guard let session = workspace.selectedSession,
@@ -129,25 +133,32 @@ enum Milestone7SelfTest {
     }
 
     let closeStarted = Date()
-    // Stop any residual page load before asking CEF to release the view. A real
-    // download can still defer OnBeforeClose in this CEF build, so retain the
-    // existing self-test-only view-release fallback below.
+    // A failed navigation can leave the renderer's provisional-load machinery
+    // active even after BrowserSession reports its terminal error. Stop that
+    // work before entering the same close barrier used by application quit;
+    // this does not alter the persisted history assertion above.
     session.stop()
-    session.close(terminating: true)
+    // Use the production close-all coordinator. Besides requesting the same
+    // force-close path, it marks the workspace as terminating so closing the
+    // last persisted tab cannot create a replacement runtime while this
+    // process is waiting for CEF's typed OnBeforeClose callback.
+    runtime.requestBrowserClosure()
+    // The private parent window is part of the child-view close sequence. Tear
+    // it down immediately after issuing the request, then keep pumping while
+    // CEF delivers the typed close callback.
+    window.close()
     var closed = waitUntil(timeout: 5) { session.isClosed }
     if !closed {
-      // The existing runtime diagnostic hook releases the native CEF view
-      // without inventing a second browser owner. This is only a self-test
-      // fallback for the attachment-navigation teardown quirk.
       runtime.sessionManager.releaseBrowserViews()
       closed = waitUntil(timeout: 10) { session.isClosed }
     }
-    window.close()
-    runtime.shutdownCEF()
-    // If CEF deferred OnBeforeClose, CefShutdown drains the already-requested
-    // close. The assertion is intentionally made after that clean shutdown so
-    // the harness verifies the browser is not left live at process exit.
     if !closed {
+      closed = waitUntil(timeout: 5) { session.isClosed }
+    }
+    let shutdownBeforeDeferredDrain = runtime.shutdownCEF()
+    if runtime.hasLiveBrowsers {
+      check(!shutdownBeforeDeferredDrain, "cef-shutdown-guarded-with-live-browser")
+      _ = runtime.drainDeferredBrowserCloseForM7SelfTest()
       closed = waitUntil(timeout: 5) { session.isClosed }
     }
     check(closed, "clean-browser-shutdown")

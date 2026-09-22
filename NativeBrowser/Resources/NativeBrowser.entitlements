@@ -13,7 +13,5 @@
 	<!-- CEF's V8 renderer reserves and emits executable JIT code. -->
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
 </dict>
 </plist>

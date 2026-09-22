@@ -41,6 +41,10 @@ class CEFClientHandler final : public CefClient,
   /// Swift receives the resulting cancelled update as a value event.
   void CancelActiveDownloads();
 
+  /// Resolves the one pending beforeunload callback. The CEF callback remains
+  /// inside this class so no CEF type crosses the Objective-C/Swift bridge.
+  void ContinueBeforeUnload(bool accept);
+
   // CefClient
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
@@ -85,7 +89,7 @@ class CEFClientHandler final : public CefClient,
                             const CefString &message_text,
                             bool is_reload,
                             CefRefPtr<CefJSDialogCallback> callback) override;
-  void OnDialogClosed(CefRefPtr<CefBrowser> browser) override;
+  void OnResetDialogState(CefRefPtr<CefBrowser> browser) override;
 
   // CefRequestHandler
   void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
@@ -126,7 +130,7 @@ class CEFClientHandler final : public CefClient,
 
   CefRefPtr<CefBrowser> browser_;
   std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> active_downloads_;
-  bool before_unload_dialog_open_ = false;
+  CefRefPtr<CefJSDialogCallback> before_unload_callback_;
 
   IMPLEMENT_REFCOUNTING(CEFClientHandler);
   DISALLOW_COPY_AND_ASSIGN(CEFClientHandler);

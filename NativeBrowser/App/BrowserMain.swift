@@ -59,12 +59,16 @@ enum BrowserMain {
       return
     }
     _ = Milestone7SelfTest.installIfRequested(runtime: runtime)
+    _ = BeforeUnloadSelfTest.installIfRequested(runtime: runtime)
     // M8's driver is a run-loop resident state machine, like SpacesSelfTest.
     // Install it and continue into the real NSApplication run loop; the driver
     // exits only after its typed lifecycle checks finish.
     _ = Milestone8SelfTest.installIfRequested(runtime: runtime)
     if CommandLine.arguments.contains("--navigation-self-test") {
-      // Milestone 2 integration check. The result is this process's exit code.
+      // Milestone 2 integration check. The production application's
+      // navigated termination path is exercised separately below by the
+      // verifier; this direct harness keeps the navigation assertions
+      // deterministic and owns its own AppKit surface.
       exit(NavigationSelfTest.run(runtime: runtime))
     }
     if SessionRestoreSelfTest.installIfRequested(runtime: runtime) {
@@ -110,6 +114,7 @@ enum BrowserMain {
       || CommandLine.arguments.contains("--spaces-self-test")
       || CommandLine.arguments.contains { $0.hasPrefix("--session-restore-self-test=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--milestone7-self-test=") }
+      || CommandLine.arguments.contains { $0.hasPrefix("--beforeunload-self-test=") }
       || CommandLine.arguments.contains { $0.hasPrefix("--milestone8-self-test=") }
       || NavigationInputProbe.isRequested()
       || CommandLine.arguments.contains { $0.hasPrefix("--quit-after=") }
@@ -140,6 +145,11 @@ enum BrowserMain {
   }
 
   private static func performBrowserSelfTest(runtime: ApplicationRuntime) -> Never {
+    // AppKit's applicationDidFinishLaunching starts the normal message pump,
+    // but SwiftUI can report the window first. The self-test must pump CEF
+    // before waiting for OnAfterCreated/OnLoadEnd; otherwise it can tear down
+    // a perfectly initialized browser without ever delivering its callbacks.
+    runtime.startMessagePump()
     let workspace = runtime.workspaceStore
     guard let session = workspace.selectedSession else {
       print("browser-self-test: no tab was created")
@@ -329,7 +339,11 @@ enum BrowserMain {
   /// (BrowserBridge -loadURL: -> CefFrame::LoadURL), so the quit path can be
   /// exercised on a browser that has actually navigated.
   private static func navigateForTooling(runtime: ApplicationRuntime) {
-    guard let url = URL(string: "https://example.com/") else { return }
+    let prefix = "--navigate-url="
+    let rawURL = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) })
+      .map { String($0.dropFirst(prefix.count)) }
+      ?? "https://example.com/"
+    guard let url = URL(string: rawURL) else { return }
     AppLog.navigation.info("tooling: navigating the selected tab")
     runtime.workspaceStore.loadInSelectedTab(url)
   }

@@ -94,6 +94,15 @@ if [ -n "${RESET_DATA_DIR:-}" ]; then
 fi
 mkdir -p "$DATA_DIR" "$WORK_DIR"
 
+# Compare report names before and after this run. A rolling "last 30 minutes"
+# query lets an unrelated earlier CEF probe fail the M3 gate; the acceptance
+# assertion is specifically that this multi-tab run creates no new report.
+DIAGNOSTIC_REPORT_DIR="$HOME/Library/Logs/DiagnosticReports"
+CRASH_REPORTS_BEFORE="$WORK_DIR/m3-crash-reports.before"
+CRASH_REPORTS_AFTER="$WORK_DIR/m3-crash-reports.after"
+find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'NativeBrowser*' -print 2>/dev/null \
+  | sort > "$CRASH_REPORTS_BEFORE"
+
 if [ ! -x "$EXECUTABLE" ]; then
   echo "error: $EXECUTABLE not found; run Scripts/build.sh first" >&2
   exit 1
@@ -288,7 +297,7 @@ check_file_contains "tab selection is mutated by the workspace" \
 check_file_contains "tab insertion is mutated by the workspace" \
   "$STORE" "workspace.appendTab(tab, in: spaceID, select: select)"
 check_file_contains "tab close is mutated by the workspace" \
-  "$STORE" "let closeResult = workspace.close(id, reason: .userClosed)"
+  "$STORE" "let closeResult = workspace.close(id, reason: reason)"
 # The asynchronous half: a created browser only takes focus when its tab is the
 # visible selected surface and the keyboard is still meant for page content.
 check_file_contains "a created browser checks visibility and intent before focusing" \
@@ -436,14 +445,14 @@ if [ "$MULTI_STATUS" -gt 128 ]; then
 fi
 check_contains "the run really created several Chromium browsers" \
   "browser:created(count=1)" "$MULTI_LOG"
-CREATED_BROWSERS="$(grep -cF -e "Chromium browser created" "$MULTI_LOG" 2>/dev/null)"
+CREATED_BROWSERS="$(grep -cF -e "lifecycle: browser:created" "$MULTI_LOG" 2>/dev/null)"
 CREATED_BROWSERS="${CREATED_BROWSERS:-0}"
 if [ "$CREATED_BROWSERS" -ge "$MULTI_TABS" ]; then
   pass "$CREATED_BROWSERS Chromium browsers were created and loaded"
 else
   fail "only $CREATED_BROWSERS Chromium browsers were created (expected >= $MULTI_TABS)"
 fi
-DESTROYED_BROWSERS="$(grep -cF -e "Chromium browser destroyed" "$MULTI_LOG" 2>/dev/null)"
+DESTROYED_BROWSERS="$(grep -cF -e "lifecycle: browser:closed" "$MULTI_LOG" 2>/dev/null)"
 DESTROYED_BROWSERS="${DESTROYED_BROWSERS:-0}"
 if [ "$DESTROYED_BROWSERS" -ge "$MULTI_TABS" ]; then
   pass "$DESTROYED_BROWSERS browsers reached OnBeforeClose"
@@ -488,10 +497,13 @@ if [ "$MULTI_TOTAL" -le $((QUIT_AFTER + 30)) ]; then
 else
   fail "the multi-tab quit took ${MULTI_TOTAL}s"
 fi
-if [ -z "$(find ~/Library/Logs/DiagnosticReports -name 'NativeBrowser*' -newermt '-30 minutes' 2>/dev/null)" ]; then
+find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'NativeBrowser*' -print 2>/dev/null \
+  | sort > "$CRASH_REPORTS_AFTER"
+NEW_CRASH_REPORTS="$(comm -13 "$CRASH_REPORTS_BEFORE" "$CRASH_REPORTS_AFTER")"
+if [ -z "$NEW_CRASH_REPORTS" ]; then
   pass "no new NativeBrowser crash report"
 else
-  fail "a NativeBrowser crash report was written during this run"
+  fail "a NativeBrowser crash report was written during this run: $NEW_CRASH_REPORTS"
 fi
 # Security: the same redaction rules apply to a multi-tab run.
 check_contains "the lifecycle trace reports the URL with its query value redacted" \

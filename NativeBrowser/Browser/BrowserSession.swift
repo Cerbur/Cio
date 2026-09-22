@@ -354,6 +354,12 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.startDownloadURL(url.absoluteString)
   }
 
+  /// Sends one synthetic page click for the deterministic beforeunload
+  /// integration driver. Production close behavior never uses this hook.
+  func sendTestUserActivation() {
+    bridge?.sendTestUserActivation()
+  }
+
   private func beginNavigation() {
     lastErrorCode = nil
     lastMainFrameLoadFailed = false

@@ -30,7 +30,7 @@ extension BrowserSession {
 
   /// The user pressed Return in the address field (or in the middle of an IME
   /// composition that Return committed).
-  func submitAddressField() {
+  func submitAddressField(searchEngine: SearchEngine = GoogleSearchEngine()) {
     let text = addressField.editText
     // Editing ends before navigating: the Chromium URL callbacks that follow
     // must be allowed to update the field again (Milestone 2, section 6).
@@ -48,7 +48,7 @@ extension BrowserSession {
       onLifecycleEvent?("navigation:parsed-as-url(\(URLLogSanitizer.sanitized(url)))")
       load(url)
     case .search(let query):
-      let url = GoogleSearchEngine().searchURL(for: query)
+      let url = searchEngine.searchURL(for: query)
       logAddressSubmission("search", URLLogSanitizer.sanitized(url))
       // The query itself is never traced: a search for a token, a private
       // document or a name is as sensitive as a URL, and this trace is written

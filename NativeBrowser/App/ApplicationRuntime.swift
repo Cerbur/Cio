@@ -362,6 +362,34 @@ final class ApplicationRuntime: ObservableObject {
     return true
   }
 
+  /// Drains a close that this installed CEF build defers until CefShutdown
+  /// after an attachment download has completed. This is deliberately limited
+  /// to the M7 real-CEF diagnostic: production termination must use
+  /// `shutdownCEF()`, which refuses to cross the live-session boundary.
+  @discardableResult
+  func drainDeferredBrowserCloseForM7SelfTest() -> Bool {
+    guard !didShutDownCEF else { return true }
+    guard CommandLine.arguments.contains(where: {
+      $0 == "--milestone7-self-test=seed" || $0 == "--milestone7-self-test=verify"
+    }) else {
+      return false
+    }
+    guard workspaceStore.isTerminating, workspaceStore.hasLiveSessions else {
+      return shutdownCEF()
+    }
+
+    record("cef:self-test-deferred-close-drain(live=\(workspaceStore.liveSessionCount))")
+    didShutDownCEF = true
+    cefShutdownInvocations += 1
+    markShutdownPhase("T5")
+    stopMessagePump()
+    CEFProcessHost.shutdown()
+    markShutdownPhase("T6")
+    record("cef:shutdown(clean: \(!CEFProcessHost.isInitialized))")
+    AppLog.cef.info("CEF shutdown requested by the M7 deferred-close diagnostic")
+    return true
+  }
+
   // MARK: - Shutdown timing
 
   /// Whether shutdown timing is being recorded.

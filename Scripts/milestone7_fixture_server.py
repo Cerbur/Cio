@@ -26,6 +26,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._page("Page A", "This is deterministic fixture Page A.")
         elif path == "/page-b":
             self._page("Page B", "This is deterministic fixture Page B.")
+        elif path == "/slow-page":
+            time.sleep(1.0)
+            self._page("Slow Page", "This page intentionally delays its response.")
         elif path == "/beforeunload":
             self._beforeunload_page()
         elif path == "/popup":

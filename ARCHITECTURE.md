@@ -2793,9 +2793,12 @@ verify process to confirm history persistence and process-memory-only download
 rows. It terminates the fixture server on every exit path. The self-test's
 clean-shutdown assertion is made after the requested browser close has been
 drained by `CefShutdown`, because this installed CEF build can defer
-`OnBeforeClose` after completed attachment downloads; no production ownership
-registry or normal termination coordinator is changed for that diagnostic
-observation.
+`OnBeforeClose` after completed attachment downloads. The M7 driver first
+asserts that `ApplicationRuntime.shutdownCEF()` refuses while the session is
+live, then uses the narrowly gated
+`drainDeferredBrowserCloseForM7SelfTest()` diagnostic to drain that already
+requested close. The production ownership registry and normal termination
+coordinator never use this path.
 
 M7 deliberately does not add history search, favicon fetching, history sync,
 download persistence, resumable downloads, retry management, or a user-facing
@@ -2807,13 +2810,16 @@ to display a download row.
 
 M8 keeps the accepted ownership graph unchanged and hardens the seams around
 it. A normal tab close is now a typed state machine: the workspace keeps its
-`BrowserTab` while `BrowserBridge` calls `TryCloseBrowser()`, CEF runs the
-beforeunload path, and only `DoClose`/the typed acceptance callback commits the
-domain removal. A native CEF beforeunload dialog is allowed to resolve the
-request. Cancelling it returns the session to the open state and leaves the tab
-and runtime intact. Application termination is a separate policy: it cancels
-active CEF downloads, calls `CloseBrowser(force_close=true)`, waits for every
-typed `OnBeforeClose`, and never creates replacement tabs.
+`BrowserTab` while `BrowserBridge` calls `CloseBrowser(force_close=false)`. CEF
+delivers `CefJSDialogHandler::OnBeforeUnloadDialog`, and the bridge presents a
+native `NSAlert` whose explicit button result is sent through
+`CefJSDialogCallback::Continue`. Only the typed acceptance callback commits the
+domain removal; accepted close then uses an explicit force-close request to
+finish the embedded child-view teardown. Cancelling returns the session to the
+open state and leaves the tab and runtime intact. Application termination is a
+separate policy: it cancels active CEF downloads, calls
+`CloseBrowser(force_close=true)`, waits for every typed `OnBeforeClose`, and
+never creates replacement tabs.
 
 The quit sequence is: flush the durable workspace snapshot, request closure of
 the instantiated `BrowserSession` values only, pump until the manager's live
@@ -2879,9 +2885,11 @@ the framework plus `NativeBrowser Helper`, `Helper (Alerts)`, `Helper (GPU)`,
 `Helper (Plugin)` and `Helper (Renderer)`. It verifies helper version metadata
 and nested code signing locally. Release uses the existing local/ad-hoc
 identity and the checked-in `NativeBrowser.entitlements` file for the locally
-validated hardened-runtime allowances: JIT, unsigned executable memory and
-CEF library validation. Those allowances require a fresh review and likely
-tightening with the final Developer ID-signed CEF bundle; Developer ID
+validated hardened-runtime allowances: JIT and CEF library validation. An
+isolated Release probe showed that this installed CEF build does not require
+`allow-unsigned-executable-memory`; it is intentionally absent. The remaining
+allowances require a fresh review and likely tightening with the final
+Developer ID-signed CEF bundle; Developer ID
 identity, notarization, stapling, DMG/archive production and distribution
 policy remain M9 work. There is no approved product AppIcon asset in this
 repository, so the production icon remains an M9 branding item.
@@ -2894,6 +2902,8 @@ persist 50 domain tabs, verify one initial live session, activate selected tabs
 across Spaces, and then exercise the same typed termination path. Shell
 watchdogs in `Scripts/verify_milestone8.sh` and
 `Scripts/verify_release_candidate.sh` are external test infrastructure only.
-The beforeunload confirmation itself and real Chinese IME composition remain
-manual GUI checks when the automation environment cannot interact with the
-native dialog/input method reliably.
+`BeforeUnloadSelfTest` drives the real native alert through both explicit
+cancel and accept responses and verifies the typed close invariants. A manual
+GUI pass remains useful for the actual red traffic-light/native-alert path,
+and real Chinese IME composition remains a human check when the automation
+environment cannot interact with the input method reliably.

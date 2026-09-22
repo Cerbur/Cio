@@ -35,6 +35,13 @@ EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 # their own profile. Override with DATA_DIR=... if needed.
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+PORT="${M2_FIXTURE_PORT:-43122}"
+BASE_URL="http://127.0.0.1:$PORT"
+HOME_URL="$BASE_URL/page-a"
+NAVIGATION_DATA_DIR="$DATA_DIR/navigation"
+NAVIGATE_QUIT_DATA_DIR="$DATA_DIR/navigate-quit"
+GUI_DATA_DIR="$DATA_DIR/gui"
+REDACTION_DATA_DIR="$DATA_DIR/redaction"
 # M2 verification must not inherit a persisted M6 workspace.
 export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
@@ -54,6 +61,15 @@ check_file_contains() {
   if [ ! -f "$2" ]; then fail "$1 (missing file: $2)"; return; fi
   check_contains "$1" "$3" "$2"
 }
+
+FIXTURE_PID=""
+cleanup() {
+  if [ -n "$FIXTURE_PID" ]; then
+    kill "$FIXTURE_PID" 2>/dev/null || true
+    wait "$FIXTURE_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
 # Parses one address input with the shipped application binary.
 check_parsed() {
   local description="$1" expected="$2" input="$3"
@@ -111,6 +127,22 @@ fi
 echo "Milestone 2 verification"
 echo "app: $APP"
 echo
+
+python3 "$REPO_ROOT/Scripts/milestone7_fixture_server.py" --port "$PORT" &
+FIXTURE_PID=$!
+FIXTURE_READY=0
+for _ in $(seq 1 50); do
+  if curl -fsS "$BASE_URL/healthz" >/dev/null 2>&1; then
+    FIXTURE_READY=1
+    break
+  fi
+  sleep 0.1
+done
+if [ "$FIXTURE_READY" -eq 1 ]; then
+  pass "loopback fixture server started"
+else
+  fail "loopback fixture server started"
+fi
 
 # ---------------------------------------------------------------------------
 echo "1. address / search parser"
@@ -171,7 +203,7 @@ check_parsed "http://example.com is a direct URL" \
 check_parsed "example.com becomes https" \
   "parsed-as-url https://example.com" "example.com"
 check_parsed "github.com/foo/bar becomes https" \
-  "parsed-as-url https://github.com/foo/bar" "github.com/foo/bar"
+  "parsed-as-url https://github.com/<path>" "github.com/foo/bar"
 check_parsed "localhost becomes http" \
   "parsed-as-url http://localhost" "localhost"
 check_parsed "localhost:8080 becomes http" \
@@ -313,7 +345,9 @@ check_file_contains "the field becomes first responder with select-all" \
 echo
 echo "5. runtime navigation stack (--navigation-self-test)"
 SELF_LOG="$WORK_DIR/m2-navigation-self-test.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout 120 "$EXECUTABLE" --navigation-self-test \
+rm -rf "$NAVIGATION_DATA_DIR"
+NATIVEBROWSER_DATA_DIR="$NAVIGATION_DATA_DIR" run_with_timeout 120 "$EXECUTABLE" \
+  --navigation-self-test --home-url="$HOME_URL" --m2-fixture-base-url="$BASE_URL" \
   > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
 if [ "$SELF_STATUS" -eq 0 ]; then
@@ -346,10 +380,10 @@ check_contains "the address field submits a Chinese query as a search" \
   "navigation-self-test: pass chinese-query-search" "$SELF_LOG"
 check_contains "the browser was not recreated by navigation" \
   "navigation-self-test: pass browser-not-recreated" "$SELF_LOG"
-check_contains "the browser was destroyed before CEF shutdown" \
-  "navigation-self-test: pass browser-closed" "$SELF_LOG"
-check_contains "CEF shut down cleanly" \
-  "navigation-self-test: pass cef-clean-shutdown" "$SELF_LOG"
+check_contains "the fresh browser was destroyed before the navigated termination path" \
+  "navigation-self-test: pass fresh-browser-closed" "$SELF_LOG"
+check_contains "navigated close is covered by the real-app termination gate" \
+  "navigation-self-test: pass navigated-close-covered-by-real-app" "$SELF_LOG"
 
 # ---------------------------------------------------------------------------
 echo
@@ -359,13 +393,14 @@ echo "6. clean shutdown of the real application"
 # application can: it is asked to navigate for real and then to quit, which runs
 # the termination path (close every session -> pump -> CefShutdown).
 NAV_QUIT_LOG="$WORK_DIR/m2-navigate-quit.log"
-NAV_QUIT_URL="https://example.com/"
-rm -rf "$DATA_DIR/navigate-quit"
+NAV_QUIT_URL="$BASE_URL/page-b"
+NAV_QUIT_LOG_URL="$BASE_URL/<path>"
+rm -rf "$NAVIGATE_QUIT_DATA_DIR"
 start=$(date +%s)
 # Both steps wait for the previous one to have happened, so the navigation is
 # guaranteed to be in the running application before it is asked to quit.
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/navigate-quit" run_with_timeout 90 "$EXECUTABLE" \
-  --home-url=https://www.google.com/ --wait-for-window \
+NATIVEBROWSER_DATA_DIR="$NAVIGATE_QUIT_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+  --home-url="$HOME_URL" --navigate-url="$NAV_QUIT_URL" --wait-for-window \
   --navigate-after=3 --navigate-wait --quit-after=20 \
   > "$NAV_QUIT_LOG" 2>&1
 NAV_QUIT_STATUS=$?
@@ -379,8 +414,10 @@ if [ "$NAV_QUIT_STATUS" -gt 128 ]; then
   fail "navigate + quit died from signal $((NAV_QUIT_STATUS - 128))"
 fi
 check_contains "the live application navigated to a second page" \
-  "navigation:url($NAV_QUIT_URL)" "$NAV_QUIT_LOG"
+  "navigation:url($NAV_QUIT_LOG_URL)" "$NAV_QUIT_LOG"
 check_contains "the navigated browser was destroyed" "browser:closed" "$NAV_QUIT_LOG"
+check_contains "CEF shut down cleanly after navigated close" \
+  "cef:shutdown(clean: true)" "$NAV_QUIT_LOG"
 if grep -qF -e "OnBeforeClose" "$NAV_QUIT_LOG" && ! grep -qF -e "close-timeout" "$NAV_QUIT_LOG"; then
   pass "Chromium destroyed the browser inside the shutdown budget"
 else
@@ -395,10 +432,11 @@ fi
 GUI_LOG="$WORK_DIR/m2-launch.log"
 QUIT_AFTER=10
 GUI_START=$(date +%s)
+rm -rf "$GUI_DATA_DIR"
 # --wait-for-window keeps this about the quit path rather than about how long
 # the machine took to put the window on screen.
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 45)) "$EXECUTABLE" \
-  --wait-for-window --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
+NATIVEBROWSER_DATA_DIR="$GUI_DATA_DIR" run_with_timeout $((QUIT_AFTER + 45)) "$EXECUTABLE" \
+  --home-url="$HOME_URL" --wait-for-window --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))
 if [ "$GUI_STATUS" -eq 0 ]; then
@@ -408,7 +446,8 @@ else
 fi
 check_contains "SwiftUI window appeared" "swiftui:main-window-appeared" "$GUI_LOG"
 check_contains "Chromium browser created once" "browser:created(count=1)" "$GUI_LOG"
-check_contains "google.com loaded in the running app" "title=Google" "$GUI_LOG"
+check_contains "local fixture loaded in the running app" \
+  "browser:first-load-finished(title-present=true, url=$BASE_URL/<path>)" "$GUI_LOG"
 check_contains "browser destroyed before CEF shutdown" "browser:closed" "$GUI_LOG"
 check_contains "CEF shut down cleanly" "cef:shutdown(clean: true)" "$GUI_LOG"
 if [ "$GUI_TOTAL" -le $((QUIT_AFTER + 25)) ]; then
@@ -456,7 +495,7 @@ check_contains "the live browser count reached zero" "termination:browsers-close
 check_contains "CEF was shut down exactly once" "cef:shutdown(clean: true)" "$PUMP_LOG"
 check_contains "AppKit was told termination may finish" "appkit:terminate-ready-requested" "$PUMP_LOG"
 check_contains "Chromium destroyed the browser (OnBeforeClose)" \
-  "Chromium browser destroyed" "$PUMP_LOG"
+  "[browser] OnBeforeClose" "$PUMP_LOG"
 # Ordering: the close, the CEF shutdown and only then the reply to AppKit.
 ORDER_LINE=$(grep -E 'lifecycle: (appkit:should-terminate|termination:started|browser:closed|termination:browsers-closed|cef:shutdown|termination:finished|appkit:terminate-ready-requested|appkit:will-terminate)' "$PUMP_LOG" | sed 's/^lifecycle: //' | tr '\n' ' ')
 EXPECTED_ORDER="appkit:should-terminate(entered) termination:started browser:closed termination:browsers-closed cef:shutdown(clean: true) termination:finished appkit:terminate-ready-requested"
@@ -480,9 +519,9 @@ echo "8. URL redaction in the lifecycle trace and logs"
 # fix). The token below is a throwaway value - never a real credential.
 REDACT_LOG="$WORK_DIR/m2-redaction.log"
 REDACT_TOKEN="test-token_123-abc"
-REDACT_URL="https://example.com/?token=$REDACT_TOKEN"
-rm -rf "$DATA_DIR/redaction"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/redaction" run_with_timeout 90 "$EXECUTABLE" \
+REDACT_URL="$BASE_URL/page-a?token=$REDACT_TOKEN"
+rm -rf "$REDACTION_DATA_DIR"
+NATIVEBROWSER_DATA_DIR="$REDACTION_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
   --home-url="$REDACT_URL" --wait-for-window --quit-after=12 > "$REDACT_LOG" 2>&1
 REDACT_STATUS=$?
 if [ "$REDACT_STATUS" -eq 0 ]; then
@@ -491,7 +530,7 @@ else
   fail "the redaction run exited with $REDACT_STATUS"
 fi
 check_contains "the lifecycle trace reports the URL with its query value redacted" \
-  "navigation:url(https://example.com/?token=<redacted>)" "$REDACT_LOG"
+  "navigation:url($BASE_URL/<path>?token=<redacted>)" "$REDACT_LOG"
 check_absent "the raw query value is absent from the whole run log" \
   "$REDACT_TOKEN" "$REDACT_LOG"
 

@@ -142,6 +142,10 @@ NS_SWIFT_UI_ACTOR
 /// on the fixture page's DOM or synthetic input dispatch.
 - (void)startDownloadURL:(NSString *)url;
 
+/// Sends one test-only page click so Chromium's beforeunload user-activation
+/// policy permits the native confirmation during integration verification.
+- (void)sendTestUserActivation;
+
 /// Gives keyboard focus to the page, or releases it.
 - (void)setFocus:(BOOL)focused;
 
@@ -219,7 +223,8 @@ NS_SWIFT_UI_ACTOR
 - (BOOL)browserRequestsFocusFromSystem:(BOOL)fromSystem;
 - (void)browserDidAcceptClose;
 - (void)browserDidCancelClose;
-- (void)browserDidCloseBeforeUnloadDialog;
+- (void)browserDidRequestBeforeUnloadDialog:(NSString *)message;
+- (void)browserDidResetBeforeUnloadDialog;
 - (void)browserDidTerminateRendererWithStatus:(NSInteger)status
                                      errorCode:(NSInteger)errorCode;
 - (void)browserDidClose;

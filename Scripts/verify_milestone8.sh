@@ -193,9 +193,47 @@ check_contains "lazy activation stayed scoped to selected tabs" "m8-self-test: p
 check_no_process "lazy verify left no residual process"
 
 echo
-echo "5. fixture and privacy checks"
+echo "5. deterministic beforeunload integration"
+for response in cancel accept; do
+  beforeunload_log="$WORK_DIR/beforeunload-$response.log"
+  NATIVEBROWSER_BEFOREUNLOAD_AUTORESPONSE="$response" \
+  NATIVEBROWSER_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-beforeunload-$response" \
+  NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+  NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+  run_with_timeout 180 "$EXECUTABLE" \
+    --use-mock-keychain \
+    --beforeunload-self-test="$response" \
+    --home-url="$BASE_URL/beforeunload" > "$beforeunload_log" 2>&1
+  beforeunload_code=$?
+  if [ "$beforeunload_code" -eq 0 ]; then
+    pass "beforeunload $response self-test exited 0"
+  else
+    fail "beforeunload $response self-test exited $beforeunload_code"
+  fi
+  if [ "$response" = "cancel" ]; then
+    check_contains "beforeunload cancel keeps tab and session" \
+      "beforeunload-self-test: pass cancel-keeps-tab-and-session-live" "$beforeunload_log"
+    check_contains "beforeunload cancel leaves recently-closed empty" \
+      "beforeunload-self-test: pass cancel-does-not-add-recently-closed" "$beforeunload_log"
+  else
+    check_contains "beforeunload accept removes tab" \
+      "beforeunload-self-test: pass accept-removes-tab" "$beforeunload_log"
+    check_contains "beforeunload accept reaches OnBeforeClose" \
+      "beforeunload-self-test: pass accept-reaches-onbeforeclose" "$beforeunload_log"
+    check_contains "beforeunload accept closes exactly once" \
+      "beforeunload-self-test: pass accept-onbeforeclose-exactly-once" "$beforeunload_log"
+  fi
+  check_contains "beforeunload $response cleans remaining runtimes" \
+    "beforeunload-self-test: pass termination-closes-remaining-runtimes" "$beforeunload_log"
+  check_contains "beforeunload $response shuts CEF down once" \
+    "beforeunload-self-test: pass cef-shutdown-count-is-one" "$beforeunload_log"
+  check_no_process "beforeunload $response left no residual process"
+done
+
+echo
+echo "6. fixture and privacy checks"
 if curl -fsS "$BASE_URL/beforeunload" | grep -qF "beforeunload"; then
-  pass "beforeunload fixture is available (native dialog remains manual)"
+  pass "beforeunload fixture is available (native alert is integration-tested; GUI remains manual)"
 else
   fail "beforeunload fixture is available"
 fi
@@ -208,7 +246,7 @@ else
 fi
 
 echo
-echo "6. bounded quit soak"
+echo "7. bounded quit soak"
 for iteration in 1 2; do
   soak_log="$WORK_DIR/soak-$iteration.log"
   NATIVEBROWSER_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-soak-$iteration" \
@@ -228,7 +266,7 @@ for iteration in 1 2; do
 done
 
 echo
-echo "7. release candidate"
+echo "8. release candidate"
 if "$REPO_ROOT/Scripts/verify_release_candidate.sh" > "$WORK_DIR/release-candidate.log" 2>&1; then
   pass "Release candidate verification"
 else
@@ -236,8 +274,8 @@ else
 fi
 
 echo
-echo "8. static hardening gates"
-check_contains "ordinary close uses TryCloseBrowser" "TryCloseBrowser" "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm"
+echo "9. static hardening gates"
+check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm"
 check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm"
 check_contains "CEF shutdown has a live-browser guard" "guard !workspaceStore.hasLiveSessions" "$REPO_ROOT/NativeBrowser/App/ApplicationRuntime.swift"
 check_contains "address monitor removes on window move" "removeAddressFieldMouseMonitor()" "$REPO_ROOT/NativeBrowser/UI/Main/MainWindowView.swift"

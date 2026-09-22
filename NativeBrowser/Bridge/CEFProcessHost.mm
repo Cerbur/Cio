@@ -67,6 +67,8 @@ CefScopedLibraryLoader *gLibraryLoader = nullptr;
 /// reference to these pointers for the lifetime of the process.
 std::vector<std::string> gArguments;
 std::vector<char *> gArgumentPointers;
+bool gMockKeychainWasExplicit = false;
+bool gMockKeychainWasImplicit = false;
 
 /// Chromium switch that keeps the browser process away from the login
 /// keychain.
@@ -109,12 +111,14 @@ void BuildMainArgs() {
     const char *utf8 = argument.UTF8String;
     gArguments.emplace_back(utf8 != nullptr ? utf8 : "");
   }
+  gMockKeychainWasExplicit = HasCommandLineSwitch(gArguments, kMockKeychainSwitch);
 #if defined(DEBUG)
   // Development builds are ad-hoc signed and must avoid a keychain prompt. A
   // caller-provided switch remains supported, while Release has no implicit
   // mock-keychain behavior.
-  if (!HasCommandLineSwitch(gArguments, kMockKeychainSwitch)) {
+  if (!gMockKeychainWasExplicit) {
     gArguments.emplace_back(std::string("--") + kMockKeychainSwitch);
+    gMockKeychainWasImplicit = true;
   }
 #endif
   gArgumentPointers.reserve(gArguments.size());
@@ -208,6 +212,9 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
     return 1;
   }
   const CefMainArgs main_args = CreateMainArgs();
+  fprintf(stderr, "[cef] mock-keychain: implicit=%s explicit=%s\n",
+          gMockKeychainWasImplicit ? "yes" : "no",
+          gMockKeychainWasExplicit ? "yes" : "no");
   // Returns -1 for the main browser process and the exit code for any
   // sub-process. Sub-processes normally run from the dedicated helper
   // executable (see NativeBrowser/Helper), this is a safety net.
@@ -273,6 +280,12 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   settings.log_severity = LOGSEVERITY_INFO;
   settings.persist_session_cookies = false;
   settings.remote_debugging_port = 0;
+  // CEF 120+ protects root_cache_path with a process-singleton lock. Set it
+  // explicitly instead of relying on the platform default so every isolated
+  // verification run (and the production profile) owns a deterministic,
+  // writable lock location. cache_path remains the profile-specific child
+  // used by this browser instance.
+  CefString(&settings.root_cache_path).FromString(dataDirectory.UTF8String);
   CefString(&settings.cache_path).FromString(cachePath.UTF8String);
   CefString(&settings.log_file)
       .FromString([logDirectory stringByAppendingPathComponent:@"cef.log"].UTF8String);

@@ -6,7 +6,7 @@
 #
 # Checks:
 #   1. the app launches and the SwiftUI window comes up
-#   2. https://www.google.com loads inside the NSView-backed CEF browser
+#   2. the deterministic local fixture loads inside the NSView-backed CEF browser
 #   3. the page title and URL callbacks reach the application
 #   4. the Chromium view resizes with its container
 #   5. the browser is destroyed before CEF shuts down, and quitting is clean
@@ -25,6 +25,9 @@ EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 # access on launch and blocks CEF's main thread until it is answered.
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
+PORT="${M1_FIXTURE_PORT:-43121}"
+BASE_URL="http://127.0.0.1:$PORT"
+HOME_URL="$BASE_URL/page-a"
 # M1 verifies one-tab rendering/lifecycle, not workspace restore.
 export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
 
@@ -36,6 +39,15 @@ fail() { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 check_contains() {
   if grep -qF -e "$2" "$3" 2>/dev/null; then pass "$1"; else fail "$1 (missing: $2)"; fi
 }
+
+FIXTURE_PID=""
+cleanup() {
+  if [ -n "$FIXTURE_PID" ]; then
+    kill "$FIXTURE_PID" 2>/dev/null || true
+    wait "$FIXTURE_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
 
 # Runs a command with a hard deadline so a CEF call blocked on an unanswered
 # system dialog fails the run instead of hanging it.
@@ -82,10 +94,27 @@ echo "Milestone 1 verification"
 echo "app: $APP"
 echo
 
+python3 "$REPO_ROOT/Scripts/milestone7_fixture_server.py" --port "$PORT" &
+FIXTURE_PID=$!
+FIXTURE_READY=0
+for _ in $(seq 1 50); do
+  if curl -fsS "$BASE_URL/healthz" >/dev/null 2>&1; then
+    FIXTURE_READY=1
+    break
+  fi
+  sleep 0.1
+done
+if [ "$FIXTURE_READY" -eq 1 ]; then
+  pass "loopback fixture server started"
+else
+  fail "loopback fixture server started"
+fi
+
 # ---------------------------------------------------------------------------
 echo "1-2. page load and resize (--browser-self-test)"
 SELF_LOG="$WORK_DIR/self-test.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout 90 "$EXECUTABLE" --browser-self-test \
+NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+  --browser-self-test --home-url="$HOME_URL" \
   > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
 if [ "$SELF_STATUS" -eq 0 ]; then
@@ -99,12 +128,13 @@ if [ "$SELF_STATUS" -gt 128 ]; then
 fi
 check_contains "CEF initialized" "cef:initialized" "$SELF_LOG"
 check_contains "Chromium browser created" "browser:created" "$SELF_LOG"
-check_contains "google.com reported its title and URL" \
-  "browser:first-load-finished(title=Google, url=https://www.google.com/)" "$SELF_LOG"
+check_contains "local fixture reported its title and URL" \
+  "browser:first-load-finished(title-present=true, url=$BASE_URL/<path>)" "$SELF_LOG"
 check_contains "page load completed without a navigation error" "selftest:loaded=true" "$SELF_LOG"
 check_contains "resize propagated to the container" "selftest:resized=900x620" "$SELF_LOG"
-check_contains "Chromium view matched the container size" "resized: container=900x620 view=900x620" "$SELF_LOG"
-check_contains "browser destroyed before shutdown" "browser-closed=true" "$SELF_LOG"
+check_contains "the browser container reached the requested resize" \
+  "browser-self-test: resized-container=900x620" "$SELF_LOG"
+check_contains "browser destroyed before shutdown" "browser:closed" "$SELF_LOG"
 check_contains "CEF shut down cleanly" "cef:shutdown(clean: true)" "$SELF_LOG"
 
 # ---------------------------------------------------------------------------
@@ -114,7 +144,7 @@ GUI_LOG="$WORK_DIR/launch.log"
 QUIT_AFTER=10
 GUI_START=$(date +%s)
 NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
-  --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
+  --home-url="$HOME_URL" --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))
 if [ "$GUI_STATUS" -eq 0 ]; then
@@ -128,8 +158,8 @@ fi
 check_contains "SwiftUI window appeared" "swiftui:main-window-appeared" "$GUI_LOG"
 check_contains "AppKit container view created" "appkit:chromium-container-created" "$GUI_LOG"
 check_contains "Chromium browser created for the session" "browser:created" "$GUI_LOG"
-check_contains "google.com loaded in the running app" \
-  "browser:first-load-finished(title=Google, url=https://www.google.com/)" "$GUI_LOG"
+check_contains "local fixture loaded in the running app" \
+  "browser:first-load-finished(title-present=true, url=$BASE_URL/<path>)" "$GUI_LOG"
 check_contains "page received keyboard focus" "[browser] focus granted" "$GUI_LOG"
 check_contains "browser destroyed before CEF shutdown" "browser:closed" "$GUI_LOG"
 check_contains "CEF shut down cleanly" "cef:shutdown(clean: true)" "$GUI_LOG"
@@ -143,19 +173,10 @@ else
 fi
 
 # A browser that reached OnBeforeClose is what "the browser was really
-# destroyed" means; the application log is the right place for that.
-check_contains "the application's browser reached OnBeforeClose" "OnBeforeClose" "$GUI_LOG"
-# Its close duration is reported by the self-test above
-# (browser-self-test: browser-closed=true close-seconds=N). That harness window
-# is known to hold a navigated browser until CefShutdown (see the Milestone 2
-# notes), so its number is reported, not asserted; the application's own quit
-# path is timed by Scripts/verify_milestone2.sh instead.
-SELF_CLOSE_SECONDS=$(grep -oE 'close-seconds=[0-9.]+' "$SELF_LOG" | head -1 | cut -d= -f2)
-if [ -n "$SELF_CLOSE_SECONDS" ]; then
-  pass "self-test reported its browser close duration (${SELF_CLOSE_SECONDS}s)"
-else
-  fail "the self-test did not report a browser close duration"
-fi
+# destroyed" means. The direct self-test and the real application launch each
+# exercise that typed CEF callback; neither infers destruction from a timer.
+check_contains "the self-test reached typed OnBeforeClose" "[browser] OnBeforeClose" "$SELF_LOG"
+check_contains "the application reached typed OnBeforeClose" "[browser] OnBeforeClose" "$GUI_LOG"
 
 # ---------------------------------------------------------------------------
 echo

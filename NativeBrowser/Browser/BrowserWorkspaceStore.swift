@@ -337,9 +337,16 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// reopening, closing and Space switching.
   @discardableResult
   private func withSelectionTransition<T>(_ change: () -> T) -> T {
+    withSelectionTransition(pageHeldKeyboardOverride: nil, change)
+  }
+
+  private func withSelectionTransition<T>(
+    pageHeldKeyboardOverride: Bool? = nil,
+    _ change: () -> T
+  ) -> T {
     let outgoing = selectedSession
     let previousSelection = workspace.selectedTabID
-    let pageHeldKeyboard = outgoing?.ownsPageKeyboard ?? false
+    let pageHeldKeyboard = pageHeldKeyboardOverride ?? outgoing?.ownsPageKeyboard ?? false
     let beforeSnapshot = sessionSnapshot
 
     let result = change()
@@ -399,6 +406,9 @@ final class BrowserWorkspaceStore: ObservableObject {
   private func commitTabClose(id: UUID, reason: WorkspaceTabCloseReason) {
     guard workspace.tab(withID: id) != nil else { return }
 
+    let selectedCloseHeldPageKeyboard = workspace.selectedTabID == id
+      ? sessionManager.session(for: id)?.ownsPageKeyboard == true
+      : false
     if workspace.selectedTabID == id {
       // A selected close can race with the native address field's shared field
       // editor. Clear it before the tab leaves the domain so the replacement
@@ -407,7 +417,9 @@ final class BrowserWorkspaceStore: ObservableObject {
     }
 
     var result: WorkspaceTabCloseResult?
-    withSelectionTransition {
+    withSelectionTransition(
+      pageHeldKeyboardOverride: selectedCloseHeldPageKeyboard ? true : nil
+    ) {
       let closeResult = workspace.close(id, reason: reason)
       guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
         result = closeResult

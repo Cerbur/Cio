@@ -48,6 +48,14 @@ void CEFClientHandler::CancelActiveDownloads() {
   active_downloads_.clear();
 }
 
+void CEFClientHandler::ContinueBeforeUnload(bool accept) {
+  CefRefPtr<CefJSDialogCallback> callback = before_unload_callback_;
+  before_unload_callback_ = nullptr;
+  if (callback != nullptr) {
+    callback->Continue(accept, CefString());
+  }
+}
+
 void CEFClientHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                      const CefString &title) {
   NSString *value = NSStringFromCefString(title);
@@ -140,11 +148,12 @@ void CEFClientHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 }
 
 bool CEFClientHandler::DoClose(CefRefPtr<CefBrowser> browser) {
+  __weak BrowserBridge *bridge = bridge_;
   // The application owns the window that hosts the browser view, so handle the
   // close notification here instead of letting CEF send it to the window.
-  // Removing the Chromium view from the view hierarchy completes the close and
-  // OnBeforeClose() follows.
-  __weak BrowserBridge *bridge = bridge_;
+  // Removing the Chromium view completes the ordinary close path; installed
+  // CEF may defer OnBeforeClose after an attachment download, in which case
+  // the M7 diagnostic drain completes the already-requested close.
   OnMainThread(^{
     [bridge completeClose];
   });
@@ -152,6 +161,7 @@ bool CEFClientHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 }
 
 void CEFClientHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+  fprintf(stderr, "[browser] OnBeforeClose\n");
   browser_ = nullptr;
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
@@ -164,20 +174,28 @@ bool CEFClientHandler::OnBeforeUnloadDialog(
     const CefString &message_text,
     bool is_reload,
     CefRefPtr<CefJSDialogCallback> callback) {
-  // Use CEF's native confirmation UI. We only observe the dialog lifecycle so
-  // Swift can distinguish accepted and cancelled ordinary tab closes.
-  before_unload_dialog_open_ = true;
-  return false;
-}
-
-void CEFClientHandler::OnDialogClosed(CefRefPtr<CefBrowser> browser) {
-  if (!before_unload_dialog_open_) {
-    return;
-  }
-  before_unload_dialog_open_ = false;
+  // Handle the dialog ourselves so the application receives the explicit
+  // CefJSDialogCallback result. Returning false would delegate the choice to
+  // CEF's default dialog, whose OnDialogClosed callback does not carry whether
+  // the user chose to leave or stay.
+  before_unload_callback_ = callback;
+  NSString *message = NSStringFromCefString(message_text);
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
-    [bridge browserDidCloseBeforeUnloadDialog];
+    [bridge browserDidRequestBeforeUnloadDialog:message];
+  });
+  return true;
+}
+
+void CEFClientHandler::OnResetDialogState(CefRefPtr<CefBrowser> browser) {
+  const bool hadPendingCallback = before_unload_callback_ != nullptr;
+  before_unload_callback_ = nullptr;
+  if (!hadPendingCallback) {
+    return;
+  }
+  __weak BrowserBridge *bridge = bridge_;
+  OnMainThread(^{
+    [bridge browserDidResetBeforeUnloadDialog];
   });
 }
 
@@ -320,7 +338,6 @@ void CEFClientHandler::OnDownloadUpdated(
   } else {
     active_downloads_.erase(static_cast<uint32_t>(downloadIdentifier));
   }
-
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
     [bridge browserDidUpdateDownloadWithIdentifier:downloadIdentifier
