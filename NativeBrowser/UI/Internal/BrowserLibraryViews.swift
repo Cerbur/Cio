@@ -26,8 +26,22 @@ struct BrowserLibrarySheet: View {
         DownloadsLibraryView(downloads: downloads, dismiss: dismiss)
       }
     }
-    .frame(minWidth: 620, minHeight: 440)
+    .frame(minWidth: LibraryLayout.minWidth, minHeight: LibraryLayout.minHeight)
   }
+}
+
+private enum LibraryLayout {
+  static let minWidth: CGFloat = 620
+  static let minHeight: CGFloat = 440
+  static let headerHorizontalPadding: CGFloat = 20
+  static let headerVerticalPadding: CGFloat = 12
+  static let rowHorizontalPadding: CGFloat = 14
+  static let rowVerticalPadding: CGFloat = 3
+  static let rowCornerRadius: CGFloat = 6
+  static let iconColumnWidth: CGFloat = 24
+  static let separatorOpacity: CGFloat = 0.09
+  static let downloadStatusHeight: CGFloat = 22
+  static let downloadActionHeight: CGFloat = 16
 }
 
 private struct HistoryLibraryView: View {
@@ -38,26 +52,29 @@ private struct HistoryLibraryView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 10) {
         Text("History")
-          .font(.title2.weight(.semibold))
+          .font(.headline.weight(.semibold))
         Spacer()
         Button("Clear History", role: .destructive) {
           confirmationState.isShowing = true
         }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
         .disabled(history.entries.isEmpty)
         LibraryCloseButton(title: "Close History", dismiss: dismiss)
       }
-      .padding(.horizontal, 22)
-      .padding(.vertical, 16)
+      .padding(.horizontal, LibraryLayout.headerHorizontalPadding)
+      .padding(.vertical, LibraryLayout.headerVerticalPadding)
+      .frame(minHeight: 52)
 
-      Divider()
+      LibrarySeparator()
 
       if history.entries.isEmpty {
-        ContentUnavailableView(
-          "No History",
+        LibraryEmptyState(
+          title: "No History",
           systemImage: "clock",
-          description: Text("Completed HTTP and HTTPS page visits will appear here."))
+          message: "Completed HTTP and HTTPS page visits will appear here.")
       } else {
         List(history.entries) { entry in
           Button {
@@ -67,10 +84,18 @@ private struct HistoryLibraryView: View {
             HistoryRow(entry: entry)
           }
           .buttonStyle(.plain)
-          .listRowSeparator(.visible)
+          .listRowSeparator(.visible, edges: .all)
+          .listRowInsets(
+            EdgeInsets(
+              top: LibraryLayout.rowVerticalPadding,
+              leading: LibraryLayout.rowHorizontalPadding,
+              bottom: LibraryLayout.rowVerticalPadding,
+              trailing: LibraryLayout.rowHorizontalPadding))
+          .listRowBackground(Color.clear)
           .accessibilityLabel("Open \(entry.title.isEmpty ? (entry.url.host ?? "History item") : entry.title)")
         }
         .listStyle(.inset)
+        .scrollContentBackground(.hidden)
       }
     }
     .background(Color(nsColor: .windowBackgroundColor))
@@ -92,37 +117,49 @@ private final class ClearHistoryConfirmationState: ObservableObject {
 
 private struct HistoryRow: View {
   let entry: HistoryEntry
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: "clock")
         .foregroundStyle(.secondary)
-        .frame(width: 22, height: 22)
+        .frame(width: LibraryLayout.iconColumnWidth, height: 22)
         .padding(.top, 2)
 
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 8) {
+      VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(entry.title.isEmpty ? (entry.url.host ?? entry.url.absoluteString) : entry.title)
             .font(.body.weight(.medium))
             .lineLimit(1)
+            .truncationMode(.tail)
+            .layoutPriority(1)
           if entry.visitCount > 1 {
             Text("×\(entry.visitCount)")
               .font(.caption.monospacedDigit())
               .foregroundStyle(.secondary)
           }
+          Spacer(minLength: 8)
+          Text(entry.lastVisitedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
         }
         Text(displayURL(for: entry.url))
-          .font(.callout)
+          .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
-        Text(entry.lastVisitedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+          .truncationMode(.middle)
       }
       Spacer(minLength: 0)
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 8)
+    .padding(.horizontal, 8)
+    .background(
+      RoundedRectangle(cornerRadius: LibraryLayout.rowCornerRadius, style: .continuous)
+        .fill(interaction.isHovered ? Color.primary.opacity(0.055) : Color.clear)
+    )
     .contentShape(Rectangle())
+    .onHover { interaction.isHovered = $0 }
   }
 
   private func displayURL(for url: URL) -> String {
@@ -139,42 +176,86 @@ private struct DownloadsLibraryView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
+      HStack(spacing: 10) {
         Text("Downloads")
-          .font(.title2.weight(.semibold))
+          .font(.headline.weight(.semibold))
         Spacer()
         if downloads.activeDownloadCount > 0 {
           Text("\(downloads.activeDownloadCount) active")
-            .font(.caption)
+            .font(.caption2.weight(.medium))
             .foregroundStyle(.secondary)
         }
         LibraryCloseButton(title: "Close Downloads", dismiss: dismiss)
       }
-      .padding(.horizontal, 22)
-      .padding(.vertical, 16)
+      .padding(.horizontal, LibraryLayout.headerHorizontalPadding)
+      .padding(.vertical, LibraryLayout.headerVerticalPadding)
+      .frame(minHeight: 52)
 
-      Divider()
+      LibrarySeparator()
 
       if downloads.items.isEmpty {
-        ContentUnavailableView(
-          "No Downloads",
+        LibraryEmptyState(
+          title: "No Downloads",
           systemImage: "arrow.down.circle",
-          description: Text("Files downloaded in this session will appear here."))
+          message: "Files downloaded in this session will appear here.")
       } else {
         List(downloads.items) { item in
           DownloadRow(item: item, downloads: downloads)
-            .listRowSeparator(.visible)
+            .listRowSeparator(.visible, edges: .all)
+            .listRowInsets(
+              EdgeInsets(
+                top: LibraryLayout.rowVerticalPadding,
+                leading: LibraryLayout.rowHorizontalPadding,
+                bottom: LibraryLayout.rowVerticalPadding,
+                trailing: LibraryLayout.rowHorizontalPadding))
+            .listRowBackground(Color.clear)
         }
         .listStyle(.inset)
+        .scrollContentBackground(.hidden)
       }
     }
     .background(Color(nsColor: .windowBackgroundColor))
   }
 }
 
+private struct LibrarySeparator: View {
+  var body: some View {
+    Rectangle()
+      .fill(Color.primary.opacity(LibraryLayout.separatorOpacity))
+      .frame(height: 0.5)
+      .allowsHitTesting(false)
+  }
+}
+
+private struct LibraryEmptyState: View {
+  let title: String
+  let systemImage: String
+  let message: String
+
+  var body: some View {
+    VStack(spacing: 8) {
+      Image(systemName: systemImage)
+        .font(.system(size: 20, weight: .medium))
+        .foregroundStyle(.tertiary)
+        .frame(width: 30, height: 30)
+        .accessibilityHidden(true)
+      Text(title)
+        .font(.headline)
+      Text(message)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 360)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .padding(28)
+  }
+}
+
 private struct LibraryCloseButton: View {
   let title: String
   let dismiss: DismissAction
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     Button {
@@ -182,60 +263,164 @@ private struct LibraryCloseButton: View {
     } label: {
       Image(systemName: "xmark")
         .font(.system(size: 11, weight: .semibold))
-        .frame(width: 24, height: 24)
+        .frame(width: 28, height: 28)
         .contentShape(Rectangle())
     }
-    .buttonStyle(.borderless)
+    .buttonStyle(LibraryCloseButtonStyle(isHovered: interaction.isHovered))
+    .onHover { interaction.isHovered = $0 }
     .help(title)
     .accessibilityLabel(title)
+  }
+}
+
+private struct LibraryCloseButtonStyle: ButtonStyle {
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(Color.primary.opacity(0.72))
+      .background(
+        RoundedRectangle(cornerRadius: LibraryLayout.rowCornerRadius, style: .continuous)
+          .fill(
+            configuration.isPressed
+              ? Color.primary.opacity(0.14)
+              : (isHovered ? Color.primary.opacity(0.075) : Color.clear)
+          )
+      )
+      .contentShape(RoundedRectangle(cornerRadius: LibraryLayout.rowCornerRadius, style: .continuous))
   }
 }
 
 private struct DownloadRow: View {
   let item: DownloadItem
   @ObservedObject var downloads: DownloadManager
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: iconName)
-        .foregroundStyle(.secondary)
-        .frame(width: 22, height: 22)
-        .padding(.top, 2)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(stateTint)
+        .frame(width: LibraryLayout.iconColumnWidth, height: 24)
+        .padding(.top, 1)
 
-      VStack(alignment: .leading, spacing: 6) {
-        Text(item.fileName)
-          .font(.body.weight(.medium))
-          .lineLimit(1)
-        if item.state == .downloading || item.state == .pending {
-          if let progress = item.progress {
-            ProgressView(value: progress)
-            Text("\(formatBytes(item.receivedBytes)) of \(formatBytes(item.totalBytes ?? 0))")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          } else {
-            ProgressView()
-            Text("\(formatBytes(item.receivedBytes)) received")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        } else {
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(item.fileName)
+            .font(.body.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .layoutPriority(1)
+          Spacer(minLength: 8)
           Text(item.state.displayName)
-            .font(.caption)
-            .foregroundStyle(item.state == .completed ? Color.secondary : Color.orange)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(stateTint)
+            .lineLimit(1)
         }
 
-        if item.state == .completed, item.destinationURL != nil {
-          HStack(spacing: 12) {
-            Button("Open") { downloads.open(item) }
-            Button("Show in Finder") { downloads.showInFinder(item) }
+        Group {
+          if isActive {
+            VStack(alignment: .leading, spacing: 4) {
+              ProgressView(value: item.progress)
+                .tint(Color.accentColor.opacity(0.82))
+                .frame(height: 5)
+              HStack(spacing: 8) {
+                Text(progressDetail)
+                if let progress = item.progress {
+                  Spacer(minLength: 4)
+                  Text("\(Int(progress * 100))%")
+                    .font(.caption2.monospacedDigit())
+                }
+              }
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            }
+          } else {
+            HStack(spacing: 6) {
+              if let sizeLabel {
+                Text(sizeLabel)
+              }
+              if let locationLabel {
+                metadataSeparator
+                Text(locationLabel)
+              }
+              if let finishedAt = item.finishedAt {
+                metadataSeparator
+                Text(finishedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+              }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
           }
-          .buttonStyle(.link)
-          .font(.caption)
         }
+        .frame(height: LibraryLayout.downloadStatusHeight, alignment: .top)
+
+        Group {
+          if item.state == .completed, item.destinationURL != nil {
+            HStack(spacing: 12) {
+              Button("Open") { downloads.open(item) }
+              Button("Show in Finder") { downloads.showInFinder(item) }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+          } else {
+            Color.clear
+          }
+        }
+        .frame(height: LibraryLayout.downloadActionHeight, alignment: .leading)
       }
-      Spacer(minLength: 0)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 8)
+    .padding(.horizontal, 8)
+    .background(
+      RoundedRectangle(cornerRadius: LibraryLayout.rowCornerRadius, style: .continuous)
+        .fill(interaction.isHovered ? Color.primary.opacity(0.055) : Color.clear)
+    )
+    .contentShape(Rectangle())
+    .onHover { interaction.isHovered = $0 }
+  }
+
+  private var isActive: Bool {
+    item.state == .downloading || item.state == .pending
+  }
+
+  private var stateTint: Color {
+    switch item.state {
+    case .pending, .downloading:
+      return Color.accentColor.opacity(0.86)
+    case .completed:
+      return Color.secondary
+    case .failed:
+      return Color.orange.opacity(0.64)
+    case .cancelled:
+      return Color.secondary.opacity(0.82)
+    }
+  }
+
+  private var sizeLabel: String? {
+    let bytes = item.totalBytes ?? item.receivedBytes
+    return bytes > 0 ? formatBytes(bytes) : nil
+  }
+
+  private var locationLabel: String? {
+    guard let destination = item.destinationURL else { return nil }
+    let folder = destination.deletingLastPathComponent().lastPathComponent
+    return folder.isEmpty ? nil : folder
+  }
+
+  @ViewBuilder
+  private var metadataSeparator: some View {
+    Text("·")
+      .foregroundStyle(.tertiary)
+  }
+
+  private var progressDetail: String {
+    if let totalBytes = item.totalBytes, totalBytes > 0 {
+      return "\(formatBytes(item.receivedBytes)) of \(formatBytes(totalBytes))"
+    }
+    return "\(formatBytes(item.receivedBytes)) received"
   }
 
   private var iconName: String {

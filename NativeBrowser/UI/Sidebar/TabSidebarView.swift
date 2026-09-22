@@ -16,6 +16,7 @@ private enum SidebarLayout {
   static let spaceRowHeight: CGFloat = 27
   static let tabRowHeight: CGFloat = 32
   static let closeHitTarget: CGFloat = 24
+  static let separatorOpacity: CGFloat = 0.09
 }
 
 struct TabSidebarView: View {
@@ -51,7 +52,7 @@ struct TabSidebarView: View {
             }
 
             Rectangle()
-              .fill(Color.primary.opacity(0.08))
+              .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
               .frame(height: 0.5)
               .padding(.vertical, 8)
 
@@ -98,33 +99,18 @@ struct TabSidebarView: View {
       }
 
       Rectangle()
-        .fill(Color.primary.opacity(0.08))
+        .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
         .frame(height: 0.5)
 
-      HStack(spacing: 8) {
-        Button {
-          workspace.createTab(url: nil)
-        } label: {
-          Image(systemName: "plus")
-            .font(.system(size: 11, weight: .semibold))
-            .frame(width: 20, height: 20)
-            .background(
-              Circle().fill(Color.accentColor.opacity(0.12))
-            )
-            .foregroundStyle(Color.accentColor)
-          Text("New Tab")
-            .font(.callout.weight(.medium))
-        }
-        .buttonStyle(.plain)
-        .help("New Tab (⌘T)")
-        .accessibilityLabel("New Tab")
-        .contentShape(Rectangle())
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 14)
-      .padding(.top, 8)
-
       VStack(spacing: 2) {
+        SidebarUtilityButton(
+          title: "New Tab",
+          systemImage: "plus",
+          iconTint: .secondary,
+          labelWeight: .regular,
+          helpText: "New Tab (⌘T)") {
+            workspace.createTab(url: nil)
+          }
         SidebarUtilityButton(
           title: "History",
           systemImage: "clock",
@@ -136,6 +122,7 @@ struct TabSidebarView: View {
           action: runtime.showDownloads)
       }
       .padding(.horizontal, 10)
+      .padding(.top, 7)
       .padding(.bottom, 11)
     }
     .frame(width: SidebarLayout.width)
@@ -154,17 +141,21 @@ private struct SidebarUtilityButton: View {
   let title: String
   let systemImage: String
   var badge: Int = 0
+  var iconTint: Color = .secondary
+  var labelWeight: Font.Weight = .regular
+  var helpText: String? = nil
   let action: () -> Void
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     Button(action: action) {
       HStack(spacing: 9) {
         Image(systemName: systemImage)
           .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(iconTint)
           .frame(width: 16)
         Text(title)
-          .font(.callout)
+          .font(.callout.weight(labelWeight))
         Spacer(minLength: 4)
         if badge > 0 {
           Text("\(badge)")
@@ -176,9 +167,27 @@ private struct SidebarUtilityButton: View {
       .frame(height: 28)
       .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .help(title)
+    .buttonStyle(SidebarUtilityButtonStyle(isHovered: interaction.isHovered))
+    .onHover { interaction.isHovered = $0 }
+    .help(helpText ?? title)
     .accessibilityLabel(title)
+  }
+}
+
+private struct SidebarUtilityButtonStyle: ButtonStyle {
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .background(
+        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
+          .fill(
+            configuration.isPressed
+              ? Color.primary.opacity(0.13)
+              : (isHovered ? Color.primary.opacity(0.055) : Color.clear)
+          )
+      )
+      .contentShape(RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous))
   }
 }
 
@@ -243,13 +252,6 @@ private struct SpaceRowView: View {
               : (interaction.isHovered ? Color.primary.opacity(0.05) : Color.clear)
           )
       )
-      .overlay(alignment: .leading) {
-        if isSelected {
-          Rectangle()
-            .fill(Color.accentColor.opacity(0.95))
-            .frame(width: 2, height: 14)
-        }
-      }
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
