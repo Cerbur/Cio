@@ -290,21 +290,31 @@ bool CEFClientHandler::OnBeforeDownload(
   NSString *mimeType = NSStringFromCefString(download_item->GetMimeType());
   NSString *originalURL = NSStringFromCefString(download_item->GetOriginalUrl());
   __weak BrowserBridge *bridge = bridge_;
-  CefRefPtr<CefBeforeDownloadCallback> callbackRef = callback;
-
-  OnMainThread(^{
-    NSString *destination = [bridge downloadDestinationPathForIdentifier:downloadIdentifier
-                                                                 sourceURL:sourceURL
-                                                           suggestedFileName:suggestedFileName
-                                                        cefSuggestedFileName:cefSuggestedFileName
-                                                         contentDisposition:contentDisposition
-                                                                 mimeType:mimeType
-                                                              originalURL:originalURL];
-    std::string path = destination != nil ? std::string(destination.UTF8String) : std::string();
-    callbackRef->Continue(path, /*show_dialog=*/false);
-  });
-  // We call Continue ourselves, synchronously or asynchronously on the main
-  // actor. Returning true prevents CEF's Alloy default from cancelling it.
+  // CEF invokes this callback on its UI thread. In this application the CEF UI
+  // thread is the AppKit main thread (external_message_pump=true), so select
+  // and continue the destination in one callback turn. Deferring Continue to
+  // the main queue lets a user-initiated navigation advance its download state
+  // before Chromium has received the required continuation.
+  NSString *destination = [bridge downloadDestinationPathForIdentifier:downloadIdentifier
+                                                               sourceURL:sourceURL
+                                                         suggestedFileName:suggestedFileName
+                                                      cefSuggestedFileName:cefSuggestedFileName
+                                                       contentDisposition:contentDisposition
+                                                               mimeType:mimeType
+                                                            originalURL:originalURL];
+  if (destination == nil || destination.length == 0 || !destination.isAbsolutePath) {
+    fprintf(stderr, "[browser] download destination unavailable id=%ld\n",
+            static_cast<long>(downloadIdentifier));
+    return false;
+  }
+  const char *utf8Path = destination.UTF8String;
+  if (utf8Path == nullptr || utf8Path[0] == '\0') {
+    fprintf(stderr, "[browser] download destination conversion failed id=%ld\n",
+            static_cast<long>(downloadIdentifier));
+    return false;
+  }
+  const std::string path(utf8Path);
+  callback->Continue(path, /*show_dialog=*/false);
   return true;
 }
 
