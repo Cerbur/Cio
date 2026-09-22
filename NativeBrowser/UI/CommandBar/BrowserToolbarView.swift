@@ -16,7 +16,7 @@ import SwiftUI
 struct BrowserToolbarView: View {
   @ObservedObject var session: BrowserSession
   var showsSidebarToggle = false
-  var titlebarContentInset: CGFloat = 0
+  var titlebarLeadingControlInset: CGFloat = 0
   var onShowSidebar: () -> Void = {}
   @StateObject private var interaction = BrowserInteractionState()
 
@@ -24,64 +24,55 @@ struct BrowserToolbarView: View {
     let state = session.navigationState
     let addressFieldIsFocused = interaction.isFocused || session.addressField.isEditing
 
-    VStack(spacing: 0) {
+    HStack(spacing: 0) {
       if showsSidebarToggle {
-        // The full-size content view reaches into the titlebar. Keep the
-        // collapsed toolbar's controls below the measured native titlebar
-        // geometry so they never compete with the traffic lights.
-        Color.clear
-          .frame(height: max(titlebarContentInset, 8))
+        BrowserGlassIconButton(
+          systemImage: "sidebar.left",
+          label: "Show Sidebar",
+          action: onShowSidebar)
+          .padding(.trailing, 6)
       }
 
-      HStack(spacing: 0) {
-        if showsSidebarToggle {
-          BrowserGlassIconButton(
-            systemImage: "sidebar.left",
-            label: "Show Sidebar",
-            action: onShowSidebar)
-            .padding(.trailing, 6)
-        }
-
-        BrowserGlassControlGroup {
-          BrowserGlassIconButton(
-            systemImage: "chevron.backward",
-            label: "Back",
-            isEnabled: state.canGoBack,
-            action: session.goBack)
-          BrowserGlassIconButton(
-            systemImage: "chevron.forward",
-            label: "Forward",
-            isEnabled: state.canGoForward,
-            action: session.goForward)
-          reloadOrStopButton(isLoading: state.isLoading)
-        }
-
-        Rectangle()
-          .fill(Color.primary.opacity(0.12))
-          .frame(width: 0.5, height: 18)
-          .padding(.horizontal, 8)
-          .allowsHitTesting(false)
-
-        addressFieldSurface(isFocused: addressFieldIsFocused)
-          .layoutPriority(1)
-
-        ZStack {
-          if state.isLoading {
-            ProgressView()
-              .progressViewStyle(.circular)
-              .controlSize(.small)
-              .scaleEffect(0.6)
-              .help("Loading")
-          }
-        }
-        .frame(width: 16, height: 14)
-        .accessibilityHidden(!state.isLoading)
+      BrowserGlassControlGroup {
+        BrowserGlassIconButton(
+          systemImage: "chevron.backward",
+          label: "Back",
+          isEnabled: state.canGoBack,
+          action: session.goBack)
+        BrowserGlassIconButton(
+          systemImage: "chevron.forward",
+          label: "Forward",
+          isEnabled: state.canGoForward,
+          action: session.goForward)
+        reloadOrStopButton(isLoading: state.isLoading)
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .frame(minHeight: 44)
+
+      Rectangle()
+        .fill(Color.primary.opacity(0.12))
+        .frame(width: 0.5, height: 18)
+        .padding(.horizontal, 8)
+        .allowsHitTesting(false)
+
+      addressFieldSurface(isFocused: addressFieldIsFocused)
+        .layoutPriority(1)
+
+      ZStack {
+        if state.isLoading {
+          ProgressView()
+            .progressViewStyle(.circular)
+            .controlSize(.small)
+            .scaleEffect(0.6)
+            .help("Loading")
+        }
+      }
+      .frame(width: 16, height: 14)
+      .accessibilityHidden(!state.isLoading)
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.leading, showsSidebarToggle ? max(10, titlebarLeadingControlInset) : 10)
+    .padding(.trailing, 10)
+    .padding(.vertical, 6)
+    .frame(height: BrowserChromeLayout.toolbarHeight)
     .browserToolbarMaterial()
     .overlay(alignment: .bottom) {
       Rectangle()

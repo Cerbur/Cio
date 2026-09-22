@@ -11,7 +11,6 @@ import AppKit
 import SwiftUI
 
 private enum SidebarLayout {
-  static let width: CGFloat = 248
   static let rowCornerRadius: CGFloat = 6
   static let spaceRowHeight: CGFloat = 27
   static let tabRowHeight: CGFloat = 32
@@ -23,98 +22,101 @@ struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   var onCollapseSidebar: () -> Void = {}
   @EnvironmentObject private var runtime: ApplicationRuntime
-  @Environment(\.browserTitlebarContentInset) private var titlebarContentInset
 
   var body: some View {
     VStack(spacing: 0) {
-      // This spacer belongs outside the scroll view so rows never move under
-      // the native traffic lights when the sidebar content is scrolled.
-      Color.clear
-        .frame(height: max(titlebarContentInset, 8))
-
-      HStack {
-        Spacer(minLength: 0)
-
-        BrowserGlassControlGroup {
-          BrowserGlassIconButton(
-            systemImage: "plus.square.on.square",
-            label: "New Tab",
-            action: { workspace.createTab(url: nil) })
-          BrowserGlassIconButton(
-            systemImage: "sidebar.left",
-            label: "Hide Sidebar",
-            action: onCollapseSidebar)
-        }
-      }
-      .padding(.horizontal, 10)
-      .padding(.bottom, 6)
-
-      ScrollViewReader { proxy in
-        ScrollView {
-          VStack(alignment: .leading, spacing: 0) {
-            SidebarSectionHeader {
-              workspace.createSpace()
-            } help: {
-              "New Space"
-            }
-            .padding(.bottom, 6)
-
-            LazyVStack(spacing: 1) {
-              ForEach(workspace.spaces) { space in
-                SpaceRowView(
-                  space: space,
-                  isSelected: space.id == workspace.selectedSpaceID,
-                  workspace: workspace)
-                  .id("space-\(space.id.uuidString)")
+      // The scrollable body begins below the same stable chrome band used by
+      // BrowserToolbarView. The controls overlay that band instead of adding
+      // a titlebar-height spacer above it.
+      ZStack(alignment: .topTrailing) {
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+              SidebarSectionHeader {
+                workspace.createSpace()
+              } help: {
+                "New Space"
               }
-            }
+              .padding(.bottom, 6)
 
-            Rectangle()
-              .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
-              .frame(height: 0.5)
-              .padding(.vertical, 8)
-
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-              Text("Tabs")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-              Spacer(minLength: 4)
-
-              Text("\(workspace.tabs.count)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 5)
-
-            LazyVStack(spacing: 1) {
-              ForEach(workspace.tabs) { tab in
-                TabRowView(
-                  tab: tab,
-                  isSelected: tab.id == workspace.selectedTabID,
-                  onSelect: { workspace.selectTab(id: tab.id) },
-                  onClose: { workspace.closeTab(id: tab.id) })
-                  .id("tab-\(tab.id.uuidString)")
+              LazyVStack(spacing: 1) {
+                ForEach(workspace.spaces) { space in
+                  SpaceRowView(
+                    space: space,
+                    isSelected: space.id == workspace.selectedSpaceID,
+                    workspace: workspace)
+                    .id("space-\(space.id.uuidString)")
+                }
               }
+
+              Rectangle()
+                .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
+                .frame(height: 0.5)
+                .padding(.vertical, 8)
+
+              HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("Tabs")
+                  .font(.caption.weight(.medium))
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+                  .truncationMode(.tail)
+
+                Spacer(minLength: 4)
+
+                Text("\(workspace.tabs.count)")
+                  .font(.caption2.monospacedDigit())
+                  .foregroundStyle(.secondary)
+              }
+              .padding(.horizontal, 10)
+              .padding(.bottom, 5)
+
+              LazyVStack(spacing: 1) {
+                ForEach(workspace.tabs) { tab in
+                  TabRowView(
+                    tab: tab,
+                    isSelected: tab.id == workspace.selectedTabID,
+                    onSelect: { workspace.selectTab(id: tab.id) },
+                    onClose: { workspace.closeTab(id: tab.id) })
+                    .id("tab-\(tab.id.uuidString)")
+                }
+              }
+              .padding(.horizontal, 3)
             }
-            .padding(.horizontal, 3)
+            .padding(.horizontal, 6)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
           }
-          .padding(.horizontal, 6)
-          .padding(.top, 8)
-          .padding(.bottom, 12)
+          .frame(maxHeight: .infinity)
+          .onChange(of: workspace.selectedSpaceID) { _, id in
+            proxy.scrollTo("space-\(id.uuidString)", anchor: .center)
+          }
+          .onChange(of: workspace.selectedTabID) { _, id in
+            guard let id else { return }
+            proxy.scrollTo("tab-\(id.uuidString)", anchor: .center)
+          }
         }
-        .frame(maxHeight: .infinity)
-        .onChange(of: workspace.selectedSpaceID) { _, id in
-          proxy.scrollTo("space-\(id.uuidString)", anchor: .center)
+        .padding(.top, BrowserChromeLayout.toolbarHeight)
+
+        HStack {
+          Spacer(minLength: 0)
+
+          BrowserGlassControlGroup {
+            BrowserGlassIconButton(
+              systemImage: "plus.square.on.square",
+              label: "New Tab",
+              action: { workspace.createTab(url: nil) })
+            BrowserGlassIconButton(
+              systemImage: "sidebar.left",
+              label: "Hide Sidebar",
+              action: onCollapseSidebar)
+          }
         }
-        .onChange(of: workspace.selectedTabID) { _, id in
-          guard let id else { return }
-          proxy.scrollTo("tab-\(id.uuidString)", anchor: .center)
-        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .topTrailing)
+        .frame(height: BrowserChromeLayout.toolbarHeight, alignment: .topTrailing)
       }
+      .frame(maxHeight: .infinity)
 
       Rectangle()
         .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
@@ -135,7 +137,7 @@ struct TabSidebarView: View {
       .padding(.top, 7)
       .padding(.bottom, 11)
     }
-    .frame(width: SidebarLayout.width)
+    .frame(width: BrowserChromeLayout.sidebarWidth)
     .frame(maxHeight: .infinity)
     .browserSidebarMaterial()
     .overlay(alignment: .trailing) {

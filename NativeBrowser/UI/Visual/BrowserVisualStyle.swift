@@ -14,6 +14,15 @@
 import AppKit
 import SwiftUI
 
+/// Shared geometry for the one browser chrome band. Both the sidebar overlay
+/// and the navigation toolbar use this value so collapsing the sidebar never
+/// changes the page's vertical origin.
+enum BrowserChromeLayout {
+  static let toolbarHeight: CGFloat = 44
+  static let sidebarWidth: CGFloat = 248
+  static let sidebarAnimation = Animation.easeInOut(duration: 0.22)
+}
+
 /// Ephemeral presentation state shared by the small hover/focus surfaces. It
 /// never mirrors tab selection, browser sessions or navigation state.
 @MainActor
@@ -163,17 +172,6 @@ struct BrowserVisualEffectView: NSViewRepresentable {
     view.blendingMode = blendingMode
     view.state = .followsWindowActiveState
     view.isEmphasized = false
-  }
-}
-
-private struct BrowserTitlebarContentInsetKey: EnvironmentKey {
-  static let defaultValue: CGFloat = 0
-}
-
-extension EnvironmentValues {
-  var browserTitlebarContentInset: CGFloat {
-    get { self[BrowserTitlebarContentInsetKey.self] }
-    set { self[BrowserTitlebarContentInsetKey.self] = newValue }
   }
 }
 
