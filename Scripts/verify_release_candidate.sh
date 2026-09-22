@@ -29,6 +29,13 @@ RESTORE_DOWNLOADS_DIR="$DOWNLOADS_DIR/session-restore"
 # Release acceptance phases. The self-test derives its secondary URLs from this
 # exact home URL, including the fixture port and the persisted query/fragment.
 RESTORE_HOME_URL="$HOME_URL"
+# The History/Downloads self-test creates a private AppKit window and exits
+# directly after closing it. macOS can leave a persistent UI-restoration record
+# with no restorable window identifier; the next direct executable launch then
+# starts AppKit but never materializes SwiftUI's Window scene. Ignore that
+# machine-global UI state for the verifier's isolated restore launches without
+# changing the user's saved application state.
+RESTORE_APPKIT_ARGS=(-ApplePersistenceIgnoreState YES)
 
 FAILURES=0
 FIXTURE_PID=""
@@ -328,6 +335,7 @@ NATIVEBROWSER_DATA_DIR="$RESTORE_DATA_DIR" \
 NATIVEBROWSER_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
 NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
+  "${RESTORE_APPKIT_ARGS[@]}" \
   --use-mock-keychain \
   --session-restore-self-test=seed \
   --home-url="$RESTORE_HOME_URL" > "$RESTORE_SEED_LOG" 2>&1
@@ -353,6 +361,7 @@ NATIVEBROWSER_DATA_DIR="$RESTORE_DATA_DIR" \
 NATIVEBROWSER_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
 NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
+  "${RESTORE_APPKIT_ARGS[@]}" \
   --use-mock-keychain \
   --session-restore-self-test=verify \
   --home-url="$RESTORE_HOME_URL" > "$RESTORE_VERIFY_LOG" 2>&1
