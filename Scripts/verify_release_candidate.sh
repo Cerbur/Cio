@@ -40,7 +40,7 @@ check_absent() {
 }
 
 check_no_native_browser_process() {
-  if pgrep -f -e "$EXECUTABLE" >/dev/null 2>&1; then
+  if pgrep -f "$EXECUTABLE" >/dev/null 2>&1; then
     fail "$1 (NativeBrowser process remains)"
   else
     pass "$1"

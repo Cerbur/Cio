@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     if !runtime.hasLiveBrowsers {
       runtime.shutdownCEF()
     }
+    SessionRestoreSelfTest.noteTerminationCompletion()
     // The late dump is what proves the Command-W conflict stayed resolved for
     // the whole run, not only at launch.
     if CommandLine.arguments.contains("--dump-main-menu") {

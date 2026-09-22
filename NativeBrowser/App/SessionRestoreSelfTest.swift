@@ -67,6 +67,11 @@ final class SessionRestoreSelfTest {
   private var liveCountBeforeLazyClose = 0
   private var domainCountBeforeLazyClose = 0
   private var didRequestTermination = false
+  private var didReportCleanShutdown = false
+
+  static func noteTerminationCompletion() {
+    active?.reportCleanShutdown()
+  }
 
   private init(runtime: ApplicationRuntime, mode: Mode) {
     self.runtime = runtime
@@ -213,7 +218,9 @@ final class SessionRestoreSelfTest {
         self.runtime.hasShutDownCEF
       },
       finish: { completed in
-        self.report("seed-clean-shutdown", completed, "cef-shutdown=\(self.runtime.hasShutDownCEF)")
+        if completed {
+          self.reportCleanShutdown()
+        }
       })
   }
 
@@ -263,12 +270,13 @@ final class SessionRestoreSelfTest {
         let secondaryURLsRestored = Set(secondaryTabs.compactMap { $0.url?.path }) == Set([
           "/main-secondary", "/work-secondary", "/personal-secondary",
         ])
+        let expectedInitialFragment = ApplicationRuntime.homeURL.fragment ?? "fragment-secret"
         let initialURLsRestored = self.workspace.spaces.allSatisfy { space in
           guard let url = self.workspace.tabs(in: space.id).first?.url else { return false }
           return url.scheme == "https"
             && url.host == "example.com"
             && url.query?.hasPrefix("code=") == true
-            && url.fragment == "fragment-secret"
+            && url.fragment == expectedInitialFragment
         }
 
         let startupGraphOK = self.workspace.allTabs.count > 1
@@ -442,10 +450,9 @@ final class SessionRestoreSelfTest {
         self.runtime.hasShutDownCEF
       },
       finish: { completed in
-        self.report(
-          "verify-clean-shutdown",
-          completed,
-          "cef-shutdown=\(self.runtime.hasShutDownCEF) live-sessions=\(self.manager.liveSessionCount)")
+        if completed {
+          self.reportCleanShutdown()
+        }
       })
   }
 
@@ -453,6 +460,16 @@ final class SessionRestoreSelfTest {
     guard !didRequestTermination else { return }
     didRequestTermination = true
     NSApp.terminate(nil)
+  }
+
+  private func reportCleanShutdown() {
+    guard !didReportCleanShutdown else { return }
+    didReportCleanShutdown = true
+    let name = mode == .seed ? "seed-clean-shutdown" : "verify-clean-shutdown"
+    report(
+      name,
+      runtime.hasShutDownCEF && !runtime.hasLiveBrowsers,
+      "cef-shutdown=\(runtime.hasShutDownCEF) live-sessions=\(manager.liveSessionCount)")
   }
 
   private func report(_ name: String, _ passed: Bool, _ details: String) {
