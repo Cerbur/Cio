@@ -10,6 +10,14 @@
 import AppKit
 import SwiftUI
 
+private enum SidebarLayout {
+  static let width: CGFloat = 248
+  static let rowCornerRadius: CGFloat = 6
+  static let spaceRowHeight: CGFloat = 27
+  static let tabRowHeight: CGFloat = 32
+  static let closeHitTarget: CGFloat = 24
+}
+
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @EnvironmentObject private var runtime: ApplicationRuntime
@@ -30,9 +38,9 @@ struct TabSidebarView: View {
             } help: {
               "New Space"
             }
-            .padding(.bottom, 5)
+            .padding(.bottom, 6)
 
-            LazyVStack(spacing: 2) {
+            LazyVStack(spacing: 1) {
               ForEach(workspace.spaces) { space in
                 SpaceRowView(
                   space: space,
@@ -42,7 +50,10 @@ struct TabSidebarView: View {
               }
             }
 
-            Divider().padding(.vertical, 9)
+            Rectangle()
+              .fill(Color.primary.opacity(0.08))
+              .frame(height: 0.5)
+              .padding(.vertical, 8)
 
             HStack(alignment: .firstTextBaseline, spacing: 7) {
               Text("Tabs")
@@ -58,9 +69,9 @@ struct TabSidebarView: View {
                 .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
-            .padding(.bottom, 6)
+            .padding(.bottom, 5)
 
-            LazyVStack(spacing: 2) {
+            LazyVStack(spacing: 1) {
               ForEach(workspace.tabs) { tab in
                 TabRowView(
                   tab: tab,
@@ -70,10 +81,10 @@ struct TabSidebarView: View {
                   .id("tab-\(tab.id.uuidString)")
               }
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 3)
           }
           .padding(.horizontal, 6)
-          .padding(.top, 10)
+          .padding(.top, 8)
           .padding(.bottom, 12)
         }
         .frame(maxHeight: .infinity)
@@ -96,9 +107,9 @@ struct TabSidebarView: View {
         } label: {
           Image(systemName: "plus")
             .font(.system(size: 11, weight: .semibold))
-            .frame(width: 22, height: 22)
+            .frame(width: 20, height: 20)
             .background(
-              Circle().fill(Color.accentColor.opacity(0.14))
+              Circle().fill(Color.accentColor.opacity(0.12))
             )
             .foregroundStyle(Color.accentColor)
           Text("New Tab")
@@ -127,7 +138,7 @@ struct TabSidebarView: View {
       .padding(.horizontal, 10)
       .padding(.bottom, 11)
     }
-    .frame(width: 248)
+    .frame(width: SidebarLayout.width)
     .frame(maxHeight: .infinity)
     .browserSidebarMaterial()
     .overlay(alignment: .trailing) {
@@ -178,7 +189,7 @@ private struct SidebarSectionHeader: View {
   var body: some View {
     HStack(spacing: 8) {
       Text("Spaces")
-        .font(.caption.weight(.semibold))
+        .font(.caption2.weight(.semibold))
         .foregroundStyle(.secondary)
 
       Spacer(minLength: 4)
@@ -186,7 +197,7 @@ private struct SidebarSectionHeader: View {
       Button(action: action) {
         Image(systemName: "plus")
           .font(.system(size: 11, weight: .semibold))
-          .frame(width: 22, height: 22)
+          .frame(width: 24, height: 24)
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
@@ -210,32 +221,32 @@ private struct SpaceRowView: View {
     } label: {
       HStack(spacing: 7) {
         Image(systemName: isSelected ? "square.3.layers.3d.top.filled" : "square.3.layers.3d")
-          .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+          .font(.system(size: 12, weight: isSelected ? .medium : .regular))
           .foregroundStyle(isSelected ? Color.accentColor : .secondary)
           .frame(width: 16)
         Text(space.name)
-          .font(.callout.weight(isSelected ? .semibold : .regular))
+          .font(.footnote.weight(isSelected ? .medium : .regular))
           .lineLimit(1)
           .truncationMode(.tail)
-        Spacer(minLength: 4)
-        Text("\(space.tabIDs.count)")
-          .font(.caption2.monospacedDigit())
-          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+          Spacer(minLength: 4)
+          Text("\(space.tabIDs.count)")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(isSelected ? Color.accentColor.opacity(0.9) : .secondary)
       }
       .padding(.horizontal, 8)
-      .frame(height: 28)
+      .frame(height: SidebarLayout.spaceRowHeight)
       .background(
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
           .fill(
             isSelected
-              ? Color.primary.opacity(0.10)
-              : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
+              ? Color.primary.opacity(0.075)
+              : (interaction.isHovered ? Color.primary.opacity(0.05) : Color.clear)
           )
       )
       .overlay(alignment: .leading) {
         if isSelected {
-          Capsule(style: .continuous)
-            .fill(Color.accentColor)
+          Rectangle()
+            .fill(Color.accentColor.opacity(0.95))
             .frame(width: 2, height: 14)
         }
       }
@@ -277,7 +288,7 @@ private struct TabRowView: View {
   var body: some View {
     ZStack(alignment: .trailing) {
       Button(action: onSelect) {
-        HStack(spacing: 8) {
+        HStack(spacing: 7) {
           Image(systemName: "globe")
             .font(.system(size: 12, weight: isSelected ? .medium : .regular))
             .foregroundStyle(isSelected ? Color.accentColor : .secondary)
@@ -290,21 +301,26 @@ private struct TabRowView: View {
 
           Spacer(minLength: 4)
 
-          if tab.isLoading {
-            ProgressView()
-              .progressViewStyle(.circular)
-              .controlSize(.small)
-              .scaleEffect(0.55)
-              .frame(width: 16, height: 16)
+          // Keep a stable status slot so loading never changes title width.
+          ZStack {
+            Color.clear
+            if tab.isLoading {
+              ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .scaleEffect(0.55)
+            }
           }
+          .frame(width: 16, height: 16)
 
           // Reserve space for the close control so revealing it never changes
           // the title's layout or makes the sidebar jump.
-          Color.clear.frame(width: 20, height: 20)
+          Color.clear.frame(
+            width: SidebarLayout.closeHitTarget,
+            height: SidebarLayout.closeHitTarget)
         }
-        .padding(.leading, 9)
-        .padding(.trailing, 4)
-        .frame(height: 34)
+        .padding(.horizontal, 8)
+        .frame(height: SidebarLayout.tabRowHeight)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -312,33 +328,36 @@ private struct TabRowView: View {
       Button(action: onClose) {
         Image(systemName: "xmark")
           .font(.system(size: 9, weight: .semibold))
-          .frame(width: 20, height: 20)
+          .frame(
+            width: SidebarLayout.closeHitTarget,
+            height: SidebarLayout.closeHitTarget)
           .foregroundStyle(isSelected ? Color.primary : .secondary)
           .background(
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-              .fill(Color.primary.opacity(interaction.isHovered ? 0.09 : 0.04))
+              .fill(Color.primary.opacity(interaction.isHovered ? 0.09 : 0.045))
           )
       }
       .buttonStyle(.plain)
+      .contentShape(Rectangle())
       .opacity(interaction.isHovered || isSelected ? 1 : 0)
       .allowsHitTesting(interaction.isHovered || isSelected)
-      .accessibilityHidden(!(interaction.isHovered || isSelected))
+      .accessibilityHidden(false)
       .help("Close Tab (⌘W)")
       .accessibilityLabel("Close Tab")
     }
     .padding(.horizontal, 2)
     .background(
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
         .fill(
           isSelected
-            ? Color.primary.opacity(0.10)
-            : (interaction.isHovered ? Color.primary.opacity(0.06) : Color.clear)
+            ? Color.primary.opacity(0.105)
+            : (interaction.isHovered ? Color.primary.opacity(0.055) : Color.clear)
         )
     )
     .overlay(alignment: .leading) {
       if isSelected {
-        Capsule(style: .continuous)
-          .fill(Color.accentColor)
+        Rectangle()
+          .fill(Color.accentColor.opacity(0.95))
           .frame(width: 2, height: 18)
       }
     }
