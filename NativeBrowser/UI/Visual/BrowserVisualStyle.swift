@@ -22,7 +22,97 @@ final class BrowserInteractionState: ObservableObject {
   @Published var isFocused = false
 }
 
+/// A compact group of related actions that shares one native Liquid Glass
+/// surface. The buttons remain separate hit targets while the surrounding
+/// capsule reads as one piece of browser chrome.
+struct BrowserGlassControlGroup<Content: View>: View {
+  private let content: Content
+
+  init(@ViewBuilder content: () -> Content) {
+    self.content = content()
+  }
+
+  var body: some View {
+    content
+      .padding(2)
+      .browserGlassControlSurface()
+  }
+}
+
+/// An icon-only control for the compact browser chrome. Hover and pressed
+/// feedback live inside the shared group surface instead of creating a glass
+/// bubble for every action.
+struct BrowserGlassIconButton: View {
+  let systemImage: String
+  let label: String
+  let isEnabled: Bool
+  let action: () -> Void
+  @StateObject private var interaction = BrowserInteractionState()
+
+  init(
+    systemImage: String,
+    label: String,
+    isEnabled: Bool = true,
+    action: @escaping () -> Void
+  ) {
+    self.systemImage = systemImage
+    self.label = label
+    self.isEnabled = isEnabled
+    self.action = action
+  }
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: systemImage)
+        .font(.system(size: 12, weight: .medium))
+        .frame(width: 28, height: 28)
+    }
+    .buttonStyle(
+      BrowserGlassIconButtonStyle(
+        isEnabled: isEnabled,
+        isHovered: interaction.isHovered)
+    )
+    .disabled(!isEnabled)
+    .onHover { interaction.isHovered = $0 }
+    .help(label)
+    .accessibilityLabel(label)
+  }
+}
+
+private struct BrowserGlassIconButtonStyle: ButtonStyle {
+  let isEnabled: Bool
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(
+        isEnabled ? Color.primary.opacity(0.88) : Color.primary.opacity(0.34)
+      )
+      .background(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .fill(
+            configuration.isPressed
+              ? Color.primary.opacity(0.15)
+              : (isHovered && isEnabled ? Color.primary.opacity(0.08) : Color.clear)
+          )
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+}
+
 extension View {
+  /// Applies one compact system glass capsule to a related control group.
+  /// macOS 26 owns the translucency and interaction treatment; the fallback
+  /// remains a semantic system material for lower deployment targets.
+  @ViewBuilder
+  func browserGlassControlSurface() -> some View {
+    if #available(macOS 26.0, *) {
+      glassEffect(.regular, in: Capsule())
+    } else {
+      background(.regularMaterial, in: Capsule())
+    }
+  }
+
   /// Gives the address field a compact native control surface without turning
   /// the toolbar into a second glass card. Clear Liquid Glass stays decorative
   /// and the semantic fill adapts to the system appearance; the embedded

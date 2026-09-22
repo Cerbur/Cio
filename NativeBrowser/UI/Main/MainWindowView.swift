@@ -13,11 +13,13 @@ import SwiftUI
 struct MainWindowView: View {
   @EnvironmentObject private var runtime: ApplicationRuntime
   @StateObject private var windowChromeState = WindowChromeState()
+  @StateObject private var browserChromeState = BrowserChromeState()
 
   var body: some View {
     BrowserWorkspaceView(
       workspace: runtime.workspaceStore,
-      titlebarContentInset: windowChromeState.titlebarContentInset
+      titlebarContentInset: windowChromeState.titlebarContentInset,
+      isSidebarVisible: $browserChromeState.isSidebarVisible
     )
       .frame(minWidth: 900, minHeight: 500)
       .background(Color(nsColor: .windowBackgroundColor))
@@ -47,16 +49,31 @@ private final class WindowChromeState: ObservableObject {
   @Published var titlebarContentInset: CGFloat = 0
 }
 
+/// Presentation-only shell state. Sidebar visibility is intentionally not part
+/// of the workspace/session model and is not persisted across launches.
+@MainActor
+private final class BrowserChromeState: ObservableObject {
+  @Published var isSidebarVisible = true
+}
+
 private struct BrowserWorkspaceView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   let titlebarContentInset: CGFloat
+  @Binding var isSidebarVisible: Bool
 
   var body: some View {
     HStack(spacing: 0) {
-      TabSidebarView(workspace: workspace)
-        .environment(\.browserTitlebarContentInset, titlebarContentInset)
+      if isSidebarVisible {
+        TabSidebarView(
+          workspace: workspace,
+          onCollapseSidebar: { isSidebarVisible = false })
+          .environment(\.browserTitlebarContentInset, titlebarContentInset)
+      }
 
-      BrowserContentColumn(workspace: workspace)
+      BrowserContentColumn(
+        workspace: workspace,
+        titlebarContentInset: titlebarContentInset,
+        isSidebarVisible: $isSidebarVisible)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .background(Color(nsColor: .windowBackgroundColor))
@@ -72,11 +89,17 @@ private struct BrowserWorkspaceView: View {
 /// above it and never owns or recreates a Chromium view.
 private struct BrowserContentColumn: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  let titlebarContentInset: CGFloat
+  @Binding var isSidebarVisible: Bool
 
   var body: some View {
     VStack(spacing: 0) {
       if let session = workspace.selectedSession {
-        BrowserToolbarView(session: session)
+        BrowserToolbarView(
+          session: session,
+          showsSidebarToggle: !isSidebarVisible,
+          titlebarContentInset: titlebarContentInset,
+          onShowSidebar: { isSidebarVisible = true })
           .addressFieldFocusListener(session: session)
       } else {
         Color.clear.frame(height: 46)

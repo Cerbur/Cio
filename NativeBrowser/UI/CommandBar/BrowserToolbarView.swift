@@ -15,89 +15,73 @@ import SwiftUI
 
 struct BrowserToolbarView: View {
   @ObservedObject var session: BrowserSession
+  var showsSidebarToggle = false
+  var titlebarContentInset: CGFloat = 0
+  var onShowSidebar: () -> Void = {}
   @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     let state = session.navigationState
     let addressFieldIsFocused = interaction.isFocused || session.addressField.isEditing
 
-    HStack(spacing: 0) {
-      HStack(spacing: 2) {
-        historyButton(
-          systemImage: "chevron.backward",
-          label: "Back",
-          enabled: state.canGoBack,
-          action: session.goBack)
-        historyButton(
-          systemImage: "chevron.forward",
-          label: "Forward",
-          enabled: state.canGoForward,
-          action: session.goForward)
-        reloadOrStopButton(isLoading: state.isLoading)
+    VStack(spacing: 0) {
+      if showsSidebarToggle {
+        // The full-size content view reaches into the titlebar. Keep the
+        // collapsed toolbar's controls below the measured native titlebar
+        // geometry so they never compete with the traffic lights.
+        Color.clear
+          .frame(height: max(titlebarContentInset, 8))
       }
 
-      Rectangle()
-        .fill(Color.primary.opacity(0.12))
-        .frame(width: 0.5, height: 18)
-        .padding(.horizontal, 8)
-        .allowsHitTesting(false)
-
-      HStack(spacing: 7) {
-        Image(systemName: "globe")
-          .font(.system(size: 11, weight: .regular))
-          .foregroundStyle(Color.secondary.opacity(0.88))
-          .frame(width: 14)
-          .allowsHitTesting(false)
-
-        AddressField(
-          model: session.addressField,
-          onChange: { session.addressField.userChangedText($0) },
-          onSubmit: { session.submitAddressField() },
-          onEscape: { session.cancelAddressEditing() },
-          onFocusChange: { focused in
-            interaction.isFocused = focused
-            session.addressFieldFocusChanged(focused)
-          }
-        )
-        .frame(minWidth: 240, maxWidth: .infinity, minHeight: 20, idealHeight: 22)
-        .layoutPriority(1)
-        .contentShape(Rectangle())
-        .allowsHitTesting(true)
-      }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 1)
-      .browserAddressFieldSurface(isFocused: addressFieldIsFocused, cornerRadius: 10)
-      .overlay {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .strokeBorder(
-            addressFieldIsFocused
-              ? Color.accentColor.opacity(0.38)
-              : Color.primary.opacity(0.13),
-            lineWidth: addressFieldIsFocused ? 1 : 0.5
-          )
-          // The surface is decorative. If it participates in hit testing it
-          // sits above the embedded NSTextField and can consume a normal mouse
-          // click before AppKit's field editor gets a chance to become first
-          // responder.
-          .allowsHitTesting(false)
-      }
-      .allowsHitTesting(true)
-
-      ZStack {
-        if state.isLoading {
-          ProgressView()
-            .progressViewStyle(.circular)
-            .controlSize(.small)
-            .scaleEffect(0.6)
-            .help("Loading")
+      HStack(spacing: 0) {
+        if showsSidebarToggle {
+          BrowserGlassIconButton(
+            systemImage: "sidebar.left",
+            label: "Show Sidebar",
+            action: onShowSidebar)
+            .padding(.trailing, 6)
         }
+
+        BrowserGlassControlGroup {
+          BrowserGlassIconButton(
+            systemImage: "chevron.backward",
+            label: "Back",
+            isEnabled: state.canGoBack,
+            action: session.goBack)
+          BrowserGlassIconButton(
+            systemImage: "chevron.forward",
+            label: "Forward",
+            isEnabled: state.canGoForward,
+            action: session.goForward)
+          reloadOrStopButton(isLoading: state.isLoading)
+        }
+
+        Rectangle()
+          .fill(Color.primary.opacity(0.12))
+          .frame(width: 0.5, height: 18)
+          .padding(.horizontal, 8)
+          .allowsHitTesting(false)
+
+        addressFieldSurface(isFocused: addressFieldIsFocused)
+          .layoutPriority(1)
+
+        ZStack {
+          if state.isLoading {
+            ProgressView()
+              .progressViewStyle(.circular)
+              .controlSize(.small)
+              .scaleEffect(0.6)
+              .help("Loading")
+          }
+        }
+        .frame(width: 16, height: 14)
+        .accessibilityHidden(!state.isLoading)
       }
-      .frame(width: 16, height: 14)
-      .accessibilityHidden(!state.isLoading)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .frame(minHeight: 44)
     }
-    .padding(.horizontal, 10)
-    .padding(.vertical, 6)
-    .frame(minHeight: 44)
     .browserToolbarMaterial()
     .overlay(alignment: .bottom) {
       Rectangle()
@@ -107,66 +91,56 @@ struct BrowserToolbarView: View {
     }
   }
 
-  private func historyButton(
-    systemImage: String,
-    label: String,
-    enabled: Bool,
-    action: @escaping () -> Void
-  ) -> some View {
-    ToolbarIconButton(systemImage: systemImage, label: label, enabled: enabled, action: action)
-  }
+  private func addressFieldSurface(isFocused: Bool) -> some View {
+    HStack(spacing: 7) {
+      Image(systemName: "globe")
+        .font(.system(size: 11, weight: .regular))
+        .foregroundStyle(Color.secondary.opacity(0.88))
+        .frame(width: 14)
+        .allowsHitTesting(false)
 
-  /// A small semantic hover target. It changes only the button chrome; it never
-  /// selects a tab or touches browser focus.
-  private struct ToolbarIconButton: View {
-    let systemImage: String
-    let label: String
-    let enabled: Bool
-    let action: () -> Void
-    @StateObject private var interaction = BrowserInteractionState()
-
-    var body: some View {
-      Button(action: action) {
-        Image(systemName: systemImage)
-          .font(.system(size: 12, weight: .medium))
-      }
-      .buttonStyle(
-        ToolbarIconButtonStyle(enabled: enabled, isHovered: interaction.isHovered)
+      AddressField(
+        model: session.addressField,
+        onChange: { session.addressField.userChangedText($0) },
+        onSubmit: { session.submitAddressField() },
+        onEscape: { session.cancelAddressEditing() },
+        onFocusChange: { focused in
+          interaction.isFocused = focused
+          session.addressFieldFocusChanged(focused)
+        }
       )
-      .disabled(!enabled)
-      .onHover { interaction.isHovered = $0 }
-      .help(label)
-      .accessibilityLabel(label)
+      .frame(minWidth: 240, maxWidth: .infinity, minHeight: 20, idealHeight: 22)
+      .layoutPriority(1)
+      .contentShape(Rectangle())
+      .allowsHitTesting(true)
     }
-  }
-
-  private struct ToolbarIconButtonStyle: ButtonStyle {
-    let enabled: Bool
-    let isHovered: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-      configuration.label
-        .foregroundStyle(
-          enabled ? Color.primary.opacity(0.88) : Color.primary.opacity(0.38)
+    .padding(.horizontal, 8)
+    .padding(.vertical, 1)
+    .browserAddressFieldSurface(
+      isFocused: isFocused,
+      cornerRadius: 10)
+    .overlay {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(
+          isFocused
+            ? Color.accentColor.opacity(0.38)
+            : Color.primary.opacity(0.13),
+          lineWidth: isFocused ? 1 : 0.5
         )
-        .frame(width: 26, height: 26)
-        .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(
-              configuration.isPressed
-                ? Color.primary.opacity(0.14)
-                : (isHovered && enabled ? Color.primary.opacity(0.08) : Color.clear)
-            )
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        // The surface is decorative. If it participates in hit testing it
+        // sits above the embedded NSTextField and can consume a normal mouse
+        // click before AppKit's field editor gets a chance to become first
+        // responder.
+        .allowsHitTesting(false)
     }
+    .allowsHitTesting(true)
   }
 
   private func reloadOrStopButton(isLoading: Bool) -> some View {
-    ToolbarIconButton(
+    BrowserGlassIconButton(
       systemImage: isLoading ? "xmark" : "arrow.clockwise",
       label: isLoading ? "Stop" : "Reload",
-      enabled: true,
+      isEnabled: true,
       action: session.reloadOrStop)
   }
 }

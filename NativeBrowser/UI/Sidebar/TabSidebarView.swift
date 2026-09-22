@@ -21,6 +21,7 @@ private enum SidebarLayout {
 
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  var onCollapseSidebar: () -> Void = {}
   @EnvironmentObject private var runtime: ApplicationRuntime
   @Environment(\.browserTitlebarContentInset) private var titlebarContentInset
 
@@ -30,6 +31,23 @@ struct TabSidebarView: View {
       // the native traffic lights when the sidebar content is scrolled.
       Color.clear
         .frame(height: max(titlebarContentInset, 8))
+
+      HStack {
+        Spacer(minLength: 0)
+
+        BrowserGlassControlGroup {
+          BrowserGlassIconButton(
+            systemImage: "plus.square.on.square",
+            label: "New Tab",
+            action: { workspace.createTab(url: nil) })
+          BrowserGlassIconButton(
+            systemImage: "sidebar.left",
+            label: "Hide Sidebar",
+            action: onCollapseSidebar)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.bottom, 6)
 
       ScrollViewReader { proxy in
         ScrollView {
@@ -103,14 +121,6 @@ struct TabSidebarView: View {
         .frame(height: 0.5)
 
       VStack(spacing: 2) {
-        SidebarUtilityButton(
-          title: "New Tab",
-          systemImage: "plus",
-          iconTint: .secondary,
-          labelWeight: .regular,
-          helpText: "New Tab (⌘T)") {
-            workspace.createTab(url: nil)
-          }
         SidebarUtilityButton(
           title: "History",
           systemImage: "clock",
