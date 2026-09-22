@@ -24,7 +24,10 @@ RESTORE_DATA_DIR="$DATA_DIR/session-restore"
 SMOKE_DOWNLOADS_DIR="$DOWNLOADS_DIR/smoke"
 HISTORY_DOWNLOADS_DIR="$DOWNLOADS_DIR/history"
 RESTORE_DOWNLOADS_DIR="$DOWNLOADS_DIR/session-restore"
-RESTORE_HOME_URL="https://example.com/?code=$FAKE_SECRET#$FAKE_FRAGMENT"
+# Session restore must use the same deterministic loopback origin as the other
+# Release acceptance phases. The self-test derives its secondary URLs from this
+# exact home URL, including the fixture port and the persisted query/fragment.
+RESTORE_HOME_URL="$HOME_URL"
 
 FAILURES=0
 FIXTURE_PID=""
@@ -323,6 +326,15 @@ for check in seeded-three-spaces-and-two-tabs seed-runtimes-created seed-clean-s
   check_contains "Release restore seed: $check" "session-restore-self-test: pass $check" "$RESTORE_SEED_LOG"
 done
 check_contains "Release restore seed persisted six domain tabs" "domain-tabs=6" "$RESTORE_SEED_LOG"
+if [ -f "$RESTORE_DATA_DIR/session-v1.json" ] \
+  && tr -d '\\' < "$RESTORE_DATA_DIR/session-v1.json" \
+    | grep -F -- "$RESTORE_HOME_URL" >/dev/null; then
+  pass "Release restore session file preserves exact home URL query and fragment"
+else
+  fail "Release restore session file preserves exact home URL query and fragment"
+fi
+check_absent "Release restore seed log omits query secret" "$FAKE_SECRET" "$RESTORE_SEED_LOG"
+check_absent "Release restore seed log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_SEED_LOG"
 check_no_native_browser_process "Release session-restore seed left no residual process"
 
 RESTORE_VERIFY_LOG="$WORK_DIR/session-restore-verify.log"
@@ -356,6 +368,8 @@ check_contains "Release restore closes instantiated sessions before CEF" \
   "lifecycle: session:close-all(count=3)" "$RESTORE_VERIFY_LOG"
 check_contains "Release restore shuts CEF down cleanly" \
   "lifecycle: cef:shutdown(clean: true)" "$RESTORE_VERIFY_LOG"
+check_absent "Release restore verify log omits query secret" "$FAKE_SECRET" "$RESTORE_VERIFY_LOG"
+check_absent "Release restore verify log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_VERIFY_LOG"
 check_no_native_browser_process "Release session-restore verify left no residual process"
 
 echo

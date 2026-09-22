@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 PAYLOAD = (b"NativeBrowser Milestone 7 fixture payload\n" * 1024)
@@ -19,13 +19,21 @@ class FixtureHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
-        path = urlsplit(self.path).path
+        request = urlsplit(self.path)
+        path = request.path
+        query = parse_qs(request.query)
         if path == "/healthz":
             self._send(200, b"ok\n", "text/plain; charset=utf-8")
         elif path == "/page-a":
             self._page("Page A", "This is deterministic fixture Page A.")
         elif path == "/page-b":
-            self._page("Page B", "This is deterministic fixture Page B.")
+            secondary_titles = {
+                "main": "Main secondary",
+                "work": "Work secondary",
+                "personal": "Personal secondary",
+            }
+            title = secondary_titles.get(query.get("space", [""])[0], "Page B")
+            self._page(title, "This is deterministic fixture Page B.")
         elif path == "/slow-page":
             time.sleep(1.0)
             self._page("Slow Page", "This page intentionally delays its response.")

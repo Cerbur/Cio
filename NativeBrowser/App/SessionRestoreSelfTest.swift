@@ -42,7 +42,7 @@ final class SessionRestoreSelfTest {
 
     let test = SessionRestoreSelfTest(runtime: runtime, mode: mode)
     active = test
-    test.start()
+    test.installWindowAppearedHook()
     return true
   }
 
@@ -68,6 +68,7 @@ final class SessionRestoreSelfTest {
   private var domainCountBeforeLazyClose = 0
   private var didRequestTermination = false
   private var didReportCleanShutdown = false
+  private var didStart = false
 
   static func noteTerminationCompletion() {
     active?.reportCleanShutdown()
@@ -80,7 +81,49 @@ final class SessionRestoreSelfTest {
     self.mode = mode
   }
 
-  private func start() {
+  private var expectedSecondaryURLs: [URL] {
+    [
+      secondaryURL(named: "main"),
+      secondaryURL(named: "work"),
+      secondaryURL(named: "personal"),
+    ]
+  }
+
+  private func secondaryURL(named name: String) -> URL {
+    guard var components = URLComponents(
+      url: ApplicationRuntime.homeURL,
+      resolvingAgainstBaseURL: false),
+      components.scheme != nil,
+      components.host != nil
+    else {
+      preconditionFailure("session restore requires an origin URL")
+    }
+    components.path = "/page-b"
+    components.queryItems = [URLQueryItem(name: "space", value: name)]
+    components.fragment = nil
+    guard let url = components.url else {
+      preconditionFailure("session restore could not construct a secondary URL")
+    }
+    return url
+  }
+
+  private func installWindowAppearedHook() {
+    runtime.onMainWindowAppeared = { [weak self] in
+      self?.startAfterMainWindowAppeared()
+    }
+    // This is only a defensive race guard. BrowserMain installs the hook
+    // before NativeBrowserApp.main(), so the normal path enters through the
+    // typed callback above.
+    if runtime.didAppearInWindow {
+      startAfterMainWindowAppeared()
+    }
+  }
+
+  private func startAfterMainWindowAppeared() {
+    guard !didStart else { return }
+    didStart = true
+    runtime.onMainWindowAppeared = nil
+    report("window-appeared", true, "appeared=\(runtime.didAppearInWindow)")
     steps = mode == .seed ? buildSeedSteps() : buildVerifySteps()
     let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
       MainActor.assumeIsolated {
@@ -110,7 +153,6 @@ final class SessionRestoreSelfTest {
 
   private func buildSeedSteps() -> [Step] {
     [
-      waitForWindow(),
       seedWorkspace(),
       waitForSeedRuntimes(),
       finishSeed(),
@@ -119,7 +161,6 @@ final class SessionRestoreSelfTest {
 
   private func buildVerifySteps() -> [Step] {
     [
-      waitForWindow(),
       verifyStartupGraph(),
       activateLazyTab(),
       switchBackAndReuseTab(),
@@ -127,16 +168,6 @@ final class SessionRestoreSelfTest {
       closeNeverInstantiatedTab(),
       finishVerify(),
     ]
-  }
-
-  private func waitForWindow() -> Step {
-    Step(
-      name: "window",
-      timeout: 180,
-      advance: { self.runtime.didAppearInWindow },
-      finish: { completed in
-        self.report("window-appeared", completed, "appeared=\(self.runtime.didAppearInWindow)")
-      })
   }
 
   private func seedWorkspace() -> Step {
@@ -148,7 +179,7 @@ final class SessionRestoreSelfTest {
         guard let mainID = spaces.first?.id else { return }
         _ = self.workspace.renameSpace(id: mainID, name: "Main")
         _ = self.workspace.createTab(
-          url: URL(string: "https://example.com/main-secondary"),
+          url: self.secondaryURL(named: "main"),
           select: false,
           title: "Main secondary")
 
@@ -158,12 +189,12 @@ final class SessionRestoreSelfTest {
 
         self.workspace.selectSpace(id: workID)
         _ = self.workspace.createTab(
-          url: URL(string: "https://example.com/work-secondary"),
+          url: self.secondaryURL(named: "work"),
           select: true,
           title: "Work secondary")
         self.workspace.selectSpace(id: personalID)
         _ = self.workspace.createTab(
-          url: URL(string: "https://example.com/personal-secondary"),
+          url: self.secondaryURL(named: "personal"),
           select: true,
           title: "Personal secondary")
 
@@ -191,7 +222,7 @@ final class SessionRestoreSelfTest {
   private func waitForSeedRuntimes() -> Step {
     Step(
       name: "seed-runtimes",
-      timeout: 240,
+      timeout: 90,
       advance: {
         self.manager.liveSessionCount == self.workspace.allTabs.count
           && self.manager.liveSessions.allSatisfy { $0.hasBrowser }
@@ -267,16 +298,12 @@ final class SessionRestoreSelfTest {
         let secondaryTitlesRestored = Set(secondaryTabs.map(\.title)) == Set([
           "Main secondary", "Work secondary", "Personal secondary",
         ])
-        let secondaryURLsRestored = Set(secondaryTabs.compactMap { $0.url?.path }) == Set([
-          "/main-secondary", "/work-secondary", "/personal-secondary",
-        ])
-        let expectedInitialFragment = ApplicationRuntime.homeURL.fragment ?? "fragment-secret"
+        let secondaryURLsRestored = Set(secondaryTabs.compactMap { $0.url?.absoluteString })
+          == Set(self.expectedSecondaryURLs.map(\.absoluteString))
+        let expectedInitialURL = ApplicationRuntime.homeURL
         let initialURLsRestored = self.workspace.spaces.allSatisfy { space in
           guard let url = self.workspace.tabs(in: space.id).first?.url else { return false }
-          return url.scheme == "https"
-            && url.host == "example.com"
-            && url.query?.hasPrefix("code=") == true
-            && url.fragment == expectedInitialFragment
+          return url.absoluteString == expectedInitialURL.absoluteString
         }
 
         let startupGraphOK = self.workspace.allTabs.count > 1
@@ -318,7 +345,7 @@ final class SessionRestoreSelfTest {
   private func activateLazyTab() -> Step {
     Step(
       name: "lazy-tab",
-      timeout: 180,
+      timeout: 90,
       begin: {
         guard let lazyTabID = self.lazyTabID else { return }
         self.report(
@@ -381,7 +408,7 @@ final class SessionRestoreSelfTest {
   private func activateLazySpace() -> Step {
     Step(
       name: "lazy-space",
-      timeout: 180,
+      timeout: 90,
       begin: {
         guard let inactiveSpaceID = self.inactiveSpaceID else { return }
         self.report(
