@@ -83,7 +83,7 @@ private struct HistoryLibraryView: View {
           } label: {
             HistoryRow(entry: entry)
           }
-          .buttonStyle(.plain)
+          .buttonStyle(LibraryRowButtonStyle())
           .listRowSeparator(.visible, edges: .all)
           .listRowInsets(
             EdgeInsets(
@@ -137,12 +137,14 @@ private struct HistoryRow: View {
             Text("×\(entry.visitCount)")
               .font(.caption.monospacedDigit())
               .foregroundStyle(.secondary)
+              .fixedSize(horizontal: true, vertical: false)
           }
           Spacer(minLength: 8)
           Text(entry.lastVisitedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-            .font(.caption)
+            .font(.caption.monospacedDigit())
             .foregroundStyle(.tertiary)
             .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
         }
         Text(displayURL(for: entry.url))
           .font(.caption)
@@ -170,6 +172,16 @@ private struct HistoryRow: View {
   }
 }
 
+private struct LibraryRowButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .overlay {
+        RoundedRectangle(cornerRadius: LibraryLayout.rowCornerRadius, style: .continuous)
+          .fill(configuration.isPressed ? Color.primary.opacity(0.11) : Color.clear)
+      }
+  }
+}
+
 private struct DownloadsLibraryView: View {
   @ObservedObject var downloads: DownloadManager
   let dismiss: DismissAction
@@ -182,7 +194,7 @@ private struct DownloadsLibraryView: View {
         Spacer()
         if downloads.activeDownloadCount > 0 {
           Text("\(downloads.activeDownloadCount) active")
-            .font(.caption2.weight(.medium))
+            .font(.caption2.monospacedDigit().weight(.medium))
             .foregroundStyle(.secondary)
         }
         LibraryCloseButton(title: "Close Downloads", dismiss: dismiss)
@@ -235,9 +247,9 @@ private struct LibraryEmptyState: View {
   var body: some View {
     VStack(spacing: 8) {
       Image(systemName: systemImage)
-        .font(.system(size: 20, weight: .medium))
+        .font(.system(size: 22, weight: .medium))
         .foregroundStyle(.tertiary)
-        .frame(width: 30, height: 30)
+        .frame(width: 32, height: 32)
         .accessibilityHidden(true)
       Text(title)
         .font(.headline)

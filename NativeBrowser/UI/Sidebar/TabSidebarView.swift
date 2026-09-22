@@ -194,11 +194,12 @@ private struct SidebarUtilityButtonStyle: ButtonStyle {
 private struct SidebarSectionHeader: View {
   let action: () -> Void
   let help: () -> String
+  @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
     HStack(spacing: 8) {
       Text("Spaces")
-        .font(.caption2.weight(.semibold))
+        .font(.caption.weight(.medium))
         .foregroundStyle(.secondary)
 
       Spacer(minLength: 4)
@@ -208,13 +209,41 @@ private struct SidebarSectionHeader: View {
           .font(.system(size: 11, weight: .semibold))
           .frame(width: 24, height: 24)
       }
-      .buttonStyle(.plain)
-      .foregroundStyle(.secondary)
+      .buttonStyle(SidebarHeaderButtonStyle(isHovered: interaction.isHovered))
+      .onHover { interaction.isHovered = $0 }
       .contentShape(Rectangle())
       .help(help())
       .accessibilityLabel(help())
     }
     .padding(.horizontal, 10)
+  }
+}
+
+private struct SidebarHeaderButtonStyle: ButtonStyle {
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(.secondary)
+      .background(
+        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
+          .fill(
+            configuration.isPressed
+              ? Color.primary.opacity(0.13)
+              : (isHovered ? Color.primary.opacity(0.07) : Color.clear)
+          )
+      )
+      .contentShape(RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous))
+  }
+}
+
+private struct SidebarSelectionButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .overlay {
+        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
+          .fill(configuration.isPressed ? Color.primary.opacity(0.12) : Color.clear)
+      }
   }
 }
 
@@ -254,7 +283,7 @@ private struct SpaceRowView: View {
       )
       .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
+    .buttonStyle(SidebarSelectionButtonStyle())
     .onHover { interaction.isHovered = $0 }
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     .contextMenu {
@@ -325,7 +354,7 @@ private struct TabRowView: View {
         .frame(height: SidebarLayout.tabRowHeight)
         .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
+      .buttonStyle(SidebarSelectionButtonStyle())
 
       Button(action: onClose) {
         Image(systemName: "xmark")
@@ -334,12 +363,8 @@ private struct TabRowView: View {
             width: SidebarLayout.closeHitTarget,
             height: SidebarLayout.closeHitTarget)
           .foregroundStyle(isSelected ? Color.primary : .secondary)
-          .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-              .fill(Color.primary.opacity(interaction.isHovered ? 0.09 : 0.045))
-          )
       }
-      .buttonStyle(.plain)
+      .buttonStyle(TabCloseButtonStyle(isHovered: interaction.isHovered))
       .contentShape(Rectangle())
       .opacity(interaction.isHovered || isSelected ? 1 : 0)
       .allowsHitTesting(interaction.isHovered || isSelected)
@@ -366,5 +391,22 @@ private struct TabRowView: View {
     .onHover { interaction.isHovered = $0 }
     .help(tab.displayTitle)
     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+  }
+}
+
+private struct TabCloseButtonStyle: ButtonStyle {
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .background(
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .fill(
+            configuration.isPressed
+              ? Color.primary.opacity(0.14)
+              : Color.primary.opacity(isHovered ? 0.09 : 0.045)
+          )
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
   }
 }
