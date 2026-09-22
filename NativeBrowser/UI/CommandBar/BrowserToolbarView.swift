@@ -19,31 +19,34 @@ struct BrowserToolbarView: View {
 
   var body: some View {
     let state = session.navigationState
+    let addressFieldIsFocused = interaction.isFocused || session.addressField.isEditing
 
-    HStack(spacing: 5) {
-      historyButton(
-        systemImage: "chevron.backward",
-        label: "Back",
-        enabled: state.canGoBack,
-        action: session.goBack)
-      historyButton(
-        systemImage: "chevron.forward",
-        label: "Forward",
-        enabled: state.canGoForward,
-        action: session.goForward)
-      reloadOrStopButton(isLoading: state.isLoading)
+    HStack(spacing: 0) {
+      HStack(spacing: 2) {
+        historyButton(
+          systemImage: "chevron.backward",
+          label: "Back",
+          enabled: state.canGoBack,
+          action: session.goBack)
+        historyButton(
+          systemImage: "chevron.forward",
+          label: "Forward",
+          enabled: state.canGoForward,
+          action: session.goForward)
+        reloadOrStopButton(isLoading: state.isLoading)
+      }
 
       Rectangle()
         .fill(Color.primary.opacity(0.12))
         .frame(width: 0.5, height: 18)
-        .padding(.horizontal, 3)
+        .padding(.horizontal, 8)
         .allowsHitTesting(false)
 
       HStack(spacing: 7) {
         Image(systemName: "globe")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(.secondary)
-          .frame(width: 16)
+          .font(.system(size: 11, weight: .regular))
+          .foregroundStyle(Color.secondary.opacity(0.88))
+          .frame(width: 14)
           .allowsHitTesting(false)
 
         AddressField(
@@ -56,23 +59,23 @@ struct BrowserToolbarView: View {
             session.addressFieldFocusChanged(focused)
           }
         )
-        .frame(minWidth: 240, maxWidth: .infinity, minHeight: 22, idealHeight: 24)
+        .frame(minWidth: 240, maxWidth: .infinity, minHeight: 20, idealHeight: 22)
         .layoutPriority(1)
         .contentShape(Rectangle())
         .allowsHitTesting(true)
       }
-      .padding(.horizontal, 9)
-      .padding(.vertical, 2)
-      .browserCompactGlass(cornerRadius: 15)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 1)
+      .browserAddressFieldSurface(isFocused: addressFieldIsFocused, cornerRadius: 10)
       .overlay {
-        Capsule(style: .continuous)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
           .strokeBorder(
-            interaction.isFocused || session.addressField.isEditing
-              ? Color.accentColor.opacity(0.45)
-              : Color.primary.opacity(0.11),
-            lineWidth: interaction.isFocused || session.addressField.isEditing ? 1 : 0.5
+            addressFieldIsFocused
+              ? Color.accentColor.opacity(0.38)
+              : Color.primary.opacity(0.13),
+            lineWidth: addressFieldIsFocused ? 1 : 0.5
           )
-          // The capsule is decorative. If it participates in hit testing it
+          // The surface is decorative. If it participates in hit testing it
           // sits above the embedded NSTextField and can consume a normal mouse
           // click before AppKit's field editor gets a chance to become first
           // responder.
@@ -80,18 +83,21 @@ struct BrowserToolbarView: View {
       }
       .allowsHitTesting(true)
 
-      if state.isLoading {
-        ProgressView()
-          .progressViewStyle(.circular)
-          .controlSize(.small)
-          .scaleEffect(0.6)
-          .frame(width: 14, height: 14)
-          .help("Loading")
+      ZStack {
+        if state.isLoading {
+          ProgressView()
+            .progressViewStyle(.circular)
+            .controlSize(.small)
+            .scaleEffect(0.6)
+            .help("Loading")
+        }
       }
+      .frame(width: 16, height: 14)
+      .accessibilityHidden(!state.isLoading)
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 7)
-    .frame(minHeight: 46)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .frame(minHeight: 44)
     .browserToolbarMaterial()
     .overlay(alignment: .bottom) {
       Rectangle()
@@ -122,23 +128,37 @@ struct BrowserToolbarView: View {
     var body: some View {
       Button(action: action) {
         Image(systemName: systemImage)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.42))
-          .frame(width: 26, height: 26)
-          .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-              .fill(
-                interaction.isHovered && enabled
-                  ? Color.primary.opacity(0.08) : Color.clear
-              )
-          )
-          .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .font(.system(size: 12, weight: .medium))
       }
-      .buttonStyle(.plain)
+      .buttonStyle(
+        ToolbarIconButtonStyle(enabled: enabled, isHovered: interaction.isHovered)
+      )
       .disabled(!enabled)
       .onHover { interaction.isHovered = $0 }
       .help(label)
       .accessibilityLabel(label)
+    }
+  }
+
+  private struct ToolbarIconButtonStyle: ButtonStyle {
+    let enabled: Bool
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+      configuration.label
+        .foregroundStyle(
+          enabled ? Color.primary.opacity(0.88) : Color.primary.opacity(0.38)
+        )
+        .frame(width: 26, height: 26)
+        .background(
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(
+              configuration.isPressed
+                ? Color.primary.opacity(0.14)
+                : (isHovered && enabled ? Color.primary.opacity(0.08) : Color.clear)
+            )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
   }
 

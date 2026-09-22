@@ -7,7 +7,8 @@
 //  The app currently targets macOS 26, where SwiftUI's native Liquid Glass
 //  modifier is available. The availability branch keeps this helper safe if
 //  the deployment target is lowered later: the fallback is still a semantic
-//  macOS material and never a hand-built blur or screenshot effect.
+//  semantic regular material and never a hand-built blur or screenshot
+//  effect.
 //
 
 import AppKit
@@ -22,32 +23,30 @@ final class BrowserInteractionState: ObservableObject {
 }
 
 extension View {
-  /// Applies the system Liquid Glass treatment to a compact browser control.
-  ///
-  /// Glass is intentionally reserved for compact interactive chrome such as
-  /// the address field. Structural panes use semantic NSVisualEffectView
-  /// materials instead, and Chromium content is never passed through either
-  /// treatment.
+  /// Gives the address field a compact native control surface without turning
+  /// the toolbar into a second glass card. Clear Liquid Glass stays decorative
+  /// and the semantic fill adapts to the system appearance; the embedded
+  /// NSTextField remains the hit target.
   @ViewBuilder
-  func browserCompactGlass(cornerRadius: CGFloat) -> some View {
+  func browserAddressFieldSurface(isFocused: Bool, cornerRadius: CGFloat) -> some View {
     let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    let surface = background {
+      shape
+        .fill(
+          Color(nsColor: .controlBackgroundColor)
+            .opacity(isFocused ? 0.78 : 0.54)
+        )
+        .allowsHitTesting(false)
+    }
 
     if #available(macOS 26.0, *) {
-      // Keep the glass purely decorative. Applying it to the content view can
-      // put a glass hit surface above an embedded AppKit control; putting it in
-      // the background preserves the M5.1 appearance without taking the click
-      // away from the native address field.
-      background {
+      surface.background {
         Color.clear
-          .glassEffect(.regular, in: shape)
+          .glassEffect(.clear, in: shape)
           .allowsHitTesting(false)
       }
     } else {
-      background(.regularMaterial, in: shape)
-        .overlay {
-          shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-            .allowsHitTesting(false)
-        }
+      surface.background(.regularMaterial, in: shape)
     }
   }
 }

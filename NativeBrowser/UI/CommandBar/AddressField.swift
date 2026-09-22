@@ -54,9 +54,10 @@ struct AddressField: NSViewRepresentable {
     field.isEditable = true
     field.isSelectable = true
     field.isEnabled = true
-    // Keep AppKit's native focus ring available; the SwiftUI capsule around the
-    // field supplies the additional compact toolbar treatment.
-    field.focusRingType = .default
+    // The default AppKit ring is oversized for this compact control. Focus
+    // ownership remains entirely native; the toolbar surface supplies the
+    // restrained one-pixel focus treatment without changing field geometry.
+    field.focusRingType = .none
     field.lineBreakMode = .byTruncatingTail
     field.usesSingleLineMode = true
     // The address bar is an address bar: never rewrite what the user types.
