@@ -7,19 +7,27 @@
 //  The app currently targets macOS 26, where SwiftUI's native Liquid Glass
 //  modifier is available. The availability branch keeps this helper safe if
 //  the deployment target is lowered later: the fallback is still a semantic
-//  semantic regular material and never a hand-built blur or screenshot
+//  regular material and never a hand-built blur or screenshot
 //  effect.
 //
 
 import AppKit
 import SwiftUI
 
-/// Shared geometry for the one browser chrome band. Both the sidebar overlay
-/// and the navigation toolbar use this value so collapsing the sidebar never
-/// changes the page's vertical origin.
+/// Shared geometry for the one browser chrome band. The shell body and the
+/// top-chrome overlay use these values so collapsing the sidebar never changes
+/// the page's vertical origin.
 enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let sidebarWidth: CGFloat = 248
+  static let iconHitTarget: CGFloat = 28
+  static let glassOuterPadding: CGFloat = 2
+  static let glassInnerSpacing: CGFloat = 1
+  static let sidebarToggleToNav: CGFloat = 6
+  static let navToAddress: CGFloat = 10
+  static let chromeTrailingPadding: CGFloat = 10
+  static let chromeVerticalPadding: CGFloat = 6
+  static let expandedNavigationLeadingPadding: CGFloat = 10
   static let sidebarAnimation = Animation.easeInOut(duration: 0.22)
 }
 
@@ -42,9 +50,43 @@ struct BrowserGlassControlGroup<Content: View>: View {
   }
 
   var body: some View {
-    content
-      .padding(2)
+    HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
+      content
+    }
+      .padding(BrowserChromeLayout.glassOuterPadding)
       .browserGlassControlSurface()
+  }
+}
+
+/// A single icon control that still owns one real Liquid Glass surface. It is
+/// used for the collapsed Show Sidebar affordance, which has no sibling with
+/// which to form a navigation cluster.
+struct BrowserGlassStandaloneIconButton: View {
+  let systemImage: String
+  let label: String
+  let isEnabled: Bool
+  let action: () -> Void
+
+  init(
+    systemImage: String,
+    label: String,
+    isEnabled: Bool = true,
+    action: @escaping () -> Void
+  ) {
+    self.systemImage = systemImage
+    self.label = label
+    self.isEnabled = isEnabled
+    self.action = action
+  }
+
+  var body: some View {
+    BrowserGlassControlGroup {
+      BrowserGlassIconButton(
+        systemImage: systemImage,
+        label: label,
+        isEnabled: isEnabled,
+        action: action)
+    }
   }
 }
 
@@ -74,7 +116,9 @@ struct BrowserGlassIconButton: View {
     Button(action: action) {
       Image(systemName: systemImage)
         .font(.system(size: 12, weight: .medium))
-        .frame(width: 28, height: 28)
+        .frame(
+          width: BrowserChromeLayout.iconHitTarget,
+          height: BrowserChromeLayout.iconHitTarget)
     }
     .buttonStyle(
       BrowserGlassIconButtonStyle(

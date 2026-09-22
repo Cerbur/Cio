@@ -33,7 +33,6 @@ struct NativeBrowserApp: App {
     // AppKit full-size-content configuration so the titlebar becomes part of
     // the continuous window chrome instead of reserving a second title row.
     .windowStyle(.titleBar)
-    .windowToolbarStyle(.unifiedCompact)
     .commands {
       // The workspace store is a stable reference: command actions resolve the
       // selected tab when they run, so they always operate on the current

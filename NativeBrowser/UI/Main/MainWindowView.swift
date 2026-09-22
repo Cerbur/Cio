@@ -63,90 +63,84 @@ private struct BrowserWorkspaceView: View {
   @Binding var isSidebarVisible: Bool
 
   var body: some View {
-    HStack(spacing: 0) {
-      // Keep the sidebar mounted for the whole presentation-state lifetime.
-      // Only its visible width changes, so the live workspace and every CEF
-      // session remain untouched while the content column expands.
-      TabSidebarView(
-        workspace: workspace,
-        onCollapseSidebar: { isSidebarVisible = false })
-        .frame(
-          width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
-          alignment: .leading)
-        .clipped()
-        .allowsHitTesting(isSidebarVisible)
-        .accessibilityHidden(!isSidebarVisible)
+    ZStack(alignment: .topLeading) {
+      HStack(spacing: 0) {
+        // Keep the sidebar mounted for the whole presentation-state lifetime.
+        // Only its visible width changes, so the live workspace and every CEF
+        // session remain untouched while the content column expands.
+        TabSidebarView(workspace: workspace)
+          .frame(
+            width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
+            alignment: .leading)
+          .clipped()
+          .allowsHitTesting(isSidebarVisible)
+          .accessibilityHidden(!isSidebarVisible)
 
-      BrowserContentColumn(
+        BrowserContentColumn(workspace: workspace)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      // The body plane starts below the shared chrome band. The chrome itself
+      // is a sibling overlay, so there is no toolbar placeholder in either
+      // the sidebar or the browser surface branch.
+      .padding(.top, BrowserChromeLayout.toolbarHeight)
+
+      BrowserTopChromeView(
         workspace: workspace,
-        titlebarLeadingControlInset: titlebarLeadingControlInset,
-        isSidebarVisible: $isSidebarVisible)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        isSidebarVisible: $isSidebarVisible,
+        titlebarLeadingControlInset: titlebarLeadingControlInset)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .zIndex(1)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
     // The window is configured as a full-size content view. This lets the
-    // sidebar material continue behind the native traffic lights while its
-    // scrollable body begins below the shared chrome band.
+    // shared chrome continue behind the native traffic lights while both
+    // scrollable/sidebar and Chromium bodies begin below that band.
     .ignoresSafeArea(.container, edges: [.top, .leading, .bottom])
     .animation(BrowserChromeLayout.sidebarAnimation, value: isSidebarVisible)
   }
 }
 
 /// The browser side of the window. The surface host remains a single
-/// representable for the whole window; the toolbar is a presentational sibling
-/// above it and never owns or recreates a Chromium view.
+/// representable for the whole window and never owns or recreates a Chromium
+/// view when the sidebar or selected session changes.
 private struct BrowserContentColumn: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
-  let titlebarLeadingControlInset: CGFloat
-  @Binding var isSidebarVisible: Bool
 
   var body: some View {
-    VStack(spacing: 0) {
-      if let session = workspace.selectedSession {
-        BrowserToolbarView(
-          session: session,
-          showsSidebarToggle: !isSidebarVisible,
-          titlebarLeadingControlInset: titlebarLeadingControlInset,
-          onShowSidebar: { isSidebarVisible = true })
-          .addressFieldFocusListener(session: session)
-      } else {
-        Color.clear.frame(height: BrowserChromeLayout.toolbarHeight)
+    ZStack {
+      BrowserSurfaceFrame {
+        // The runtime manager retains one container per live session. The
+        // workspace store publishes only the effective selected tab; Space
+        // switches therefore change visibility without recreating Chromium.
+        BrowserSurfaceView(manager: workspace.sessionManager)
       }
 
-      ZStack {
-        BrowserSurfaceFrame {
-          // The runtime manager retains one container per live session. The
-          // workspace store publishes only the effective selected tab; Space
-          // switches therefore change visibility without recreating Chromium.
-          BrowserSurfaceView(manager: workspace.sessionManager)
-        }
-
-        if let session = workspace.selectedSession, session.rendererCrashed {
-          VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-              .font(.system(size: 28))
-              .accessibilityHidden(true)
-            Text("This page stopped responding")
-              .font(.headline)
-            Text("The page process ended unexpectedly. Reload to start it again.")
-              .multilineTextAlignment(.center)
-              .foregroundStyle(.secondary)
-            Button("Reload") {
-              session.reload()
-            }
-            .keyboardShortcut(.defaultAction)
-            .accessibilityIdentifier("renderer-crash-reload")
+      if let session = workspace.selectedSession, session.rendererCrashed {
+        VStack(spacing: 12) {
+          Image(systemName: "exclamationmark.triangle")
+            .font(.system(size: 28))
+            .accessibilityHidden(true)
+          Text("This page stopped responding")
+            .font(.headline)
+          Text("The page process ended unexpectedly. Reload to start it again.")
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+          Button("Reload") {
+            session.reload()
           }
-          .padding(28)
-          .frame(maxWidth: 360)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-          .shadow(radius: 12)
-          .accessibilityElement(children: .contain)
-          .accessibilityLabel("Page stopped responding")
+          .keyboardShortcut(.defaultAction)
+          .accessibilityIdentifier("renderer-crash-reload")
         }
+        .padding(28)
+        .frame(maxWidth: 360)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(radius: 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Page stopped responding")
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
@@ -182,6 +176,7 @@ private final class WindowChromeView: NSView {
   var onTitlebarLeadingControlInsetChange: (CGFloat) -> Void
   private var lastTitlebarLeadingControlInset: CGFloat?
   private var addressFieldMouseMonitor: Any?
+  private var isConfiguringWindow = false
 
   init(onTitlebarLeadingControlInsetChange: @escaping (CGFloat) -> Void) {
     self.onTitlebarLeadingControlInsetChange = onTitlebarLeadingControlInsetChange
@@ -247,15 +242,38 @@ private final class WindowChromeView: NSView {
   }
 
   func configureWindowIfNeeded() {
-    guard let window else { return }
+    guard let window, !isConfiguringWindow else { return }
+    isConfiguringWindow = true
+    defer { isConfiguringWindow = false }
 
     // These are the public AppKit APIs for a titled window whose content is
     // allowed to occupy the titlebar area. In particular, this does not
     // replace the titled window with a borderless custom window.
-    window.styleMask.insert(.fullSizeContentView)
-    window.titlebarAppearsTransparent = true
-    window.titleVisibility = .hidden
-    window.toolbarStyle = .unifiedCompact
+    var configurationChanged = false
+    if !window.styleMask.contains(.fullSizeContentView) {
+      window.styleMask.insert(.fullSizeContentView)
+      configurationChanged = true
+    }
+    if !window.titlebarAppearsTransparent {
+      window.titlebarAppearsTransparent = true
+      configurationChanged = true
+    }
+    if window.titleVisibility != .hidden {
+      window.titleVisibility = .hidden
+      configurationChanged = true
+    }
+    if window.toolbarStyle != .unifiedCompact {
+      window.toolbarStyle = .unifiedCompact
+      configurationChanged = true
+    }
+
+    if configurationChanged {
+      // The representable is attached after SwiftUI has created the titled
+      // window. Invalidate and immediately settle the view tree so the first
+      // measurement and the first chrome frame use the same AppKit geometry.
+      window.contentView?.needsLayout = true
+      window.contentView?.layoutSubtreeIfNeeded()
+    }
 
     guard let leadingControlInset = measuredTitlebarLeadingControlInset(for: window) else {
       // The standard buttons can be installed by AppKit one layout pass after
