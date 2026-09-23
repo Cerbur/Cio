@@ -7,12 +7,15 @@
 //
 
 import AppKit
+import QuartzCore
 
 /// Wraps the stable browser surface in AppKit's native background extension.
 /// Chromium remains hosted by BrowserSurfaceHostView; the extension adds only
 /// the visual area above that host and does not own any CEF responsibilities.
 final class BrowserSurfaceExtensionView: NSBackgroundExtensionView {
   let surfaceHostView = BrowserSurfaceHostView()
+  private let toolbarGlassView = NSGlassEffectView(frame: .zero)
+  private let toolbarGlassMask = CAGradientLayer()
 
   override var isFlipped: Bool { true }
 
@@ -21,6 +24,8 @@ final class BrowserSurfaceExtensionView: NSBackgroundExtensionView {
     automaticallyPlacesContentView = false
     contentView = surfaceHostView
     surfaceHostView.autoresizingMask = [.width, .height]
+    configureToolbarGlass()
+    addSubview(toolbarGlassView, positioned: .above, relativeTo: surfaceHostView)
     updateSurfaceFrame()
   }
 
@@ -48,6 +53,27 @@ final class BrowserSurfaceExtensionView: NSBackgroundExtensionView {
       y: top,
       width: bounds.width,
       height: max(0, bounds.height - top))
+    toolbarGlassView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: bounds.width,
+      height: min(top, bounds.height))
+    toolbarGlassMask.frame = toolbarGlassView.bounds
+  }
+
+  private func configureToolbarGlass() {
+    toolbarGlassView.style = .regular
+    toolbarGlassView.tintColor = NSColor.controlBackgroundColor.withAlphaComponent(0.14)
+    if #available(macOS 27.0, *) {
+      toolbarGlassView.effectIsInteractive = false
+    }
+
+    toolbarGlassView.wantsLayer = true
+    toolbarGlassMask.colors = [NSColor.white.cgColor, NSColor.white.cgColor, NSColor.clear.cgColor]
+    toolbarGlassMask.locations = [0, 0.72, 1]
+    toolbarGlassMask.startPoint = CGPoint(x: 0.5, y: 1)
+    toolbarGlassMask.endPoint = CGPoint(x: 0.5, y: 0)
+    toolbarGlassView.layer?.mask = toolbarGlassMask
   }
 
   /// The extended band is visual only. Let the SwiftUI toolbar and native
