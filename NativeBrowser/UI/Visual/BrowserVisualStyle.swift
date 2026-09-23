@@ -4,11 +4,8 @@
 //
 //  Presentation-only visual helpers for the Milestone 5 browser chrome.
 //
-//  The app currently targets macOS 26, where SwiftUI's native Liquid Glass
-//  modifier is available. The availability branch keeps this helper safe if
-//  the deployment target is lowered later: the fallback is still a semantic
-//  regular material and never a hand-built blur or screenshot
-//  effect.
+//  The app targets macOS 26 for native Liquid Glass buttons. The address
+//  surface keeps a semantic material fallback if that target is lowered.
 //
 
 import AppKit
@@ -21,7 +18,6 @@ enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let sidebarWidth: CGFloat = 248
   static let iconHitTarget: CGFloat = 28
-  static let glassOuterPadding: CGFloat = 2
   static let glassInnerSpacing: CGFloat = 1
   static let sidebarToggleToNav: CGFloat = 6
   static let navToAddress: CGFloat = 10
@@ -31,7 +27,7 @@ enum BrowserChromeLayout {
   static let sidebarAnimation = Animation.easeInOut(duration: 0.22)
 }
 
-/// Ephemeral presentation state shared by the small hover/focus surfaces. It
+/// Ephemeral presentation state shared by the hover and focus surfaces. It
 /// never mirrors tab selection, browser sessions or navigation state.
 @MainActor
 final class BrowserInteractionState: ObservableObject {
@@ -39,9 +35,7 @@ final class BrowserInteractionState: ObservableObject {
   @Published var isFocused = false
 }
 
-/// A compact group of related actions that shares one native Liquid Glass
-/// surface. The buttons remain separate hit targets while the surrounding
-/// capsule reads as one piece of browser chrome.
+/// Related native glass buttons compose into a compact control group.
 struct BrowserGlassControlGroup<Content: View>: View {
   private let content: Content
 
@@ -50,15 +44,15 @@ struct BrowserGlassControlGroup<Content: View>: View {
   }
 
   var body: some View {
-    HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
-      content
+    GlassEffectContainer(spacing: BrowserChromeLayout.glassInnerSpacing) {
+      HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
+        content
+      }
     }
-      .padding(BrowserChromeLayout.glassOuterPadding)
-      .browserGlassControlSurface()
   }
 }
 
-/// A single icon control that still owns one real Liquid Glass surface. It is
+/// A single icon control that owns one native Liquid Glass surface. It is
 /// used for the collapsed Show Sidebar affordance, which has no sibling with
 /// which to form a navigation cluster.
 struct BrowserGlassStandaloneIconButton: View {
@@ -98,7 +92,6 @@ struct BrowserGlassIconButton: View {
   let label: String
   let isEnabled: Bool
   let action: () -> Void
-  @StateObject private var interaction = BrowserInteractionState()
 
   init(
     systemImage: String,
@@ -120,52 +113,16 @@ struct BrowserGlassIconButton: View {
           width: BrowserChromeLayout.iconHitTarget,
           height: BrowserChromeLayout.iconHitTarget)
     }
-    .buttonStyle(
-      BrowserGlassIconButtonStyle(
-        isEnabled: isEnabled,
-        isHovered: interaction.isHovered)
-    )
+    .buttonStyle(.glass(.clear))
+    .buttonBorderShape(.roundedRectangle(radius: 8))
+    .controlSize(.small)
     .disabled(!isEnabled)
-    .onHover { interaction.isHovered = $0 }
     .help(label)
     .accessibilityLabel(label)
   }
 }
 
-private struct BrowserGlassIconButtonStyle: ButtonStyle {
-  let isEnabled: Bool
-  let isHovered: Bool
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .foregroundStyle(
-        isEnabled ? Color.primary.opacity(0.88) : Color.primary.opacity(0.34)
-      )
-      .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .fill(
-            configuration.isPressed
-              ? Color.primary.opacity(0.15)
-              : (isHovered && isEnabled ? Color.primary.opacity(0.08) : Color.clear)
-          )
-      )
-      .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-}
-
 extension View {
-  /// Applies one compact system glass capsule to a related control group.
-  /// macOS 26 owns the translucency and interaction treatment; the fallback
-  /// remains a semantic system material for lower deployment targets.
-  @ViewBuilder
-  func browserGlassControlSurface() -> some View {
-    if #available(macOS 26.0, *) {
-      glassEffect(.regular, in: Capsule())
-    } else {
-      background(.regularMaterial, in: Capsule())
-    }
-  }
-
   /// Gives the address field a compact native control surface without turning
   /// the toolbar into a second glass card. Clear Liquid Glass stays decorative
   /// and the semantic fill adapts to the system appearance; the embedded
@@ -224,15 +181,6 @@ extension View {
   func browserSidebarMaterial() -> some View {
     background(
       BrowserVisualEffectView(material: .sidebar, blendingMode: .withinWindow)
-        .allowsHitTesting(false)
-    )
-  }
-
-  /// Native material for the flat browser-header region. It has no capsule or
-  /// outer card boundary, so the address capsule remains the visual control.
-  func browserToolbarMaterial() -> some View {
-    background(
-      BrowserVisualEffectView(material: .headerView, blendingMode: .withinWindow)
         .allowsHitTesting(false)
     )
   }

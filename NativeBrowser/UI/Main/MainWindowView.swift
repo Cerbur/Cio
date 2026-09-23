@@ -176,6 +176,7 @@ private final class WindowChromeView: NSView {
   var onTitlebarLeadingControlInsetChange: (CGFloat) -> Void
   private var lastTitlebarLeadingControlInset: CGFloat?
   private var addressFieldMouseMonitor: Any?
+  private var windowObservers: [NSObjectProtocol] = []
   private var isConfiguringWindow = false
 
   init(onTitlebarLeadingControlInsetChange: @escaping (CGFloat) -> Void) {
@@ -189,6 +190,7 @@ private final class WindowChromeView: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    observeWindowTransitions()
     configureWindowIfNeeded()
 
     if addressFieldMouseMonitor == nil, let window {
@@ -223,7 +225,30 @@ private final class WindowChromeView: NSView {
 
   override func viewWillMove(toWindow newWindow: NSWindow?) {
     removeAddressFieldMouseMonitor()
+    removeWindowObservers()
     super.viewWillMove(toWindow: newWindow)
+  }
+
+  private func observeWindowTransitions() {
+    guard let window, windowObservers.isEmpty else { return }
+    let names: [Notification.Name] = [
+      NSWindow.didBecomeKeyNotification,
+      NSWindow.didResignKeyNotification,
+      NSWindow.didBecomeMainNotification,
+      NSWindow.didResignMainNotification,
+    ]
+    windowObservers = names.map { name in
+      NotificationCenter.default.addObserver(
+        forName: name, object: window, queue: .main
+      ) { [weak self] _ in
+        self?.configureWindowIfNeeded()
+      }
+    }
+  }
+
+  private func removeWindowObservers() {
+    windowObservers.forEach(NotificationCenter.default.removeObserver)
+    windowObservers.removeAll()
   }
 
   private func removeAddressFieldMouseMonitor() {
@@ -262,8 +287,14 @@ private final class WindowChromeView: NSView {
       window.titleVisibility = .hidden
       configurationChanged = true
     }
-    if window.toolbarStyle != .unifiedCompact {
-      window.toolbarStyle = .unifiedCompact
+    if window.titlebarSeparatorStyle != .none {
+      window.titlebarSeparatorStyle = .none
+      configurationChanged = true
+    }
+    // SwiftUI's title-bar scene may install an empty NSToolbar. With no
+    // browser items in it, that object only contributes toolbar material.
+    if let toolbar = window.toolbar, toolbar.items.isEmpty {
+      window.toolbar = nil
       configurationChanged = true
     }
 
@@ -308,10 +339,10 @@ private final class WindowChromeView: NSView {
     guard let rightEdgeInWindow = buttonFrames.map(\.maxX).max() else { return nil }
     let rightEdge = rightEdgeInWindow - contentViewFrameInWindow.minX
 
-    // Derive a small breathing space from the native button size instead of
-    // assuming a traffic-light x-coordinate or a fixed window layout.
+    // The visible circles extend beyond their AppKit button frames. Leave a
+    // measured-frame inset large enough for 8–10 points of visual clearance.
     let buttonWidth = buttonFrames.map(\.width).min() ?? 0
-    let systemSpacing = max(4, min(10, buttonWidth * 0.35))
+    let systemSpacing = max(19, min(21, buttonWidth * 1.35))
     return max(0, rightEdge + systemSpacing)
   }
 }

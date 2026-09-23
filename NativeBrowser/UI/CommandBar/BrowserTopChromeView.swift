@@ -22,7 +22,7 @@ struct BrowserTopChromeView: View {
     chromeContent
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: BrowserChromeLayout.toolbarHeight)
-      .browserToolbarMaterial()
+      .background(Color(nsColor: .windowBackgroundColor))
       .overlay(alignment: .bottom) {
         Rectangle()
           .fill(Color.primary.opacity(0.09))
@@ -110,22 +110,20 @@ private struct BrowserTopChromeControls: View {
   }
 
   private var expandedSidebarControls: some View {
-    HStack(spacing: 0) {
-      Spacer(minLength: 0)
-
-      BrowserGlassControlGroup {
-        BrowserGlassIconButton(
-          systemImage: "plus.square.on.square",
-          label: "New Tab",
-          action: onCreateTab)
-        BrowserGlassIconButton(
-          systemImage: "sidebar.left",
-          label: "Hide Sidebar",
-          action: onCollapseSidebar)
-      }
+    BrowserGlassControlGroup {
+      BrowserGlassIconButton(
+        systemImage: "plus.square.on.square",
+        label: "New Tab",
+        action: onCreateTab)
+      BrowserGlassIconButton(
+        systemImage: "sidebar.left",
+        label: "Hide Sidebar",
+        action: onCollapseSidebar)
     }
-    .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
-    .frame(width: BrowserChromeLayout.sidebarWidth)
+    // A two-button native glass group has 10 points of leading visual inset
+    // relative to the standalone glass button.
+    .padding(.leading, max(0, titlebarLeadingControlInset - 10))
+    .frame(width: BrowserChromeLayout.sidebarWidth, alignment: .leading)
   }
 
   private var navigationControls: some View {
