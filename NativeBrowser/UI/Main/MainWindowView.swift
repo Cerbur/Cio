@@ -83,15 +83,20 @@ private struct BrowserWorkspaceView: View {
         .allowsHitTesting(isSidebarVisible)
         .accessibilityHidden(!isSidebarVisible)
 
-      VStack(spacing: 0) {
-        BrowserTopChromeView(
-          workspace: workspace,
-          isSidebarVisible: $isSidebarVisible,
-          titlebarLeadingControlInset: titlebarLeadingControlInset,
-          isFullScreen: isFullScreen)
-
-        BrowserContentColumn(workspace: workspace)
+      ZStack(alignment: .top) {
+        BrowserSurfaceView(manager: workspace.sessionManager)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        VStack(spacing: 0) {
+          BrowserTopChromeView(
+            workspace: workspace,
+            isSidebarVisible: $isSidebarVisible,
+            titlebarLeadingControlInset: titlebarLeadingControlInset,
+            isFullScreen: isFullScreen)
+
+          BrowserContentColumn(workspace: workspace)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -148,13 +153,6 @@ private struct BrowserContentColumn: View {
 
   var body: some View {
     ZStack {
-      BrowserSurfaceFrame {
-        // The runtime manager retains one container per live session. The
-        // workspace store publishes only the effective selected tab; Space
-        // switches therefore change visibility without recreating Chromium.
-        BrowserSurfaceView(manager: workspace.sessionManager)
-      }
-
       if let session = workspace.selectedSession, session.rendererCrashed {
         VStack(spacing: 12) {
           Image(systemName: "exclamationmark.triangle")
@@ -180,17 +178,6 @@ private struct BrowserContentColumn: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-}
-
-/// The content plane around Chromium. It deliberately has no rounded border,
-/// mask, clip, or glass effect: CEF's native child view must remain a stable,
-/// unmodified windowed-rendering surface.
-private struct BrowserSurfaceFrame<Content: View>: View {
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    content()
   }
 }
 

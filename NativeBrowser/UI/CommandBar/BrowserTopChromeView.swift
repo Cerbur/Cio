@@ -21,13 +21,6 @@ struct BrowserTopChromeView: View {
     chromeContent
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: BrowserChromeLayout.toolbarHeight)
-      .background(Color(nsColor: .windowBackgroundColor))
-      .overlay(alignment: .bottom) {
-        Rectangle()
-          .fill(Color.primary.opacity(0.09))
-          .frame(height: 0.5)
-          .allowsHitTesting(false)
-      }
   }
 
   @ViewBuilder
