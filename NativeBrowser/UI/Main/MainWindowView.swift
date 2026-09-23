@@ -66,6 +66,7 @@ private final class BrowserChromeState: ObservableObject {
 }
 
 private struct BrowserWorkspaceView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @ObservedObject var workspace: BrowserWorkspaceStore
   let titlebarLeadingControlInset: CGFloat
   let isFullScreen: Bool
@@ -75,7 +76,7 @@ private struct BrowserWorkspaceView: View {
     HStack(spacing: 0) {
       // Keep the sidebar mounted while it contracts to zero. Its chrome and
       // body share one material-backed column, including during animation.
-      SidebarColumn(workspace: workspace, onHideSidebar: { isSidebarVisible = false })
+      SidebarColumn(workspace: workspace)
         .frame(
           width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
           alignment: .leading)
@@ -102,31 +103,46 @@ private struct BrowserWorkspaceView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
-    // The full-size content view lets each surface own its own top 44 points.
+    // This group stays outside the contracting column's clip, so its glass
+    // can materialize out rather than vanishing behind the shrinking edge.
+    .overlay(alignment: .topLeading) {
+      GlassEffectContainer(spacing: BrowserChromeLayout.sidebarToggleToNav) {
+        if isSidebarVisible {
+          BrowserGlassControlGroup(materializes: true) {
+            BrowserGlassIconButton(
+              systemImage: "plus.square.on.square",
+              label: "New Tab",
+              action: { workspace.createTab(url: nil) })
+            BrowserGlassIconButton(
+              systemImage: "sidebar.left",
+              label: "Hide Sidebar",
+              action: { isSidebarVisible = false })
+          }
+          .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
+          .transition(.opacity)
+        }
+      }
+      .frame(
+        width: BrowserChromeLayout.sidebarWidth,
+        height: BrowserChromeLayout.toolbarHeight,
+        alignment: .trailing)
+      .allowsHitTesting(isSidebarVisible)
+    }
+    // The overlay and the columns share the same full-size titlebar origin.
     .ignoresSafeArea(.container, edges: [.top, .leading, .bottom])
-    .animation(BrowserChromeLayout.sidebarAnimation, value: isSidebarVisible)
+    .animation(
+      reduceMotion ? .easeOut(duration: 0.1) : BrowserChromeLayout.sidebarAnimation,
+      value: isSidebarVisible)
   }
 }
 
 private struct SidebarColumn: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
-  let onHideSidebar: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
       HStack(spacing: 0) {
         Spacer(minLength: 0)
-        BrowserGlassControlGroup {
-          BrowserGlassIconButton(
-            systemImage: "plus.square.on.square",
-            label: "New Tab",
-            action: { workspace.createTab(url: nil) })
-          BrowserGlassIconButton(
-            systemImage: "sidebar.left",
-            label: "Hide Sidebar",
-            action: onHideSidebar)
-        }
-        .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
       }
       .frame(width: BrowserChromeLayout.sidebarWidth, height: BrowserChromeLayout.toolbarHeight)
 

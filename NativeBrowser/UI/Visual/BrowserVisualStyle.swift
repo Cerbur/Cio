@@ -43,9 +43,12 @@ final class BrowserInteractionState: ObservableObject {
 
 /// Related native glass buttons compose into a compact control group.
 struct BrowserGlassControlGroup<Content: View>: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let content: Content
+  private let materializes: Bool
 
-  init(@ViewBuilder content: () -> Content) {
+  init(materializes: Bool = false, @ViewBuilder content: () -> Content) {
+    self.materializes = materializes
     self.content = content()
   }
 
@@ -55,6 +58,7 @@ struct BrowserGlassControlGroup<Content: View>: View {
     }
     .padding(BrowserChromeLayout.glassOuterPadding)
     .browserChromeGlassSurface(in: Capsule())
+    .glassEffectTransition(materializes && !reduceMotion ? .materialize : .identity)
     .frame(height: BrowserChromeLayout.chromeControlHeight)
   }
 }
@@ -81,7 +85,7 @@ struct BrowserGlassStandaloneIconButton: View {
   }
 
   var body: some View {
-    BrowserGlassControlGroup {
+    BrowserGlassControlGroup(materializes: true) {
       BrowserGlassIconButton(
         systemImage: systemImage,
         label: label,
@@ -139,6 +143,7 @@ struct BrowserGlassIconButton: View {
 }
 
 private struct BrowserGlassIconButtonStyle: ButtonStyle {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let isEnabled: Bool
   let isHovered: Bool
 
@@ -158,6 +163,15 @@ private struct BrowserGlassIconButtonStyle: ButtonStyle {
           ? Color.primary.opacity(configuration.isPressed ? 1 : (isHovered ? 0.98 : 0.88))
           : Color.primary.opacity(0.34)
       )
+      // Only the icon and highlight move; the hit target stays 36 points.
+      .scaleEffect(isEnabled && configuration.isPressed && !reduceMotion ? 1.07 : 1)
+      .frame(
+        width: BrowserChromeLayout.chromeControlHeight,
+        height: BrowserChromeLayout.chromeControlHeight)
+      .contentShape(Rectangle())
+      .animation(
+        reduceMotion ? nil : .spring(response: 0.23, dampingFraction: 0.63),
+        value: configuration.isPressed)
       .animation(.easeOut(duration: 0.08), value: isHovered)
   }
 

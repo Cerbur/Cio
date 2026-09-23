@@ -73,13 +73,16 @@ private struct BrowserTopChromeControls: View {
 
   var body: some View {
     HStack(spacing: 0) {
-      if !isSidebarVisible {
-        BrowserGlassStandaloneIconButton(
-          systemImage: "sidebar.left",
-          label: "Show Sidebar",
-          action: onShowSidebar)
-          .padding(.trailing, BrowserChromeLayout.sidebarToggleToNav)
-          .transition(.opacity)
+      GlassEffectContainer(spacing: BrowserChromeLayout.sidebarToggleToNav) {
+        if !isSidebarVisible {
+          BrowserGlassStandaloneIconButton(
+            systemImage: "sidebar.left",
+            label: "Show Sidebar",
+            action: onShowSidebar)
+            .padding(.trailing, BrowserChromeLayout.sidebarToggleToNav)
+            // Fade the symbol while its glass surface materializes.
+            .transition(.opacity)
+        }
       }
 
       navigationControls
