@@ -18,6 +18,7 @@ enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let sidebarWidth: CGFloat = 248
   static let iconHitTarget: CGFloat = 28
+  static let glassOuterPadding: CGFloat = 2
   static let glassInnerSpacing: CGFloat = 1
   static let sidebarToggleToNav: CGFloat = 6
   static let navToAddress: CGFloat = 10
@@ -44,11 +45,11 @@ struct BrowserGlassControlGroup<Content: View>: View {
   }
 
   var body: some View {
-    GlassEffectContainer(spacing: BrowserChromeLayout.glassInnerSpacing) {
-      HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
-        content
-      }
+    HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
+      content
     }
+    .padding(BrowserChromeLayout.glassOuterPadding)
+    .browserGlassControlSurface()
   }
 }
 
@@ -92,6 +93,7 @@ struct BrowserGlassIconButton: View {
   let label: String
   let isEnabled: Bool
   let action: () -> Void
+  @StateObject private var interaction = BrowserInteractionState()
 
   init(
     systemImage: String,
@@ -113,16 +115,44 @@ struct BrowserGlassIconButton: View {
           width: BrowserChromeLayout.iconHitTarget,
           height: BrowserChromeLayout.iconHitTarget)
     }
-    .buttonStyle(.glass(.clear))
-    .buttonBorderShape(.roundedRectangle(radius: 8))
-    .controlSize(.small)
+    .buttonStyle(
+      BrowserGlassIconButtonStyle(
+        isEnabled: isEnabled,
+        isHovered: interaction.isHovered)
+    )
     .disabled(!isEnabled)
+    .onHover { interaction.isHovered = $0 }
     .help(label)
     .accessibilityLabel(label)
   }
 }
 
+private struct BrowserGlassIconButtonStyle: ButtonStyle {
+  let isEnabled: Bool
+  let isHovered: Bool
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(
+        isEnabled
+          ? Color.primary.opacity(configuration.isPressed ? 0.98 : (isHovered ? 0.96 : 0.88))
+          : Color.primary.opacity(0.34)
+      )
+  }
+}
+
 extension View {
+  /// Applies one compact system glass capsule to a related control group.
+  /// The buttons remain independent hit targets inside this shared surface.
+  @ViewBuilder
+  func browserGlassControlSurface() -> some View {
+    if #available(macOS 26.0, *) {
+      glassEffect(.regular, in: Capsule())
+    } else {
+      background(.regularMaterial, in: Capsule())
+    }
+  }
+
   /// Gives the address field a compact native control surface without turning
   /// the toolbar into a second glass card. Clear Liquid Glass stays decorative
   /// and the semantic fill adapts to the system appearance; the embedded

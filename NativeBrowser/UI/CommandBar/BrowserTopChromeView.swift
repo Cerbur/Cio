@@ -110,20 +110,22 @@ private struct BrowserTopChromeControls: View {
   }
 
   private var expandedSidebarControls: some View {
-    BrowserGlassControlGroup {
-      BrowserGlassIconButton(
-        systemImage: "plus.square.on.square",
-        label: "New Tab",
-        action: onCreateTab)
-      BrowserGlassIconButton(
-        systemImage: "sidebar.left",
-        label: "Hide Sidebar",
-        action: onCollapseSidebar)
+    HStack(spacing: 0) {
+      Spacer(minLength: 0)
+
+      BrowserGlassControlGroup {
+        BrowserGlassIconButton(
+          systemImage: "plus.square.on.square",
+          label: "New Tab",
+          action: onCreateTab)
+        BrowserGlassIconButton(
+          systemImage: "sidebar.left",
+          label: "Hide Sidebar",
+          action: onCollapseSidebar)
+      }
     }
-    // A two-button native glass group has 10 points of leading visual inset
-    // relative to the standalone glass button.
-    .padding(.leading, max(0, titlebarLeadingControlInset - 10))
-    .frame(width: BrowserChromeLayout.sidebarWidth, alignment: .leading)
+    .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
+    .frame(width: BrowserChromeLayout.sidebarWidth)
   }
 
   private var navigationControls: some View {
