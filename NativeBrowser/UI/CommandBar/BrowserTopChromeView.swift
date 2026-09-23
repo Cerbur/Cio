@@ -161,19 +161,15 @@ private struct BrowserTopChromeControls: View {
     .fixedSize(horizontal: false, vertical: true)
     .frame(height: BrowserChromeLayout.chromeControlHeight)
     .browserAddressFieldSurface(
-      isFocused: isFocused,
       cornerRadius: BrowserChromeLayout.addressFieldCornerRadius)
     .overlay {
-      RoundedRectangle(
-        cornerRadius: BrowserChromeLayout.addressFieldCornerRadius,
-        style: .continuous)
-        .strokeBorder(
-          isFocused
-            ? Color.accentColor.opacity(0.38)
-            : Color.primary.opacity(0.13),
-          lineWidth: isFocused ? 1 : 0.5
-        )
-        .allowsHitTesting(false)
+      if isFocused {
+        RoundedRectangle(
+          cornerRadius: BrowserChromeLayout.addressFieldCornerRadius,
+          style: .continuous)
+          .strokeBorder(Color.accentColor.opacity(0.38), lineWidth: 1)
+          .allowsHitTesting(false)
+      }
     }
     .allowsHitTesting(true)
   }

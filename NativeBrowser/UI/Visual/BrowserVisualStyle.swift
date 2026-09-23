@@ -54,7 +54,7 @@ struct BrowserGlassControlGroup<Content: View>: View {
       content
     }
     .padding(BrowserChromeLayout.glassOuterPadding)
-    .browserGlassControlSurface()
+    .browserChromeGlassSurface(in: Capsule())
     .frame(height: BrowserChromeLayout.chromeControlHeight)
   }
 }
@@ -176,38 +176,23 @@ extension View {
   /// Applies one compact system glass capsule to a related control group.
   /// The buttons remain independent hit targets inside this shared surface.
   @ViewBuilder
-  func browserGlassControlSurface() -> some View {
+  func browserChromeGlassSurface<S: Shape>(in shape: S) -> some View {
     if #available(macOS 26.0, *) {
-      glassEffect(.regular, in: Capsule())
+      glassEffect(.regular, in: shape)
     } else {
-      background(.regularMaterial, in: Capsule())
+      background(.regularMaterial, in: shape)
     }
   }
 
-  /// Gives the address field a compact native control surface without turning
-  /// the toolbar into a second glass card. Clear Liquid Glass stays decorative
-  /// and the semantic fill adapts to the system appearance; the embedded
-  /// NSTextField remains the hit target.
+  /// Gives the address field the same decorative chrome glass as navigation.
+  /// The embedded NSTextField remains the hit target.
   @ViewBuilder
-  func browserAddressFieldSurface(isFocused: Bool, cornerRadius: CGFloat) -> some View {
+  func browserAddressFieldSurface(cornerRadius: CGFloat) -> some View {
     let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-    let surface = background {
-      shape
-        .fill(
-          Color(nsColor: .controlBackgroundColor)
-            .opacity(isFocused ? 0.78 : 0.54)
-        )
+    background {
+      Color.clear
+        .browserChromeGlassSurface(in: shape)
         .allowsHitTesting(false)
-    }
-
-    if #available(macOS 26.0, *) {
-      surface.background {
-        Color.clear
-          .glassEffect(.clear, in: shape)
-          .allowsHitTesting(false)
-      }
-    } else {
-      surface.background(.regularMaterial, in: shape)
     }
   }
 }
