@@ -16,12 +16,15 @@ import SwiftUI
 /// the page's vertical origin.
 enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
+  static let chromeControlHeight: CGFloat = 36
+  static let chromeSymbolSize: CGFloat = 15
+  static let chromeSymbolWeight: Font.Weight = .medium
+  static let addressGlobeSymbolSize: CGFloat = 14
+  static let addressFieldCornerRadius: CGFloat = chromeControlHeight / 2
   static let sidebarWidth: CGFloat = 248
-  static let iconHitTarget: CGFloat = 32
   static let glassOuterPadding: CGFloat = 0
   static let glassInnerSpacing: CGFloat = 0
-  static let standaloneGlassControlHeight: CGFloat = iconHitTarget + 2 * glassOuterPadding
-  static let chromeEdgeInset: CGFloat = (toolbarHeight - standaloneGlassControlHeight) / 2
+  static let chromeEdgeInset: CGFloat = (toolbarHeight - chromeControlHeight) / 2
   static let sidebarToggleToNav: CGFloat = 6
   static let navToAddress: CGFloat = 10
   static let chromeTrailingPadding: CGFloat = 10
@@ -52,6 +55,7 @@ struct BrowserGlassControlGroup<Content: View>: View {
     }
     .padding(BrowserChromeLayout.glassOuterPadding)
     .browserGlassControlSurface()
+    .frame(height: BrowserChromeLayout.chromeControlHeight)
   }
 }
 
@@ -84,7 +88,7 @@ struct BrowserGlassStandaloneIconButton: View {
         isEnabled: isEnabled,
         action: action)
     }
-    .frame(height: BrowserChromeLayout.standaloneGlassControlHeight)
+    .frame(height: BrowserChromeLayout.chromeControlHeight)
   }
 }
 
@@ -113,10 +117,13 @@ struct BrowserGlassIconButton: View {
   var body: some View {
     Button(action: action) {
       Image(systemName: systemImage)
-        .font(.system(size: 12, weight: .medium))
+        .font(
+          .system(
+            size: BrowserChromeLayout.chromeSymbolSize,
+            weight: BrowserChromeLayout.chromeSymbolWeight))
         .frame(
-          width: BrowserChromeLayout.iconHitTarget,
-          height: BrowserChromeLayout.iconHitTarget)
+          width: BrowserChromeLayout.chromeControlHeight,
+          height: BrowserChromeLayout.chromeControlHeight)
         .contentShape(Rectangle())
     }
     .buttonStyle(
@@ -141,8 +148,8 @@ private struct BrowserGlassIconButtonStyle: ButtonStyle {
         Circle()
           .fill(highlightColor(isPressed: configuration.isPressed))
           .frame(
-            width: BrowserChromeLayout.iconHitTarget,
-            height: BrowserChromeLayout.iconHitTarget)
+            width: BrowserChromeLayout.chromeControlHeight,
+            height: BrowserChromeLayout.chromeControlHeight)
           .allowsHitTesting(false)
       }
       .contentShape(Rectangle())

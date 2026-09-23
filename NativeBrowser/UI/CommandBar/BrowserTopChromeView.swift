@@ -133,7 +133,7 @@ private struct BrowserTopChromeControls: View {
   private func addressFieldSurface(session: BrowserSession?, isFocused: Bool) -> some View {
     HStack(spacing: 7) {
       Image(systemName: "globe")
-        .font(.system(size: 11, weight: .regular))
+        .font(.system(size: BrowserChromeLayout.addressGlobeSymbolSize, weight: .regular))
         .foregroundStyle(Color.secondary.opacity(0.88))
         .frame(width: 14)
         .allowsHitTesting(false)
@@ -163,9 +163,17 @@ private struct BrowserTopChromeControls: View {
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 1)
-    .browserAddressFieldSurface(isFocused: isFocused, cornerRadius: 10)
+    // Keep the native field at its intrinsic editing height and center it in
+    // the shared control frame so AppKit retains its normal text baseline.
+    .fixedSize(horizontal: false, vertical: true)
+    .frame(height: BrowserChromeLayout.chromeControlHeight)
+    .browserAddressFieldSurface(
+      isFocused: isFocused,
+      cornerRadius: BrowserChromeLayout.addressFieldCornerRadius)
     .overlay {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(
+        cornerRadius: BrowserChromeLayout.addressFieldCornerRadius,
+        style: .continuous)
         .strokeBorder(
           isFocused
             ? Color.accentColor.opacity(0.38)
