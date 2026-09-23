@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import OSLog
 import SwiftUI
 
 struct MainWindowView: View {
@@ -19,18 +20,24 @@ struct MainWindowView: View {
     BrowserWorkspaceView(
       workspace: runtime.workspaceStore,
       titlebarLeadingControlInset: windowChromeState.titlebarLeadingControlInset,
+      isFullScreen: windowChromeState.isFullScreen,
       isSidebarVisible: $browserChromeState.isSidebarVisible
     )
       .frame(minWidth: 900, minHeight: 500)
       .background(Color(nsColor: .windowBackgroundColor))
       .background(
-        WindowChromeConfigurator { leadingControlInset in
-          guard abs(windowChromeState.titlebarLeadingControlInset - leadingControlInset) > 0.5
-          else {
-            return
-          }
-          windowChromeState.titlebarLeadingControlInset = leadingControlInset
-        }
+        WindowChromeConfigurator(
+          onTitlebarLeadingControlInsetChange: { leadingControlInset in
+            guard abs(windowChromeState.titlebarLeadingControlInset - leadingControlInset) > 0.5
+            else {
+              return
+            }
+            windowChromeState.titlebarLeadingControlInset = leadingControlInset
+          },
+          onFullScreenChange: { isFullScreen in
+            guard windowChromeState.isFullScreen != isFullScreen else { return }
+            windowChromeState.isFullScreen = isFullScreen
+          })
         .frame(width: 0, height: 0)
         .allowsHitTesting(false)
       )
@@ -48,6 +55,7 @@ struct MainWindowView: View {
 @MainActor
 private final class WindowChromeState: ObservableObject {
   @Published var titlebarLeadingControlInset: CGFloat = 0
+  @Published var isFullScreen = false
 }
 
 /// Presentation-only shell state. Sidebar visibility is intentionally not part
@@ -60,44 +68,75 @@ private final class BrowserChromeState: ObservableObject {
 private struct BrowserWorkspaceView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   let titlebarLeadingControlInset: CGFloat
+  let isFullScreen: Bool
   @Binding var isSidebarVisible: Bool
 
   var body: some View {
-    ZStack(alignment: .topLeading) {
-      HStack(spacing: 0) {
-        // Keep the sidebar mounted for the whole presentation-state lifetime.
-        // Only its visible width changes, so the live workspace and every CEF
-        // session remain untouched while the content column expands.
-        TabSidebarView(workspace: workspace)
-          .frame(
-            width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
-            alignment: .leading)
-          .clipped()
-          .allowsHitTesting(isSidebarVisible)
-          .accessibilityHidden(!isSidebarVisible)
+    HStack(spacing: 0) {
+      // Keep the sidebar mounted while it contracts to zero. Its chrome and
+      // body share one material-backed column, including during animation.
+      SidebarColumn(workspace: workspace, onHideSidebar: { isSidebarVisible = false })
+        .frame(
+          width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
+          alignment: .leading)
+        .clipped()
+        .allowsHitTesting(isSidebarVisible)
+        .accessibilityHidden(!isSidebarVisible)
+
+      VStack(spacing: 0) {
+        BrowserTopChromeView(
+          workspace: workspace,
+          isSidebarVisible: $isSidebarVisible,
+          titlebarLeadingControlInset: titlebarLeadingControlInset,
+          isFullScreen: isFullScreen)
 
         BrowserContentColumn(workspace: workspace)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      // The body plane starts below the shared chrome band. The chrome itself
-      // is a sibling overlay, so there is no toolbar placeholder in either
-      // the sidebar or the browser surface branch.
-      .padding(.top, BrowserChromeLayout.toolbarHeight)
-
-      BrowserTopChromeView(
-        workspace: workspace,
-        isSidebarVisible: $isSidebarVisible,
-        titlebarLeadingControlInset: titlebarLeadingControlInset)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .zIndex(1)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
-    // The window is configured as a full-size content view. This lets the
-    // shared chrome continue behind the native traffic lights while both
-    // scrollable/sidebar and Chromium bodies begin below that band.
+    // The full-size content view lets each surface own its own top 44 points.
     .ignoresSafeArea(.container, edges: [.top, .leading, .bottom])
     .animation(BrowserChromeLayout.sidebarAnimation, value: isSidebarVisible)
+  }
+}
+
+private struct SidebarColumn: View {
+  @ObservedObject var workspace: BrowserWorkspaceStore
+  let onHideSidebar: () -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 0) {
+        Spacer(minLength: 0)
+        BrowserGlassControlGroup {
+          BrowserGlassIconButton(
+            systemImage: "plus.square.on.square",
+            label: "New Tab",
+            action: { workspace.createTab(url: nil) })
+          BrowserGlassIconButton(
+            systemImage: "sidebar.left",
+            label: "Hide Sidebar",
+            action: onHideSidebar)
+        }
+        .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
+      }
+      .frame(width: BrowserChromeLayout.sidebarWidth, height: BrowserChromeLayout.toolbarHeight)
+
+      TabSidebarView(workspace: workspace)
+        .frame(maxHeight: .infinity)
+    }
+    .frame(width: BrowserChromeLayout.sidebarWidth)
+    .frame(maxHeight: .infinity)
+    .browserSidebarMaterial()
+    .overlay(alignment: .trailing) {
+      Rectangle()
+        .fill(Color.primary.opacity(0.12))
+        .frame(width: 0.5)
+        .allowsHitTesting(false)
+    }
   }
 }
 
@@ -156,31 +195,43 @@ private struct BrowserSurfaceFrame<Content: View>: View {
 }
 
 /// The SwiftUI Window scene keeps the native titled-window behavior, while the
-/// content view opts into the AppKit full-size layout. The native traffic
-/// lights remain owned by NSWindow; only the title text and titlebar background
-/// are made transparent so the sidebar can visually continue behind them.
+/// content view opts into the AppKit full-size layout. NSWindow continues to
+/// own the traffic lights; their native button views are repositioned together
+/// to align with the 44-point chrome geometry.
 private struct WindowChromeConfigurator: NSViewRepresentable {
   let onTitlebarLeadingControlInsetChange: (CGFloat) -> Void
+  let onFullScreenChange: (Bool) -> Void
 
   func makeNSView(context: Context) -> WindowChromeView {
-    WindowChromeView(onTitlebarLeadingControlInsetChange: onTitlebarLeadingControlInsetChange)
+    WindowChromeView(
+      onTitlebarLeadingControlInsetChange: onTitlebarLeadingControlInsetChange,
+      onFullScreenChange: onFullScreenChange)
   }
 
   func updateNSView(_ nsView: WindowChromeView, context: Context) {
     nsView.onTitlebarLeadingControlInsetChange = onTitlebarLeadingControlInsetChange
+    nsView.onFullScreenChange = onFullScreenChange
     nsView.configureWindowIfNeeded()
   }
 }
 
 private final class WindowChromeView: NSView {
   var onTitlebarLeadingControlInsetChange: (CGFloat) -> Void
+  var onFullScreenChange: (Bool) -> Void
   private var lastTitlebarLeadingControlInset: CGFloat?
+  private var lastIsFullScreen: Bool?
   private var addressFieldMouseMonitor: Any?
   private var windowObservers: [NSObjectProtocol] = []
   private var isConfiguringWindow = false
+  private var trafficLightHorizontalOffsets: [CGFloat]?
+  private var didLogTrafficLightGeometry = false
 
-  init(onTitlebarLeadingControlInsetChange: @escaping (CGFloat) -> Void) {
+  init(
+    onTitlebarLeadingControlInsetChange: @escaping (CGFloat) -> Void,
+    onFullScreenChange: @escaping (Bool) -> Void
+  ) {
     self.onTitlebarLeadingControlInsetChange = onTitlebarLeadingControlInsetChange
+    self.onFullScreenChange = onFullScreenChange
     super.init(frame: .zero)
   }
 
@@ -236,12 +287,18 @@ private final class WindowChromeView: NSView {
       NSWindow.didResignKeyNotification,
       NSWindow.didBecomeMainNotification,
       NSWindow.didResignMainNotification,
+      NSWindow.didEnterFullScreenNotification,
+      NSWindow.didExitFullScreenNotification,
+      NSWindow.didMiniaturizeNotification,
+      NSWindow.didDeminiaturizeNotification,
     ]
     windowObservers = names.map { name in
       NotificationCenter.default.addObserver(
         forName: name, object: window, queue: .main
       ) { [weak self] _ in
-        self?.configureWindowIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+          self?.configureWindowIfNeeded()
+        }
       }
     }
   }
@@ -306,6 +363,19 @@ private final class WindowChromeView: NSView {
       window.contentView?.layoutSubtreeIfNeeded()
     }
 
+    let isFullScreen = window.styleMask.contains(.fullScreen)
+    if lastIsFullScreen != isFullScreen {
+      lastIsFullScreen = isFullScreen
+      onFullScreenChange(isFullScreen)
+    }
+
+    // AppKit owns the native fullscreen presentation. Outside fullscreen,
+    // align the existing button group idempotently before measuring its final
+    // exclusion edge for collapsed browser chrome.
+    if !window.styleMask.contains(.fullScreen) {
+      alignStandardWindowButtons(in: window)
+    }
+
     guard let leadingControlInset = measuredTitlebarLeadingControlInset(for: window) else {
       // The standard buttons can be installed by AppKit one layout pass after
       // this representable enters the window. Leave the value uncommitted so
@@ -315,6 +385,89 @@ private final class WindowChromeView: NSView {
     guard lastTitlebarLeadingControlInset != leadingControlInset else { return }
     lastTitlebarLeadingControlInset = leadingControlInset
     onTitlebarLeadingControlInsetChange(leadingControlInset)
+  }
+
+  /// Moves the native traffic-light group as a unit in window coordinates.
+  /// The close button's top-left target is derived from the toolbar height and
+  /// its measured frame. Points pass through window base coordinates before
+  /// entering each titlebar superview, so flipped AppKit views are handled by
+  /// NSView's conversion APIs rather than a guessed y-axis convention.
+  private func alignStandardWindowButtons(in window: NSWindow) {
+    guard let contentView = window.contentView,
+      let closeButton = window.standardWindowButton(.closeButton)
+    else {
+      return
+    }
+
+    let buttonTypes: [NSWindow.ButtonType] = [
+      .closeButton,
+      .miniaturizeButton,
+      .zoomButton,
+    ]
+    let buttons = buttonTypes.compactMap { window.standardWindowButton($0) }
+    guard buttons.count == buttonTypes.count else { return }
+
+    let closeFrameInWindow = closeButton.convert(closeButton.bounds, to: nil)
+    let nativeFramesInWindow = buttons.map { $0.convert($0.bounds, to: nil) }
+    if trafficLightHorizontalOffsets == nil {
+      trafficLightHorizontalOffsets = nativeFramesInWindow.dropFirst().map {
+        $0.midX - closeFrameInWindow.midX
+      }
+    }
+    guard let horizontalOffsets = trafficLightHorizontalOffsets,
+      horizontalOffsets.count == buttons.count - 1
+    else {
+      return
+    }
+
+    let topInset = (BrowserChromeLayout.toolbarHeight - closeFrameInWindow.height) / 2
+    let chromeCenterYInContent = contentView.isFlipped
+      ? BrowserChromeLayout.toolbarHeight / 2
+      : contentView.bounds.height - BrowserChromeLayout.toolbarHeight / 2
+    let desiredCloseCenterInWindow = contentView.convert(
+      CGPoint(x: topInset + closeFrameInWindow.width / 2, y: chromeCenterYInContent),
+      to: nil)
+
+    for (index, button) in buttons.enumerated() {
+      guard let superview = button.superview else { continue }
+      let horizontalDelta = index == 0 ? 0 : horizontalOffsets[index - 1]
+      let targetCenterInWindow = CGPoint(
+        x: desiredCloseCenterInWindow.x + horizontalDelta,
+        y: desiredCloseCenterInWindow.y)
+      let targetCenterInSuperview = superview.convert(targetCenterInWindow, from: nil)
+      var targetFrame = button.frame
+      targetFrame.origin = CGPoint(
+        x: targetCenterInSuperview.x - targetFrame.width / 2,
+        y: targetCenterInSuperview.y - targetFrame.height / 2)
+      if button.frame != targetFrame {
+        button.setFrameOrigin(targetFrame.origin)
+      }
+    }
+
+    guard !didLogTrafficLightGeometry else { return }
+    let alignedCloseFrameInWindow = closeButton.convert(closeButton.bounds, to: nil)
+    let contentFrameInWindow = contentView.convert(contentView.bounds, to: nil)
+    let measuredTopInset = contentView.isFlipped
+      ? alignedCloseFrameInWindow.minY - contentFrameInWindow.minY
+      : contentFrameInWindow.maxY - alignedCloseFrameInWindow.maxY
+    let measuredLeftInset = alignedCloseFrameInWindow.minX - contentFrameInWindow.minX
+    let closeCenterInContent = contentView.convert(
+      CGPoint(x: alignedCloseFrameInWindow.midX, y: alignedCloseFrameInWindow.midY),
+      from: nil)
+    let measuredCenterYFromTop = contentView.isFlipped
+      ? closeCenterInContent.y
+      : contentView.bounds.height - closeCenterInContent.y
+    let chromeCenterY = BrowserChromeLayout.toolbarHeight / 2
+    let closeSize = "\(alignedCloseFrameInWindow.width)x\(alignedCloseFrameInWindow.height)"
+    let metrics = [
+      "close=\(closeSize)",
+      "topInset=\(measuredTopInset)",
+      "leftInset=\(measuredLeftInset)",
+      "centerY=\(measuredCenterYFromTop)",
+      "chromeCenterY=\(chromeCenterY)",
+    ].joined(separator: " ")
+    AppLog.app.debug("Traffic-light geometry \(metrics, privacy: .public)")
+    didLogTrafficLightGeometry = true
   }
 
   /// Measures the right edge of the actual native traffic-light controls in

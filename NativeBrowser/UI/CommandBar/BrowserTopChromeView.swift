@@ -2,21 +2,20 @@
 //  BrowserTopChromeView.swift
 //  NativeBrowser
 //
-//  The one presentation layer for the browser's 44-point top chrome. It owns
-//  the sidebar controls, navigation controls and address field so the sidebar
-//  body and Chromium surface never create competing toolbar rows.
+//  The browser-side 44-point chrome: navigation controls and address field,
+//  with Show Sidebar added only when the separate sidebar column is collapsed.
 //
 
 import AppKit
 import SwiftUI
 
-/// The single browser chrome band shared by the expanded and collapsed shell.
-/// The native traffic lights remain owned by NSWindow; the measured inset only
-/// excludes them horizontally when the sidebar is collapsed.
+/// Browser-side chrome. In the expanded shell it contains only navigation and
+/// address controls; the collapsed shell adds Show Sidebar before navigation.
 struct BrowserTopChromeView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @Binding var isSidebarVisible: Bool
   let titlebarLeadingControlInset: CGFloat
+  let isFullScreen: Bool
 
   var body: some View {
     chromeContent
@@ -38,8 +37,7 @@ struct BrowserTopChromeView: View {
         session: session,
         isSidebarVisible: isSidebarVisible,
         titlebarLeadingControlInset: titlebarLeadingControlInset,
-        onCreateTab: { workspace.createTab(url: nil) },
-        onCollapseSidebar: { isSidebarVisible = false },
+        isFullScreen: isFullScreen,
         onShowSidebar: { isSidebarVisible = true })
         .addressFieldFocusListener(session: session)
     } else {
@@ -51,8 +49,7 @@ struct BrowserTopChromeView: View {
         session: nil,
         isSidebarVisible: isSidebarVisible,
         titlebarLeadingControlInset: titlebarLeadingControlInset,
-        onCreateTab: { workspace.createTab(url: nil) },
-        onCollapseSidebar: { isSidebarVisible = false },
+        isFullScreen: isFullScreen,
         onShowSidebar: { isSidebarVisible = true })
     }
   }
@@ -62,8 +59,7 @@ private struct BrowserTopChromeControls: View {
   let session: BrowserSession?
   let isSidebarVisible: Bool
   let titlebarLeadingControlInset: CGFloat
-  let onCreateTab: () -> Void
-  let onCollapseSidebar: () -> Void
+  let isFullScreen: Bool
   let onShowSidebar: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
 
@@ -75,12 +71,16 @@ private struct BrowserTopChromeControls: View {
     interaction.isFocused || session?.addressField.isEditing == true
   }
 
+  private var collapsedLeadingInset: CGFloat {
+    if isFullScreen {
+      return BrowserChromeLayout.chromeEdgeInset
+    }
+    return max(0, titlebarLeadingControlInset)
+  }
+
   var body: some View {
     HStack(spacing: 0) {
-      if isSidebarVisible {
-        expandedSidebarControls
-          .transition(.opacity)
-      } else {
+      if !isSidebarVisible {
         BrowserGlassStandaloneIconButton(
           systemImage: "sidebar.left",
           label: "Show Sidebar",
@@ -102,30 +102,11 @@ private struct BrowserTopChromeControls: View {
 
       loadingIndicator
     }
-    .padding(.leading, isSidebarVisible ? 0 : max(0, titlebarLeadingControlInset))
+    .padding(.leading, isSidebarVisible ? 0 : collapsedLeadingInset)
     .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
     .padding(.vertical, BrowserChromeLayout.chromeVerticalPadding)
     .frame(maxWidth: .infinity, alignment: .leading)
     .frame(height: BrowserChromeLayout.toolbarHeight)
-  }
-
-  private var expandedSidebarControls: some View {
-    HStack(spacing: 0) {
-      Spacer(minLength: 0)
-
-      BrowserGlassControlGroup {
-        BrowserGlassIconButton(
-          systemImage: "plus.square.on.square",
-          label: "New Tab",
-          action: onCreateTab)
-        BrowserGlassIconButton(
-          systemImage: "sidebar.left",
-          label: "Hide Sidebar",
-          action: onCollapseSidebar)
-      }
-    }
-    .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
-    .frame(width: BrowserChromeLayout.sidebarWidth)
   }
 
   private var navigationControls: some View {

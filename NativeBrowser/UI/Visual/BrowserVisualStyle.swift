@@ -17,13 +17,15 @@ import SwiftUI
 enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let sidebarWidth: CGFloat = 248
-  static let iconHitTarget: CGFloat = 28
-  static let glassOuterPadding: CGFloat = 2
-  static let glassInnerSpacing: CGFloat = 1
+  static let iconHitTarget: CGFloat = 32
+  static let glassOuterPadding: CGFloat = 0
+  static let glassInnerSpacing: CGFloat = 0
+  static let standaloneGlassControlHeight: CGFloat = iconHitTarget + 2 * glassOuterPadding
+  static let chromeEdgeInset: CGFloat = (toolbarHeight - standaloneGlassControlHeight) / 2
   static let sidebarToggleToNav: CGFloat = 6
   static let navToAddress: CGFloat = 10
   static let chromeTrailingPadding: CGFloat = 10
-  static let chromeVerticalPadding: CGFloat = 6
+  static let chromeVerticalPadding: CGFloat = chromeEdgeInset
   static let expandedNavigationLeadingPadding: CGFloat = 10
   static let sidebarAnimation = Animation.easeInOut(duration: 0.22)
 }
@@ -82,6 +84,7 @@ struct BrowserGlassStandaloneIconButton: View {
         isEnabled: isEnabled,
         action: action)
     }
+    .frame(height: BrowserChromeLayout.standaloneGlassControlHeight)
   }
 }
 
@@ -114,6 +117,7 @@ struct BrowserGlassIconButton: View {
         .frame(
           width: BrowserChromeLayout.iconHitTarget,
           height: BrowserChromeLayout.iconHitTarget)
+        .contentShape(Rectangle())
     }
     .buttonStyle(
       BrowserGlassIconButtonStyle(
@@ -133,11 +137,31 @@ private struct BrowserGlassIconButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
+      .background {
+        Circle()
+          .fill(highlightColor(isPressed: configuration.isPressed))
+          .frame(
+            width: BrowserChromeLayout.iconHitTarget,
+            height: BrowserChromeLayout.iconHitTarget)
+          .allowsHitTesting(false)
+      }
+      .contentShape(Rectangle())
       .foregroundStyle(
         isEnabled
-          ? Color.primary.opacity(configuration.isPressed ? 0.98 : (isHovered ? 0.96 : 0.88))
+          ? Color.primary.opacity(configuration.isPressed ? 1 : (isHovered ? 0.98 : 0.88))
           : Color.primary.opacity(0.34)
       )
+      .animation(.easeOut(duration: 0.08), value: isHovered)
+  }
+
+  private func highlightColor(isPressed: Bool) -> Color {
+    if isEnabled && isPressed {
+      return Color.primary.opacity(0.10)
+    }
+    if isEnabled && isHovered {
+      return Color.primary.opacity(0.05)
+    }
+    return .clear
   }
 }
 

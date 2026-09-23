@@ -113,13 +113,6 @@ struct TabSidebarView: View {
     }
     .frame(width: BrowserChromeLayout.sidebarWidth)
     .frame(maxHeight: .infinity)
-    .browserSidebarMaterial()
-    .overlay(alignment: .trailing) {
-      Rectangle()
-        .fill(Color.primary.opacity(0.12))
-        .frame(width: 0.5)
-        .allowsHitTesting(false)
-    }
   }
 }
 
