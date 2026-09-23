@@ -103,21 +103,36 @@ private struct BrowserWorkspaceView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
-    // This group stays outside the contracting column's clip, so its glass
-    // can materialize out rather than vanishing behind the shrinking edge.
+    // Keep this native control outside the contracting column's clip so the
+    // sidebar actions animate with the browser chrome.
     .overlay(alignment: .topLeading) {
-      GlassEffectContainer(spacing: BrowserChromeLayout.sidebarToggleToNav) {
+      Group {
         if isSidebarVisible {
-          BrowserGlassControlGroup(materializes: true) {
-            BrowserGlassIconButton(
-              systemImage: "plus.square.on.square",
-              label: "New Tab",
-              action: { workspace.createTab(url: nil) })
-            BrowserGlassIconButton(
-              systemImage: "sidebar.left",
-              label: "Hide Sidebar",
-              action: { isSidebarVisible = false })
+          NativeGlassSegmentedControl(
+            segments: [
+              NativeChromeSegment(
+                systemImage: "plus.square.on.square",
+                accessibilityLabel: "New Tab",
+                isEnabled: true),
+              NativeChromeSegment(
+                systemImage: "sidebar.left",
+                accessibilityLabel: "Hide Sidebar",
+                isEnabled: true),
+            ],
+            height: BrowserChromeLayout.chromeControlHeight
+          ) { index in
+            switch index {
+            case 0:
+              workspace.createTab(url: nil)
+            case 1:
+              isSidebarVisible = false
+            default:
+              break
+            }
           }
+          .frame(
+            width: BrowserChromeLayout.chromeControlHeight * 2,
+            height: BrowserChromeLayout.chromeControlHeight)
           .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
           .transition(.opacity)
         }

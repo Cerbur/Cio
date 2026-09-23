@@ -4,7 +4,7 @@
 //
 //  Presentation-only visual helpers for the Milestone 5 browser chrome.
 //
-//  The app targets macOS 26 for native Liquid Glass buttons. The address
+//  The app targets macOS 26 for native Liquid Glass controls. The address
 //  surface keeps a semantic material fallback if that target is lowered.
 //
 
@@ -18,12 +18,9 @@ enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let chromeControlHeight: CGFloat = 36
   static let chromeSymbolSize: CGFloat = 15
-  static let chromeSymbolWeight: Font.Weight = .medium
   static let addressGlobeSymbolSize: CGFloat = 14
   static let addressFieldCornerRadius: CGFloat = chromeControlHeight / 2
   static let sidebarWidth: CGFloat = 248
-  static let glassOuterPadding: CGFloat = 0
-  static let glassInnerSpacing: CGFloat = 0
   static let chromeEdgeInset: CGFloat = (toolbarHeight - chromeControlHeight) / 2
   static let sidebarToggleToNav: CGFloat = 6
   static let navToAddress: CGFloat = 10
@@ -41,154 +38,8 @@ final class BrowserInteractionState: ObservableObject {
   @Published var isFocused = false
 }
 
-/// Related native glass buttons compose into a compact control group.
-struct BrowserGlassControlGroup<Content: View>: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  private let content: Content
-  private let materializes: Bool
-
-  init(materializes: Bool = false, @ViewBuilder content: () -> Content) {
-    self.materializes = materializes
-    self.content = content()
-  }
-
-  var body: some View {
-    HStack(spacing: BrowserChromeLayout.glassInnerSpacing) {
-      content
-    }
-    .padding(BrowserChromeLayout.glassOuterPadding)
-    .browserChromeGlassSurface(in: Capsule())
-    .glassEffectTransition(materializes && !reduceMotion ? .materialize : .identity)
-    .frame(height: BrowserChromeLayout.chromeControlHeight)
-  }
-}
-
-/// A single icon control that owns one native Liquid Glass surface. It is
-/// used for the collapsed Show Sidebar affordance, which has no sibling with
-/// which to form a navigation cluster.
-struct BrowserGlassStandaloneIconButton: View {
-  let systemImage: String
-  let label: String
-  let isEnabled: Bool
-  let action: () -> Void
-
-  init(
-    systemImage: String,
-    label: String,
-    isEnabled: Bool = true,
-    action: @escaping () -> Void
-  ) {
-    self.systemImage = systemImage
-    self.label = label
-    self.isEnabled = isEnabled
-    self.action = action
-  }
-
-  var body: some View {
-    BrowserGlassControlGroup(materializes: true) {
-      BrowserGlassIconButton(
-        systemImage: systemImage,
-        label: label,
-        isEnabled: isEnabled,
-        action: action)
-    }
-    .frame(height: BrowserChromeLayout.chromeControlHeight)
-  }
-}
-
-/// An icon-only control for the compact browser chrome. Hover and pressed
-/// feedback live inside the shared group surface instead of creating a glass
-/// bubble for every action.
-struct BrowserGlassIconButton: View {
-  let systemImage: String
-  let label: String
-  let isEnabled: Bool
-  let action: () -> Void
-  @StateObject private var interaction = BrowserInteractionState()
-
-  init(
-    systemImage: String,
-    label: String,
-    isEnabled: Bool = true,
-    action: @escaping () -> Void
-  ) {
-    self.systemImage = systemImage
-    self.label = label
-    self.isEnabled = isEnabled
-    self.action = action
-  }
-
-  var body: some View {
-    Button(action: action) {
-      Image(systemName: systemImage)
-        .font(
-          .system(
-            size: BrowserChromeLayout.chromeSymbolSize,
-            weight: BrowserChromeLayout.chromeSymbolWeight))
-        .frame(
-          width: BrowserChromeLayout.chromeControlHeight,
-          height: BrowserChromeLayout.chromeControlHeight)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(
-      BrowserGlassIconButtonStyle(
-        isEnabled: isEnabled,
-        isHovered: interaction.isHovered)
-    )
-    .disabled(!isEnabled)
-    .onHover { interaction.isHovered = $0 }
-    .help(label)
-    .accessibilityLabel(label)
-  }
-}
-
-private struct BrowserGlassIconButtonStyle: ButtonStyle {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let isEnabled: Bool
-  let isHovered: Bool
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .background {
-        Circle()
-          .fill(highlightColor(isPressed: configuration.isPressed))
-          .frame(
-            width: BrowserChromeLayout.chromeControlHeight,
-            height: BrowserChromeLayout.chromeControlHeight)
-          .allowsHitTesting(false)
-      }
-      .contentShape(Rectangle())
-      .foregroundStyle(
-        isEnabled
-          ? Color.primary.opacity(configuration.isPressed ? 1 : (isHovered ? 0.98 : 0.88))
-          : Color.primary.opacity(0.34)
-      )
-      // Only the icon and highlight move; the hit target stays 36 points.
-      .scaleEffect(isEnabled && configuration.isPressed && !reduceMotion ? 1.07 : 1)
-      .frame(
-        width: BrowserChromeLayout.chromeControlHeight,
-        height: BrowserChromeLayout.chromeControlHeight)
-      .contentShape(Rectangle())
-      .animation(
-        reduceMotion ? nil : .spring(response: 0.23, dampingFraction: 0.63),
-        value: configuration.isPressed)
-      .animation(.easeOut(duration: 0.08), value: isHovered)
-  }
-
-  private func highlightColor(isPressed: Bool) -> Color {
-    if isEnabled && isPressed {
-      return Color.primary.opacity(0.10)
-    }
-    if isEnabled && isHovered {
-      return Color.primary.opacity(0.05)
-    }
-    return .clear
-  }
-}
-
 extension View {
-  /// Applies one compact system glass capsule to a related control group.
-  /// The buttons remain independent hit targets inside this shared surface.
+  /// Applies the system glass surface used by browser chrome.
   @ViewBuilder
   func browserChromeGlassSurface<S: Shape>(in shape: S) -> some View {
     if #available(macOS 26.0, *) {

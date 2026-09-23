@@ -73,16 +73,16 @@ private struct BrowserTopChromeControls: View {
 
   var body: some View {
     HStack(spacing: 0) {
-      GlassEffectContainer(spacing: BrowserChromeLayout.sidebarToggleToNav) {
-        if !isSidebarVisible {
-          BrowserGlassStandaloneIconButton(
-            systemImage: "sidebar.left",
-            label: "Show Sidebar",
-            action: onShowSidebar)
-            .padding(.trailing, BrowserChromeLayout.sidebarToggleToNav)
-            // Fade the symbol while its glass surface materializes.
-            .transition(.opacity)
-        }
+      if !isSidebarVisible {
+        NativeGlassIconButton(
+          systemImage: "sidebar.left",
+          accessibilityLabel: "Show Sidebar",
+          action: onShowSidebar)
+          .frame(
+            width: BrowserChromeLayout.chromeControlHeight,
+            height: BrowserChromeLayout.chromeControlHeight)
+          .padding(.trailing, BrowserChromeLayout.sidebarToggleToNav)
+          .transition(.opacity)
       }
 
       navigationControls
@@ -106,23 +106,37 @@ private struct BrowserTopChromeControls: View {
   }
 
   private var navigationControls: some View {
-    BrowserGlassControlGroup {
-      BrowserGlassIconButton(
-        systemImage: "chevron.backward",
-        label: "Back",
-        isEnabled: navigationState?.canGoBack == true,
-        action: { session?.goBack() })
-      BrowserGlassIconButton(
-        systemImage: "chevron.forward",
-        label: "Forward",
-        isEnabled: navigationState?.canGoForward == true,
-        action: { session?.goForward() })
-      BrowserGlassIconButton(
-        systemImage: navigationState?.isLoading == true ? "xmark" : "arrow.clockwise",
-        label: navigationState?.isLoading == true ? "Stop" : "Reload",
-        isEnabled: session != nil,
-        action: { session?.reloadOrStop() })
+    NativeGlassSegmentedControl(
+      segments: [
+        NativeChromeSegment(
+          systemImage: "chevron.backward",
+          accessibilityLabel: "Back",
+          isEnabled: navigationState?.canGoBack == true),
+        NativeChromeSegment(
+          systemImage: "chevron.forward",
+          accessibilityLabel: "Forward",
+          isEnabled: navigationState?.canGoForward == true),
+        NativeChromeSegment(
+          systemImage: navigationState?.isLoading == true ? "xmark" : "arrow.clockwise",
+          accessibilityLabel: navigationState?.isLoading == true ? "Stop" : "Reload",
+          isEnabled: session != nil),
+      ],
+      height: BrowserChromeLayout.chromeControlHeight
+    ) { index in
+      switch index {
+      case 0:
+        session?.goBack()
+      case 1:
+        session?.goForward()
+      case 2:
+        session?.reloadOrStop()
+      default:
+        break
+      }
     }
+    .frame(
+      width: BrowserChromeLayout.chromeControlHeight * 3,
+      height: BrowserChromeLayout.chromeControlHeight)
   }
 
   @ViewBuilder
