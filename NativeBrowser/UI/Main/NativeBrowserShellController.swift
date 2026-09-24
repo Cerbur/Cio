@@ -127,7 +127,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       options: [.initial, .new]
     ) { [weak self] _, _ in
       MainActor.assumeIsolated {
-        self?.updateNewTabVisibility()
+        self?.updateToolbarSectionVisibility()
       }
     }
   }
@@ -173,13 +173,36 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     reloadToolbarItem?.paletteLabel = isLoading ? "Stop" : "Reload"
     reloadToolbarItem?.toolTip = isLoading ? "Stop" : "Reload"
     reloadToolbarItem?.isEnabled = session != nil
-    updateNewTabVisibility()
+    updateToolbarSectionVisibility()
   }
 
-  private func updateNewTabVisibility() {
-    newTabToolbarItem?.isHidden = sidebarItem.isCollapsed
+  private func updateToolbarSectionVisibility() {
+    let isCollapsed = sidebarItem.isCollapsed
+    let toolbarItems = toolbar?.items ?? []
+    let flexibleSpace = toolbarItems.first {
+      $0.itemIdentifier == .flexibleSpace
+    }
+    let spacingItems = toolbarItems.filter {
+      $0.itemIdentifier == .space
+    }
+    let trackingSeparator = toolbarItems.first {
+      $0.itemIdentifier == ToolbarID.trackingSeparator
+    }
+
+    newTabToolbarItem?.isHidden = isCollapsed
+    flexibleSpace?.isHidden = isCollapsed
+    trackingSeparator?.isHidden = isCollapsed
+    // The first fixed space separates Show Sidebar from navigation while
+    // collapsed. The second one always keeps navigation apart from Address.
+    if !spacingItems.isEmpty {
+      spacingItems[0].isHidden = !isCollapsed
+    }
+    if spacingItems.count > 1 {
+      spacingItems[1].isHidden = false
+    }
+
     if let sidebarToolbarItem {
-      let label = sidebarItem.isCollapsed ? "Show Sidebar" : "Hide Sidebar"
+      let label = isCollapsed ? "Show Sidebar" : "Hide Sidebar"
       sidebarToolbarItem.label = label
       sidebarToolbarItem.paletteLabel = label
       sidebarToolbarItem.toolTip = label
@@ -237,12 +260,15 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     [
+      .flexibleSpace,
       ToolbarID.newTab,
       ToolbarID.toggleSidebar,
       ToolbarID.trackingSeparator,
+      .space,
       ToolbarID.back,
       ToolbarID.forward,
       ToolbarID.reload,
+      .space,
       ToolbarID.address,
     ]
   }
@@ -264,7 +290,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
         symbol: "plus.square.on.square",
         action: #selector(createTab(_:)))
       newTabToolbarItem = item
-      updateNewTabVisibility()
       return item
     case ToolbarID.toggleSidebar:
       let item = makeButtonItem(
