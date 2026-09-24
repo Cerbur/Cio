@@ -316,12 +316,12 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     [
+      ToolbarID.showSidebar,
+      .space,
       .flexibleSpace,
       ToolbarID.newTab,
       ToolbarID.hideSidebar,
       ToolbarID.trackingSeparator,
-      ToolbarID.showSidebar,
-      .space,
       ToolbarID.back,
       ToolbarID.forward,
       ToolbarID.reload,
