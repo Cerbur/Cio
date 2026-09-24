@@ -142,6 +142,13 @@ enum NavigationSelfTest {
       "initial-load", initialLoaded && session.lastErrorCode == nil,
       "url=\(URLLogSanitizer.sanitized(session.url)) title-present=\(!session.title.isEmpty)")
 
+    report(
+      "fresh-tab-back-disabled", !session.canGoBack,
+      "canGoBack=\(session.canGoBack)")
+    report(
+      "fresh-tab-forward-disabled", !session.canGoForward,
+      "canGoForward=\(session.canGoForward)")
+
     let initialURL = session.url?.absoluteString ?? ""
     report(
       "initial-url-is-main-frame", initialURL == primaryURL.absoluteString,
