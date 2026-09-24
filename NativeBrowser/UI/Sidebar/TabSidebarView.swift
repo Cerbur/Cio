@@ -111,7 +111,7 @@ struct TabSidebarView: View {
       .padding(.top, 7)
       .padding(.bottom, 11)
     }
-    .frame(width: BrowserChromeLayout.sidebarWidth)
+    .frame(width: BrowserLayout.sidebarWidth)
     .frame(maxHeight: .infinity)
   }
 }

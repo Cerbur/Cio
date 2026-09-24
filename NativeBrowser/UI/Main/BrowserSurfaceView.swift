@@ -26,16 +26,16 @@ struct BrowserSurfaceView: NSViewRepresentable {
   /// The runtime owner of the tabs and of the containers.
   @ObservedObject var manager: BrowserSessionManager
 
-  func makeNSView(context: Context) -> BrowserSurfaceExtensionView {
-    let extensionView = BrowserSurfaceExtensionView()
-    manager.attachSurfaceHost(extensionView.surfaceHostView)
-    return extensionView
+  func makeNSView(context: Context) -> BrowserSurfaceHostView {
+    let hostView = BrowserSurfaceHostView()
+    manager.attachSurfaceHost(hostView)
+    return hostView
   }
 
-  func updateNSView(_ nsView: BrowserSurfaceExtensionView, context: Context) {
+  func updateNSView(_ nsView: BrowserSurfaceHostView, context: Context) {
     // Idempotent: it re-adopts the same host, creates a container for any session
     // that does not have one yet, and never removes a container whose session is
     // still alive.
-    manager.attachSurfaceHost(nsView.surfaceHostView)
+    manager.attachSurfaceHost(nsView)
   }
 }

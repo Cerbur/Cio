@@ -11,25 +11,9 @@
 import AppKit
 import SwiftUI
 
-/// Shared geometry for the one browser chrome band. The shell body and the
-/// top-chrome overlay use these values so collapsing the sidebar never changes
-/// the page's vertical origin.
-enum BrowserChromeLayout {
-  static let toolbarHeight: CGFloat = 44
-  static let chromeControlHeight: CGFloat = 36
-  static let chromeSymbolSize: CGFloat = 15
-  static let chromeGlassButtonStackSpacing: CGFloat = 0
-  static let chromeGlassContainerSpacing: CGFloat = 24
-  static let addressGlobeSymbolSize: CGFloat = 14
-  static let addressFieldCornerRadius: CGFloat = chromeControlHeight / 2
+/// Shared geometry for the native AppKit sidebar and its SwiftUI content.
+enum BrowserLayout {
   static let sidebarWidth: CGFloat = 248
-  static let chromeEdgeInset: CGFloat = (toolbarHeight - chromeControlHeight) / 2
-  static let sidebarToggleToNav: CGFloat = 6
-  static let navToAddress: CGFloat = 10
-  static let chromeTrailingPadding: CGFloat = 10
-  static let chromeVerticalPadding: CGFloat = chromeEdgeInset
-  static let expandedNavigationLeadingPadding: CGFloat = 10
-  static let sidebarAnimation = Animation.easeInOut(duration: 0.22)
 }
 
 /// Ephemeral presentation state shared by the hover and focus surfaces. It
@@ -41,7 +25,7 @@ final class BrowserInteractionState: ObservableObject {
 }
 
 extension View {
-  /// Applies the system glass surface used by browser chrome.
+  /// Applies a single system glass surface to the address control.
   @ViewBuilder
   func browserChromeGlassSurface<S: Shape>(in shape: S) -> some View {
     if #available(macOS 26.0, *) {
@@ -61,40 +45,5 @@ extension View {
         .browserChromeGlassSurface(in: shape)
         .allowsHitTesting(false)
     }
-  }
-}
-
-/// A narrow bridge to AppKit's semantic vibrancy materials. The system owns
-/// the blur, contrast, and light/dark treatment; this view does not draw or
-/// cache a custom translucency layer.
-struct BrowserVisualEffectView: NSViewRepresentable {
-  let material: NSVisualEffectView.Material
-  let blendingMode: NSVisualEffectView.BlendingMode
-
-  func makeNSView(context: Context) -> NSVisualEffectView {
-    let view = NSVisualEffectView()
-    configure(view)
-    return view
-  }
-
-  func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-    configure(nsView)
-  }
-
-  private func configure(_ view: NSVisualEffectView) {
-    view.material = material
-    view.blendingMode = blendingMode
-    view.state = .followsWindowActiveState
-    view.isEmphasized = false
-  }
-}
-
-extension View {
-  /// Native material for the continuous left-side workspace region.
-  func browserSidebarMaterial() -> some View {
-    background(
-      BrowserVisualEffectView(material: .sidebar, blendingMode: .withinWindow)
-        .allowsHitTesting(false)
-    )
   }
 }
