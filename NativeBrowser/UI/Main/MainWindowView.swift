@@ -76,7 +76,16 @@ private struct BrowserWorkspaceView: View {
     HStack(spacing: 0) {
       // Keep the sidebar mounted while it contracts to zero. Its chrome and
       // body share one material-backed column, including during animation.
-      SidebarColumn(workspace: workspace)
+      SidebarColumn(
+        workspace: workspace,
+        isSidebarVisible: isSidebarVisible,
+        onHideSidebar: {
+          // Let AppKit finish the native button's mouse-up cycle before its
+          // glass host leaves the tree and the sidebar begins contracting.
+          DispatchQueue.main.async {
+            isSidebarVisible = false
+          }
+        })
         .frame(
           width: isSidebarVisible ? BrowserChromeLayout.sidebarWidth : 0,
           alignment: .leading)
@@ -103,18 +112,30 @@ private struct BrowserWorkspaceView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
-    // Keep this native control outside the contracting column's clip so the
-    // sidebar actions animate with the browser chrome.
-    .overlay(alignment: .topLeading) {
-      Group {
+    .ignoresSafeArea(.container, edges: [.top, .leading, .bottom])
+    .animation(
+      reduceMotion ? .easeOut(duration: 0.1) : BrowserChromeLayout.sidebarAnimation,
+      value: isSidebarVisible)
+  }
+}
+
+private struct SidebarColumn: View {
+  @ObservedObject var workspace: BrowserWorkspaceStore
+  let isSidebarVisible: Bool
+  let onHideSidebar: () -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 0) {
+        Spacer(minLength: 0)
         if isSidebarVisible {
-          NativeGlassSegmentedControl(
-            segments: [
-              NativeChromeSegment(
+          NativeGlassButtonGroup(
+            buttons: [
+              NativeChromeButton(
                 systemImage: "plus.square.on.square",
                 accessibilityLabel: "New Tab",
                 isEnabled: true),
-              NativeChromeSegment(
+              NativeChromeButton(
                 systemImage: "sidebar.left",
                 accessibilityLabel: "Hide Sidebar",
                 isEnabled: true),
@@ -125,7 +146,7 @@ private struct BrowserWorkspaceView: View {
             case 0:
               workspace.createTab(url: nil)
             case 1:
-              isSidebarVisible = false
+              onHideSidebar()
             default:
               break
             }
@@ -134,30 +155,7 @@ private struct BrowserWorkspaceView: View {
             width: BrowserChromeLayout.chromeControlHeight * 2,
             height: BrowserChromeLayout.chromeControlHeight)
           .padding(.trailing, BrowserChromeLayout.chromeTrailingPadding)
-          .transition(.opacity)
         }
-      }
-      .frame(
-        width: BrowserChromeLayout.sidebarWidth,
-        height: BrowserChromeLayout.toolbarHeight,
-        alignment: .trailing)
-      .allowsHitTesting(isSidebarVisible)
-    }
-    // The overlay and the columns share the same full-size titlebar origin.
-    .ignoresSafeArea(.container, edges: [.top, .leading, .bottom])
-    .animation(
-      reduceMotion ? .easeOut(duration: 0.1) : BrowserChromeLayout.sidebarAnimation,
-      value: isSidebarVisible)
-  }
-}
-
-private struct SidebarColumn: View {
-  @ObservedObject var workspace: BrowserWorkspaceStore
-
-  var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 0) {
-        Spacer(minLength: 0)
       }
       .frame(width: BrowserChromeLayout.sidebarWidth, height: BrowserChromeLayout.toolbarHeight)
 

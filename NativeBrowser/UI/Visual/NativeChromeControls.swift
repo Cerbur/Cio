@@ -8,26 +8,129 @@
 import AppKit
 import SwiftUI
 
-struct NativeChromeSegment: Equatable {
+struct NativeChromeButton: Equatable {
   let systemImage: String
   let accessibilityLabel: String
   let isEnabled: Bool
 }
 
-/// One native AppKit segmented control for a related group of chrome actions.
-/// SwiftUI owns the state and actions; this representable only renders and
-/// forwards the selected segment index.
-struct NativeGlassSegmentedControl: NSViewRepresentable {
-  let segments: [NativeChromeSegment]
+/// Hosts independent native glass buttons in one container so nearby glass
+/// effects can merge without introducing segmented-control dividers.
+struct NativeGlassButtonGroup: NSViewRepresentable {
+  let buttons: [NativeChromeButton]
   let height: CGFloat
   let action: (Int) -> Void
 
   init(
-    segments: [NativeChromeSegment],
+    buttons: [NativeChromeButton],
     height: CGFloat = BrowserChromeLayout.chromeControlHeight,
     action: @escaping (Int) -> Void
   ) {
-    self.segments = segments
+    self.buttons = buttons
+    self.height = height
+    self.action = action
+  }
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(action: action, imageKeys: Array(repeating: nil, count: buttons.count))
+  }
+
+  func makeNSView(context: Context) -> NSGlassEffectContainerView {
+    let container = NSGlassEffectContainerView(frame: .zero)
+    container.spacing = BrowserChromeLayout.chromeGlassContainerSpacing
+
+    let stack = NSStackView(frame: .zero)
+    stack.orientation = .horizontal
+    stack.alignment = .centerY
+    stack.distribution = .fill
+    stack.spacing = BrowserChromeLayout.chromeGlassButtonStackSpacing
+    stack.translatesAutoresizingMaskIntoConstraints = false
+
+    for (index, descriptor) in buttons.enumerated() {
+      let button = NSButton(frame: CGRect(x: 0, y: 0, width: height, height: height))
+      button.tag = index
+      button.target = context.coordinator
+      button.action = #selector(Coordinator.activate(_:))
+      configureNativeGlassButton(
+        button,
+        descriptor: descriptor,
+        height: height,
+        imageKey: &context.coordinator.imageKeys[index])
+      button.widthAnchor.constraint(equalToConstant: height).isActive = true
+      button.heightAnchor.constraint(equalToConstant: height).isActive = true
+      stack.addArrangedSubview(button)
+    }
+
+    container.contentView = stack
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+      stack.topAnchor.constraint(equalTo: container.topAnchor),
+      stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+    ])
+    return container
+  }
+
+  func updateNSView(_ container: NSGlassEffectContainerView, context: Context) {
+    context.coordinator.action = action
+    container.spacing = BrowserChromeLayout.chromeGlassContainerSpacing
+
+    guard let stack = container.contentView as? NSStackView,
+      stack.arrangedSubviews.count == buttons.count
+    else {
+      return
+    }
+
+    for (index, view) in stack.arrangedSubviews.enumerated() {
+      guard let button = view as? NSButton else { continue }
+      button.tag = index
+      configureNativeGlassButton(
+        button,
+        descriptor: buttons[index],
+        height: height,
+        imageKey: &context.coordinator.imageKeys[index])
+    }
+  }
+
+  static func dismantleNSView(
+    _ container: NSGlassEffectContainerView,
+    coordinator: Coordinator
+  ) {
+    container.contentView = nil
+  }
+
+  @MainActor
+  final class Coordinator: NSObject {
+    var action: (Int) -> Void
+    var imageKeys: [String?]
+
+    init(action: @escaping (Int) -> Void, imageKeys: [String?]) {
+      self.action = action
+      self.imageKeys = imageKeys
+    }
+
+    @objc func activate(_ sender: NSButton) {
+      action(sender.tag)
+    }
+  }
+}
+
+/// A standalone button with the same native glass presentation used by groups.
+struct NativeGlassIconButton: NSViewRepresentable {
+  let button: NativeChromeButton
+  let height: CGFloat
+  let action: () -> Void
+
+  init(
+    systemImage: String,
+    accessibilityLabel: String,
+    height: CGFloat = BrowserChromeLayout.chromeControlHeight,
+    action: @escaping () -> Void
+  ) {
+    self.button = NativeChromeButton(
+      systemImage: systemImage,
+      accessibilityLabel: accessibilityLabel,
+      isEnabled: true)
     self.height = height
     self.action = action
   }
@@ -36,136 +139,31 @@ struct NativeGlassSegmentedControl: NSViewRepresentable {
     Coordinator(action: action)
   }
 
-  func makeNSView(context: Context) -> NSGlassEffectView {
-    let glassView = NSGlassEffectView(frame: .zero)
-    glassView.style = .regular
-    glassView.cornerRadius = height / 2
-    if #available(macOS 27.0, *) {
-      glassView.effectIsInteractive = true
-    }
-
-    let control = NSSegmentedControl(frame: .zero)
-    control.segmentCount = segments.count
-    control.trackingMode = .momentary
-    control.segmentStyle = .automatic
-    control.cell?.isBordered = true
-    control.target = context.coordinator
-    control.action = #selector(Coordinator.activateSegment(_:))
-    control.autoresizingMask = [.width, .height]
-    control.setContentCompressionResistancePriority(.required, for: .vertical)
-    configure(control, coordinator: context.coordinator)
-    glassView.contentView = control
-    return glassView
-  }
-
-  func updateNSView(_ glassView: NSGlassEffectView, context: Context) {
-    context.coordinator.action = action
-    glassView.cornerRadius = height / 2
-    guard let control = glassView.contentView as? NSSegmentedControl else { return }
-    configure(control, coordinator: context.coordinator)
-  }
-
-  private func configure(_ control: NSSegmentedControl, coordinator: Coordinator) {
-    if control.segmentCount != segments.count {
-      control.segmentCount = segments.count
-    }
-    if coordinator.lastImages.count != segments.count {
-      coordinator.lastImages = Array(repeating: nil, count: segments.count)
-    }
-
-    for (index, segment) in segments.enumerated() {
-      let imageKey = "\(segment.systemImage)|\(segment.accessibilityLabel)"
-      if coordinator.lastImages[index] != imageKey {
-        let configuration = NSImage.SymbolConfiguration(
-          pointSize: BrowserChromeLayout.chromeSymbolSize,
-          weight: .medium)
-        let image = NSImage(
-          systemSymbolName: segment.systemImage,
-          accessibilityDescription: segment.accessibilityLabel
-        )?.withSymbolConfiguration(configuration)
-        control.setImage(image, forSegment: index)
-        coordinator.lastImages[index] = imageKey
-      }
-
-      control.setWidth(height, forSegment: index)
-      control.setEnabled(segment.isEnabled, forSegment: index)
-      control.setToolTip(segment.accessibilityLabel, forSegment: index)
-    }
-  }
-
-  @MainActor
-  final class Coordinator: NSObject {
-    var action: (Int) -> Void
-    var lastImages: [String?] = []
-
-    init(action: @escaping (Int) -> Void) {
-      self.action = action
-    }
-
-    @objc func activateSegment(_ sender: NSSegmentedControl) {
-      let index = sender.selectedSegment
-      guard index >= 0 else { return }
-      action(index)
-    }
-  }
-}
-
-/// A standalone native glass-bezel button used when the sidebar is collapsed.
-struct NativeGlassIconButton: NSViewRepresentable {
-  let systemImage: String
-  let accessibilityLabel: String
-  let action: () -> Void
-
-  init(
-    systemImage: String,
-    accessibilityLabel: String,
-    action: @escaping () -> Void
-  ) {
-    self.systemImage = systemImage
-    self.accessibilityLabel = accessibilityLabel
-    self.action = action
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(action: action)
-  }
-
   func makeNSView(context: Context) -> NSButton {
-    let button = NSButton(frame: .zero)
-    configure(button)
-    button.target = context.coordinator
-    button.action = #selector(Coordinator.activate(_:))
-    return button
+    let view = NSButton(frame: CGRect(x: 0, y: 0, width: height, height: height))
+    view.target = context.coordinator
+    view.action = #selector(Coordinator.activate(_:))
+    configureNativeGlassButton(
+      view,
+      descriptor: button,
+      height: height,
+      imageKey: &context.coordinator.imageKey)
+    return view
   }
 
-  func updateNSView(_ button: NSButton, context: Context) {
+  func updateNSView(_ view: NSButton, context: Context) {
     context.coordinator.action = action
-    configure(button)
-  }
-
-  private func configure(_ button: NSButton) {
-    button.setButtonType(.momentaryPushIn)
-    let configuration = NSImage.SymbolConfiguration(
-      pointSize: BrowserChromeLayout.chromeSymbolSize,
-      weight: .medium)
-    button.image = NSImage(
-      systemSymbolName: systemImage,
-      accessibilityDescription: accessibilityLabel
-    )?.withSymbolConfiguration(configuration)
-    button.imagePosition = .imageOnly
-    button.bezelStyle = .glass
-    button.borderShape = .circle
-    button.isBordered = true
-    button.symbolConfiguration = configuration
-    button.setContentCompressionResistancePriority(.required, for: .horizontal)
-    button.setContentCompressionResistancePriority(.required, for: .vertical)
-    button.toolTip = accessibilityLabel
-    button.setAccessibilityLabel(accessibilityLabel)
+    configureNativeGlassButton(
+      view,
+      descriptor: button,
+      height: height,
+      imageKey: &context.coordinator.imageKey)
   }
 
   @MainActor
   final class Coordinator: NSObject {
     var action: () -> Void
+    var imageKey: String?
 
     init(action: @escaping () -> Void) {
       self.action = action
@@ -174,5 +172,43 @@ struct NativeGlassIconButton: NSViewRepresentable {
     @objc func activate(_ sender: NSButton) {
       action()
     }
+  }
+}
+
+@MainActor
+private func configureNativeGlassButton(
+  _ button: NSButton,
+  descriptor: NativeChromeButton,
+  height: CGFloat,
+  imageKey: inout String?
+) {
+  button.setButtonType(.momentaryPushIn)
+  button.imagePosition = .imageOnly
+  button.bezelStyle = .glass
+  button.borderShape = .circle
+  button.isBordered = true
+  button.isEnabled = descriptor.isEnabled
+  button.setContentHuggingPriority(.required, for: .horizontal)
+  button.setContentHuggingPriority(.required, for: .vertical)
+  button.setContentCompressionResistancePriority(.required, for: .horizontal)
+  button.setContentCompressionResistancePriority(.required, for: .vertical)
+  button.toolTip = descriptor.accessibilityLabel
+  button.setAccessibilityLabel(descriptor.accessibilityLabel)
+
+  let key = "\(descriptor.systemImage)|\(descriptor.accessibilityLabel)"
+  if imageKey != key {
+    let configuration = NSImage.SymbolConfiguration(
+      pointSize: BrowserChromeLayout.chromeSymbolSize,
+      weight: .medium)
+    button.image = NSImage(
+      systemSymbolName: descriptor.systemImage,
+      accessibilityDescription: descriptor.accessibilityLabel
+    )?.withSymbolConfiguration(configuration)
+    button.symbolConfiguration = configuration
+    imageKey = key
+  }
+
+  if button.frame.size != CGSize(width: height, height: height) {
+    button.setFrameSize(CGSize(width: height, height: height))
   }
 }

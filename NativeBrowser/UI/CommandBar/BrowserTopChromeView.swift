@@ -82,7 +82,6 @@ private struct BrowserTopChromeControls: View {
             width: BrowserChromeLayout.chromeControlHeight,
             height: BrowserChromeLayout.chromeControlHeight)
           .padding(.trailing, BrowserChromeLayout.sidebarToggleToNav)
-          .transition(.opacity)
       }
 
       navigationControls
@@ -106,17 +105,17 @@ private struct BrowserTopChromeControls: View {
   }
 
   private var navigationControls: some View {
-    NativeGlassSegmentedControl(
-      segments: [
-        NativeChromeSegment(
+    NativeGlassButtonGroup(
+      buttons: [
+        NativeChromeButton(
           systemImage: "chevron.backward",
           accessibilityLabel: "Back",
           isEnabled: navigationState?.canGoBack == true),
-        NativeChromeSegment(
+        NativeChromeButton(
           systemImage: "chevron.forward",
           accessibilityLabel: "Forward",
           isEnabled: navigationState?.canGoForward == true),
-        NativeChromeSegment(
+        NativeChromeButton(
           systemImage: navigationState?.isLoading == true ? "xmark" : "arrow.clockwise",
           accessibilityLabel: navigationState?.isLoading == true ? "Stop" : "Reload",
           isEnabled: session != nil),

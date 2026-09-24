@@ -18,6 +18,8 @@ enum BrowserChromeLayout {
   static let toolbarHeight: CGFloat = 44
   static let chromeControlHeight: CGFloat = 36
   static let chromeSymbolSize: CGFloat = 15
+  static let chromeGlassButtonStackSpacing: CGFloat = 0
+  static let chromeGlassContainerSpacing: CGFloat = 24
   static let addressGlobeSymbolSize: CGFloat = 14
   static let addressFieldCornerRadius: CGFloat = chromeControlHeight / 2
   static let sidebarWidth: CGFloat = 248
