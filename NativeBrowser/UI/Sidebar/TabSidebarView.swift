@@ -18,9 +18,20 @@ private enum SidebarLayout {
   static let separatorOpacity: CGFloat = 0.09
 }
 
+@MainActor
+final class SidebarChromeLayout: ObservableObject {
+  @Published private(set) var topInset: CGFloat = 0
+
+  func update(topInset: CGFloat) {
+    guard abs(self.topInset - topInset) > 0.5 else { return }
+    self.topInset = topInset
+  }
+}
+
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @EnvironmentObject private var runtime: ApplicationRuntime
+  @EnvironmentObject private var chromeLayout: SidebarChromeLayout
 
   var body: some View {
     VStack(spacing: 0) {
@@ -78,7 +89,7 @@ struct TabSidebarView: View {
             .padding(.horizontal, 3)
           }
           .padding(.horizontal, 6)
-          .padding(.top, 8)
+          .padding(.top, chromeLayout.topInset + 8)
           .padding(.bottom, 12)
         }
         // Keep the native scroll view under the split-item edge accessory.

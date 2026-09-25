@@ -38,6 +38,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   private let runtime: ApplicationRuntime
   private let workspace: BrowserWorkspaceStore
+  private let sidebarChromeLayout = SidebarChromeLayout()
   private let sidebarItem: NSSplitViewItem
   private let browserItem: NSSplitViewItem
 
@@ -65,6 +66,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     let sidebarRootView = AnyView(
       TabSidebarView(workspace: runtime.workspaceStore)
         .environmentObject(runtime)
+        .environmentObject(sidebarChromeLayout)
         .frame(maxHeight: .infinity))
     let sidebarHostingController = NSHostingController(rootView: sidebarRootView)
     let browserHostingController = NSHostingController(
@@ -103,15 +105,24 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     bindSelectedSession(workspace.selectedSession)
   }
 
+  override func viewWillAppear() {
+    super.viewWillAppear()
+    // Configure full-size content before NSSplitViewController lays out its
+    // full-height sidebar beneath the toolbar.
+    installToolbarIfNeeded()
+  }
+
   override func viewDidAppear() {
     super.viewDidAppear()
     installToolbarIfNeeded()
     installSidebarScrollEdgeAccessoryIfNeeded()
+    updateSidebarChromeLayout()
   }
 
   override func viewDidLayout() {
     super.viewDidLayout()
     updateSidebarScrollEdgeAccessoryGeometry()
+    updateSidebarChromeLayout()
   }
 
   private func installSidebarScrollEdgeAccessoryIfNeeded() {
@@ -122,15 +133,13 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
     let overlap = topChromeOverlap(in: window)
     let accessory = NSSplitViewItemAccessoryViewController()
-    // The measured accessory covers the floating toolbar overlap; AppKit softens
-    // scrolling content behind it while preserving the resting content inset.
     accessory.preferredScrollEdgeEffectStyle = .soft
+    accessory.automaticallyAppliesContentInsets = true
     accessory.preferredContentSize = NSSize(
       width: BrowserLayout.sidebarWidth,
       height: overlap)
     accessory.view = NSView(
       frame: NSRect(x: 0, y: 0, width: BrowserLayout.sidebarWidth, height: overlap))
-    accessory.automaticallyAppliesContentInsets = false
     sidebarItem.addTopAlignedAccessoryViewController(accessory)
     sidebarScrollEdgeAccessory = accessory
     updateSidebarScrollEdgeAccessoryGeometry()
@@ -156,6 +165,11 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     guard let contentView = window.contentView else { return 0 }
     let contentFrame = contentView.convert(contentView.bounds, to: nil)
     return max(0, contentFrame.maxY - window.contentLayoutRect.maxY)
+  }
+
+  private func updateSidebarChromeLayout() {
+    guard let window = view.window else { return }
+    sidebarChromeLayout.update(topInset: topChromeOverlap(in: window))
   }
 
   private func installToolbarIfNeeded() {

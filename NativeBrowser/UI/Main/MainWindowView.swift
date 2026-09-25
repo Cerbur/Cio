@@ -12,6 +12,7 @@ struct MainWindowView: View {
 
   var body: some View {
     NativeBrowserShellRepresentable(runtime: runtime)
+      .ignoresSafeArea(.container, edges: .top)
       .frame(minWidth: 900, minHeight: 500)
       .onAppear { runtime.noteMainWindowAppeared() }
       .sheet(item: $runtime.presentedInternalPanel) { panel in
