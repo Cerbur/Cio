@@ -23,44 +23,6 @@ struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
   ) {}
 }
 
-@available(macOS 26.0, *)
-@MainActor
-private final class SidebarBackgroundExtensionController: NSViewController {
-  private let hostingController: NSHostingController<AnyView>
-
-  init(rootView: AnyView) {
-    hostingController = NSHostingController(rootView: rootView)
-    super.init(nibName: nil, bundle: nil)
-    addChild(hostingController)
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) is not supported")
-  }
-
-  override func loadView() {
-    let sidebarMaterialView = NSVisualEffectView(frame: .zero)
-    sidebarMaterialView.material = .sidebar
-    sidebarMaterialView.blendingMode = .withinWindow
-
-    let sidebarContentView = hostingController.view
-    sidebarContentView.translatesAutoresizingMaskIntoConstraints = false
-    sidebarMaterialView.addSubview(sidebarContentView)
-    NSLayoutConstraint.activate([
-      sidebarContentView.leadingAnchor.constraint(equalTo: sidebarMaterialView.leadingAnchor),
-      sidebarContentView.trailingAnchor.constraint(equalTo: sidebarMaterialView.trailingAnchor),
-      sidebarContentView.topAnchor.constraint(equalTo: sidebarMaterialView.topAnchor),
-      sidebarContentView.bottomAnchor.constraint(equalTo: sidebarMaterialView.bottomAnchor),
-    ])
-
-    let extensionView = NSBackgroundExtensionView(frame: .zero)
-    extensionView.automaticallyPlacesContentView = true
-    extensionView.contentView = sidebarMaterialView
-    view = extensionView
-  }
-}
-
 @MainActor
 final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelegate {
   private enum ToolbarID {
@@ -103,12 +65,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       TabSidebarView(workspace: runtime.workspaceStore)
         .environmentObject(runtime)
         .frame(maxHeight: .infinity))
-    let sidebarHostingController: NSViewController
-    if #available(macOS 26.0, *) {
-      sidebarHostingController = SidebarBackgroundExtensionController(rootView: sidebarRootView)
-    } else {
-      sidebarHostingController = NSHostingController(rootView: sidebarRootView)
-    }
+    let sidebarHostingController = NSHostingController(rootView: sidebarRootView)
     let browserHostingController = NSHostingController(
       rootView: BrowserShellContentView(workspace: runtime.workspaceStore))
 
