@@ -81,6 +81,8 @@ struct TabSidebarView: View {
           .padding(.top, 8)
           .padding(.bottom, 12)
         }
+        // Keep the native scroll view under the split-item edge accessory.
+        .ignoresSafeArea(.container, edges: .top)
         .frame(maxHeight: .infinity)
         .onChange(of: workspace.selectedSpaceID) { _, id in
           proxy.scrollTo("space-\(id.uuidString)", anchor: .center)

@@ -42,6 +42,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private let browserItem: NSSplitViewItem
 
   private var toolbar: NSToolbar?
+  private var sidebarScrollEdgeAccessory: NSSplitViewItemAccessoryViewController?
   private weak var newTabToolbarItem: NSToolbarItem?
   private weak var hideSidebarToolbarItem: NSToolbarItem?
   private weak var showSidebarToolbarItem: NSToolbarItem?
@@ -88,12 +89,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     addSplitViewItem(sidebarItem)
     addSplitViewItem(browserItem)
 
-    if #available(macOS 26.1, *) {
-      let scrollEdgeAccessory = NSSplitViewItemAccessoryViewController()
-      scrollEdgeAccessory.view = NSView(frame: .zero)
-      scrollEdgeAccessory.preferredScrollEdgeEffectStyle = .soft
-      sidebarItem.addTopAlignedAccessoryViewController(scrollEdgeAccessory)
-    }
   }
 
   @available(*, unavailable)
@@ -111,6 +106,56 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   override func viewDidAppear() {
     super.viewDidAppear()
     installToolbarIfNeeded()
+    installSidebarScrollEdgeAccessoryIfNeeded()
+  }
+
+  override func viewDidLayout() {
+    super.viewDidLayout()
+    updateSidebarScrollEdgeAccessoryGeometry()
+  }
+
+  private func installSidebarScrollEdgeAccessoryIfNeeded() {
+    guard #available(macOS 26.1, *),
+      sidebarScrollEdgeAccessory == nil,
+      let window = view.window
+    else { return }
+
+    let overlap = topChromeOverlap(in: window)
+    let accessory = NSSplitViewItemAccessoryViewController()
+    // The measured accessory covers the floating toolbar overlap; AppKit softens
+    // scrolling content behind it while preserving the resting content inset.
+    accessory.preferredScrollEdgeEffectStyle = .soft
+    accessory.preferredContentSize = NSSize(
+      width: BrowserLayout.sidebarWidth,
+      height: overlap)
+    accessory.view = NSView(
+      frame: NSRect(x: 0, y: 0, width: BrowserLayout.sidebarWidth, height: overlap))
+    accessory.automaticallyAppliesContentInsets = false
+    sidebarItem.addTopAlignedAccessoryViewController(accessory)
+    sidebarScrollEdgeAccessory = accessory
+    updateSidebarScrollEdgeAccessoryGeometry()
+  }
+
+  private func updateSidebarScrollEdgeAccessoryGeometry() {
+    guard #available(macOS 26.1, *),
+      let accessory = sidebarScrollEdgeAccessory,
+      let window = view.window
+    else { return }
+
+    let overlap = topChromeOverlap(in: window)
+    guard abs(accessory.view.frame.height - overlap) > 0.5 else { return }
+
+    accessory.preferredContentSize = NSSize(
+      width: BrowserLayout.sidebarWidth,
+      height: overlap)
+    accessory.view.setFrameSize(NSSize(width: BrowserLayout.sidebarWidth, height: overlap))
+    accessory.isHidden = overlap <= 0.5
+  }
+
+  private func topChromeOverlap(in window: NSWindow) -> CGFloat {
+    guard let contentView = window.contentView else { return 0 }
+    let contentFrame = contentView.convert(contentView.bounds, to: nil)
+    return max(0, contentFrame.maxY - window.contentLayoutRect.maxY)
   }
 
   private func installToolbarIfNeeded() {
