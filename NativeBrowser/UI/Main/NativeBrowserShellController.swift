@@ -87,6 +87,13 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     splitView.dividerStyle = .thin
     addSplitViewItem(sidebarItem)
     addSplitViewItem(browserItem)
+
+    if #available(macOS 26.1, *) {
+      let scrollEdgeAccessory = NSSplitViewItemAccessoryViewController()
+      scrollEdgeAccessory.view = NSView(frame: .zero)
+      scrollEdgeAccessory.preferredScrollEdgeEffectStyle = .soft
+      sidebarItem.addTopAlignedAccessoryViewController(scrollEdgeAccessory)
+    }
   }
 
   @available(*, unavailable)
