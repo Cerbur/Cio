@@ -43,7 +43,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private let browserItem: NSSplitViewItem
 
   private var toolbar: NSToolbar?
-  private var sidebarScrollEdgeAccessory: NSSplitViewItemAccessoryViewController?
   private weak var newTabToolbarItem: NSToolbarItem?
   private weak var hideSidebarToolbarItem: NSToolbarItem?
   private weak var showSidebarToolbarItem: NSToolbarItem?
@@ -115,50 +114,12 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   override func viewDidAppear() {
     super.viewDidAppear()
     installToolbarIfNeeded()
-    installSidebarScrollEdgeAccessoryIfNeeded()
     updateSidebarChromeLayout()
   }
 
   override func viewDidLayout() {
     super.viewDidLayout()
-    updateSidebarScrollEdgeAccessoryGeometry()
     updateSidebarChromeLayout()
-  }
-
-  private func installSidebarScrollEdgeAccessoryIfNeeded() {
-    guard #available(macOS 26.1, *),
-      sidebarScrollEdgeAccessory == nil,
-      let window = view.window
-    else { return }
-
-    let overlap = topChromeOverlap(in: window)
-    let accessory = NSSplitViewItemAccessoryViewController()
-    accessory.preferredScrollEdgeEffectStyle = .soft
-    accessory.automaticallyAppliesContentInsets = true
-    accessory.preferredContentSize = NSSize(
-      width: BrowserLayout.sidebarWidth,
-      height: overlap)
-    accessory.view = NSView(
-      frame: NSRect(x: 0, y: 0, width: BrowserLayout.sidebarWidth, height: overlap))
-    sidebarItem.addTopAlignedAccessoryViewController(accessory)
-    sidebarScrollEdgeAccessory = accessory
-    updateSidebarScrollEdgeAccessoryGeometry()
-  }
-
-  private func updateSidebarScrollEdgeAccessoryGeometry() {
-    guard #available(macOS 26.1, *),
-      let accessory = sidebarScrollEdgeAccessory,
-      let window = view.window
-    else { return }
-
-    let overlap = topChromeOverlap(in: window)
-    guard abs(accessory.view.frame.height - overlap) > 0.5 else { return }
-
-    accessory.preferredContentSize = NSSize(
-      width: BrowserLayout.sidebarWidth,
-      height: overlap)
-    accessory.view.setFrameSize(NSSize(width: BrowserLayout.sidebarWidth, height: overlap))
-    accessory.isHidden = overlap <= 0.5
   }
 
   private func topChromeOverlap(in window: NSWindow) -> CGFloat {

@@ -92,7 +92,7 @@ struct TabSidebarView: View {
           .padding(.top, chromeLayout.topInset + 8)
           .padding(.bottom, 12)
         }
-        // Keep the native scroll view under the split-item edge accessory.
+        // Keep the sidebar content behind the transparent titlebar.
         .ignoresSafeArea(.container, edges: .top)
         .frame(maxHeight: .infinity)
         .onChange(of: workspace.selectedSpaceID) { _, id in
