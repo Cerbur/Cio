@@ -42,16 +42,16 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private let browserItem: NSSplitViewItem
 
   private var toolbar: NSToolbar?
-  private var newTabToolbarItem: NSToolbarItem?
+  private weak var newTabToolbarItem: NSToolbarItem?
   private weak var hideSidebarToolbarItem: NSToolbarItem?
   private weak var showSidebarToolbarItem: NSToolbarItem?
   private weak var leadingFlexibleSpaceToolbarItem: NSToolbarItem?
   private weak var trackingSeparatorToolbarItem: NSToolbarItem?
   private weak var collapsedToggleNavSpacerItem: NSToolbarItem?
   private weak var navAddressSpacerItem: NSToolbarItem?
-  private var backToolbarItem: NSToolbarItem?
-  private var forwardToolbarItem: NSToolbarItem?
-  private var reloadToolbarItem: NSToolbarItem?
+  private weak var backToolbarItem: NSToolbarItem?
+  private weak var forwardToolbarItem: NSToolbarItem?
+  private weak var reloadToolbarItem: NSToolbarItem?
   private var workspaceObservation: AnyCancellable?
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
@@ -126,7 +126,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     }
     captureToolbarPresentationItems()
     bindSelectedSession(workspace.selectedSession)
-    updateToolbarSectionVisibility()
+    applyToolbarLayout(forSidebarCollapsed: sidebarItem.isCollapsed)
   }
 
   private func observeSidebarCollapse() {
@@ -135,7 +135,8 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       options: [.initial, .new]
     ) { [weak self] _, _ in
       MainActor.assumeIsolated {
-        self?.updateToolbarSectionVisibility()
+        guard let self else { return }
+        self.applyToolbarLayout(forSidebarCollapsed: self.sidebarItem.isCollapsed)
       }
     }
   }
@@ -221,16 +222,21 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private func captureToolbarPresentationItems() {
     guard let toolbar else { return }
     let items = toolbar.items
+    newTabToolbarItem = items.first { $0.itemIdentifier == ToolbarID.newTab }
+    hideSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.hideSidebar }
+    showSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.showSidebar }
     leadingFlexibleSpaceToolbarItem = items.first {
       $0.itemIdentifier == .flexibleSpace
     }
     trackingSeparatorToolbarItem = items.first {
       $0.itemIdentifier == ToolbarID.trackingSeparator
     }
-    collapsedToggleNavSpacerItem = toolbarItem(
-      immediatelyAfter: ToolbarID.showSidebar,
-      withIdentifier: .space,
-      in: toolbar)
+    backToolbarItem = items.first { $0.itemIdentifier == ToolbarID.back }
+    forwardToolbarItem = items.first { $0.itemIdentifier == ToolbarID.forward }
+    reloadToolbarItem = items.first { $0.itemIdentifier == ToolbarID.reload }
+    collapsedToggleNavSpacerItem = sidebarItem.isCollapsed
+      ? toolbarItem(immediatelyAfter: ToolbarID.showSidebar, withIdentifier: .space, in: toolbar)
+      : nil
     navAddressSpacerItem = toolbarItem(
       immediatelyAfter: ToolbarID.reload,
       withIdentifier: .space,
@@ -252,15 +258,161 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     return item.itemIdentifier == expectedIdentifier ? item : nil
   }
 
-  private func updateToolbarSectionVisibility() {
-    let isCollapsed = sidebarItem.isCollapsed
-    newTabToolbarItem?.isHidden = isCollapsed
-    hideSidebarToolbarItem?.isHidden = isCollapsed
-    showSidebarToolbarItem?.isHidden = !isCollapsed
-    leadingFlexibleSpaceToolbarItem?.isHidden = isCollapsed
-    trackingSeparatorToolbarItem?.isHidden = isCollapsed
-    collapsedToggleNavSpacerItem?.isHidden = !isCollapsed
-    navAddressSpacerItem?.isHidden = false
+  private var expandedToolbarItemIdentifiers: [NSToolbarItem.Identifier] {
+    [
+      .flexibleSpace,
+      ToolbarID.newTab,
+      ToolbarID.hideSidebar,
+      ToolbarID.trackingSeparator,
+      ToolbarID.back,
+      ToolbarID.forward,
+      ToolbarID.reload,
+      .space,
+      ToolbarID.address,
+    ]
+  }
+
+  private var collapsedToolbarItemIdentifiers: [NSToolbarItem.Identifier] {
+    [
+      ToolbarID.showSidebar,
+      .space,
+      ToolbarID.back,
+      ToolbarID.forward,
+      ToolbarID.reload,
+      .space,
+      ToolbarID.address,
+    ]
+  }
+
+  private func applyToolbarLayout(forSidebarCollapsed isCollapsed: Bool) {
+    guard let toolbar else { return }
+
+    let expectedIdentifiers = isCollapsed
+      ? collapsedToolbarItemIdentifiers
+      : expandedToolbarItemIdentifiers
+    if toolbar.items.map(\.itemIdentifier) != expectedIdentifiers {
+      if isCollapsed {
+        applyCollapsedToolbarLayout(in: toolbar)
+      } else {
+        applyExpandedToolbarLayout(in: toolbar)
+      }
+    }
+
+    captureToolbarPresentationItems()
+    assert(
+      toolbar.items.map(\.itemIdentifier) == expectedIdentifiers,
+      "Toolbar item order did not reconcile to the requested sidebar layout")
+  }
+
+  private func applyCollapsedToolbarLayout(in toolbar: NSToolbar) {
+    removeExpandedToolbarSection(from: toolbar)
+    ensureToolbarItem(ToolbarID.showSidebar, at: 0, in: toolbar)
+    ensureCollapsedToggleNavSpacer(in: toolbar)
+  }
+
+  private func applyExpandedToolbarLayout(in toolbar: NSToolbar) {
+    removeCollapsedLeadingItems(from: toolbar)
+    removeExpandedToolbarSection(from: toolbar)
+
+    let navigationIndex = toolbar.items.firstIndex {
+      $0.itemIdentifier == ToolbarID.back
+    } ?? toolbar.items.endIndex
+    let expandedSection: [NSToolbarItem.Identifier] = [
+      .flexibleSpace,
+      ToolbarID.newTab,
+      ToolbarID.hideSidebar,
+      ToolbarID.trackingSeparator,
+    ]
+    for (offset, identifier) in expandedSection.enumerated() {
+      toolbar.insertItem(withItemIdentifier: identifier, at: navigationIndex + offset)
+    }
+  }
+
+  private func removeExpandedToolbarSection(from toolbar: NSToolbar) {
+    removeToolbarItems(
+      withIdentifiers: [
+        .flexibleSpace,
+        ToolbarID.newTab,
+        ToolbarID.hideSidebar,
+        ToolbarID.trackingSeparator,
+      ],
+      from: toolbar)
+    newTabToolbarItem = nil
+    hideSidebarToolbarItem = nil
+    leadingFlexibleSpaceToolbarItem = nil
+    trackingSeparatorToolbarItem = nil
+  }
+
+  private func removeToolbarItems(
+    withIdentifiers identifiers: Set<NSToolbarItem.Identifier>,
+    from toolbar: NSToolbar
+  ) {
+    let indices = toolbar.items.enumerated().compactMap { index, item in
+      identifiers.contains(item.itemIdentifier) ? index : nil
+    }
+    for index in indices.reversed() {
+      toolbar.removeItem(at: index)
+    }
+  }
+
+  private func ensureToolbarItem(
+    _ identifier: NSToolbarItem.Identifier,
+    at targetIndex: Int,
+    in toolbar: NSToolbar
+  ) {
+    let indices = toolbar.items.enumerated().compactMap { index, item in
+      item.itemIdentifier == identifier ? index : nil
+    }
+    if indices.count == 1, indices[0] == targetIndex { return }
+
+    for index in indices.reversed() {
+      toolbar.removeItem(at: index)
+    }
+    if identifier == ToolbarID.showSidebar {
+      showSidebarToolbarItem = nil
+    }
+    toolbar.insertItem(withItemIdentifier: identifier, at: min(targetIndex, toolbar.items.count))
+  }
+
+  private func ensureCollapsedToggleNavSpacer(in toolbar: NSToolbar) {
+    guard let showIndex = toolbar.items.firstIndex(where: {
+      $0.itemIdentifier == ToolbarID.showSidebar
+    }) else { return }
+
+    let spacerIndex = showIndex + 1
+    if spacerIndex < toolbar.items.count,
+       toolbar.items[spacerIndex].itemIdentifier == .space
+    {
+      collapsedToggleNavSpacerItem = toolbar.items[spacerIndex]
+      return
+    }
+
+    toolbar.insertItem(withItemIdentifier: .space, at: spacerIndex)
+    collapsedToggleNavSpacerItem = toolbar.items[spacerIndex]
+  }
+
+  private func removeCollapsedLeadingItems(from toolbar: NSToolbar) {
+    var indices: [Int] = []
+    if let spacer = collapsedToggleNavSpacerItem,
+       let spacerIndex = toolbar.items.firstIndex(where: { $0 === spacer })
+    {
+      indices.append(spacerIndex)
+    } else if let showIndex = toolbar.items.firstIndex(where: {
+      $0.itemIdentifier == ToolbarID.showSidebar
+    }), showIndex + 1 < toolbar.items.count,
+      toolbar.items[showIndex + 1].itemIdentifier == .space
+    {
+      indices.append(showIndex + 1)
+    }
+
+    indices.append(contentsOf: toolbar.items.enumerated().compactMap { index, item in
+      item.itemIdentifier == ToolbarID.showSidebar ? index : nil
+    })
+    for index in Set(indices).sorted(by: >) {
+      toolbar.removeItem(at: index)
+    }
+    showSidebarToolbarItem = nil
+    collapsedToggleNavSpacerItem = nil
   }
 
   private func makeButtonItem(
@@ -316,8 +468,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     [
-      ToolbarID.showSidebar,
-      .space,
       .flexibleSpace,
       ToolbarID.newTab,
       ToolbarID.hideSidebar,
@@ -331,7 +481,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    toolbarDefaultItemIdentifiers(toolbar)
+    toolbarDefaultItemIdentifiers(toolbar) + [ToolbarID.showSidebar]
   }
 
   func toolbar(
@@ -365,10 +515,12 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       showSidebarToolbarItem = item
       return item
     case ToolbarID.trackingSeparator:
-      return NSTrackingSeparatorToolbarItem(
+      let item = NSTrackingSeparatorToolbarItem(
         identifier: itemIdentifier,
         splitView: splitView,
         dividerIndex: 0)
+      trackingSeparatorToolbarItem = item
+      return item
     case ToolbarID.back:
       let item = makeButtonItem(
         identifier: itemIdentifier,
