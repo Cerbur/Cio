@@ -13,11 +13,41 @@ import SwiftUI
 
 /// Shared geometry for the native AppKit sidebar and its SwiftUI content.
 enum BrowserLayout {
+  static let railWidth: CGFloat = 68
   static let sidebarMinimumWidth: CGFloat = 182
   static let sidebarDefaultWidth = sidebarMinimumWidth
   static let sidebarMaximumWidth: CGFloat = 480
   static let sidebarWidthPreferenceKey = "cio.sidebar.width"
   static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
+}
+
+/// The window-wide, highly translucent glass underneath the shell.
+struct GlassBackdrop: View {
+  var body: some View {
+    WindowBackdropEffect()
+      .allowsHitTesting(false)
+  }
+}
+
+/// A separate, medium-translucency glass surface for the Space sidebar.
+struct SidebarGlass: View {
+  var body: some View {
+    Rectangle()
+      .fill(.regularMaterial)
+      .allowsHitTesting(false)
+  }
+}
+
+private struct WindowBackdropEffect: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSVisualEffectView {
+    let view = NSVisualEffectView()
+    view.material = .underWindowBackground
+    view.blendingMode = .behindWindow
+    view.state = .active
+    return view
+  }
+
+  func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// Ephemeral presentation state shared by the hover and focus surfaces. It

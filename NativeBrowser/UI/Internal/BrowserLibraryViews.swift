@@ -2,37 +2,34 @@
 //  BrowserLibraryViews.swift
 //  NativeBrowser
 //
-//  Native History and Downloads presentation. These views are shown as an
-//  AppKit-backed SwiftUI sheet, so BrowserSurfaceHostView and all live CEF
-//  containers remain mounted in the main window.
+//  Native History and Downloads presentation inside the main browser shell.
+//  The Chromium host remains mounted behind the active library.
 //
 
 import AppKit
 import SwiftUI
 
-struct BrowserLibrarySheet: View {
+struct BrowserLibraryView: View {
   let panel: ApplicationRuntime.InternalBrowserPanel
   @ObservedObject var history: HistoryService
   @ObservedObject var downloads: DownloadManager
   @ObservedObject var workspace: BrowserWorkspaceStore
-  @Environment(\.dismiss) private var dismiss
+  let onClose: () -> Void
 
   var body: some View {
     Group {
       switch panel {
       case .history:
-        HistoryLibraryView(history: history, workspace: workspace, dismiss: dismiss)
+        HistoryLibraryView(history: history, workspace: workspace, onClose: onClose)
       case .downloads:
-        DownloadsLibraryView(downloads: downloads, dismiss: dismiss)
+        DownloadsLibraryView(downloads: downloads, onClose: onClose)
       }
     }
-    .frame(minWidth: LibraryLayout.minWidth, minHeight: LibraryLayout.minHeight)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
 private enum LibraryLayout {
-  static let minWidth: CGFloat = 620
-  static let minHeight: CGFloat = 440
   static let headerHorizontalPadding: CGFloat = 20
   static let headerVerticalPadding: CGFloat = 12
   static let rowHorizontalPadding: CGFloat = 14
@@ -47,7 +44,7 @@ private enum LibraryLayout {
 private struct HistoryLibraryView: View {
   @ObservedObject var history: HistoryService
   @ObservedObject var workspace: BrowserWorkspaceStore
-  let dismiss: DismissAction
+  let onClose: () -> Void
   @StateObject private var confirmationState = ClearHistoryConfirmationState()
 
   var body: some View {
@@ -62,7 +59,7 @@ private struct HistoryLibraryView: View {
         .buttonStyle(.borderless)
         .controlSize(.small)
         .disabled(history.entries.isEmpty)
-        LibraryCloseButton(title: "Close History", dismiss: dismiss)
+        LibraryCloseButton(title: "Close History", onClose: onClose)
       }
       .padding(.horizontal, LibraryLayout.headerHorizontalPadding)
       .padding(.vertical, LibraryLayout.headerVerticalPadding)
@@ -79,7 +76,7 @@ private struct HistoryLibraryView: View {
         List(history.entries) { entry in
           Button {
             guard workspace.loadInSelectedTab(entry.url) else { return }
-            dismiss()
+            onClose()
           } label: {
             HistoryRow(entry: entry)
           }
@@ -184,7 +181,7 @@ private struct LibraryRowButtonStyle: ButtonStyle {
 
 private struct DownloadsLibraryView: View {
   @ObservedObject var downloads: DownloadManager
-  let dismiss: DismissAction
+  let onClose: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
@@ -197,7 +194,7 @@ private struct DownloadsLibraryView: View {
             .font(.caption2.monospacedDigit().weight(.medium))
             .foregroundStyle(.secondary)
         }
-        LibraryCloseButton(title: "Close Downloads", dismiss: dismiss)
+        LibraryCloseButton(title: "Close Downloads", onClose: onClose)
       }
       .padding(.horizontal, LibraryLayout.headerHorizontalPadding)
       .padding(.vertical, LibraryLayout.headerVerticalPadding)
@@ -266,13 +263,11 @@ private struct LibraryEmptyState: View {
 
 private struct LibraryCloseButton: View {
   let title: String
-  let dismiss: DismissAction
+  let onClose: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
-    Button {
-      dismiss()
-    } label: {
+    Button(action: onClose) {
       Image(systemName: "xmark")
         .font(.system(size: 11, weight: .semibold))
         .frame(width: 28, height: 28)

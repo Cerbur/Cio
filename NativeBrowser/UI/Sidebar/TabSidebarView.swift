@@ -13,7 +13,6 @@ import SwiftUI
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
   weak var splitView: NSSplitView?
-  weak var shellController: NSSplitViewController?
 
   func update(topInset: CGFloat) {
     guard abs(self.topInset - topInset) > 0.5 else { return }
@@ -23,15 +22,11 @@ final class SidebarChromeLayout: ObservableObject {
   func resizeSidebar(toWindowX x: CGFloat) {
     guard let splitView else { return }
     let splitOriginX = splitView.convert(.zero, to: nil).x
-    let width = min(max(x - splitOriginX + 5, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
-    splitView.setPosition(width, ofDividerAt: 0)
+    let width = min(max(x - splitOriginX - BrowserLayout.railWidth + 5,
+                        BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
+    splitView.setPosition(BrowserLayout.railWidth + width, ofDividerAt: 1)
     UserDefaults.standard.set(Double(width), forKey: BrowserLayout.sidebarWidthPreferenceKey)
   }
-
-  func hideSidebar() {
-    shellController?.toggleSidebar(nil)
-  }
-
 }
 
 @MainActor
@@ -91,7 +86,6 @@ private struct SpacePageTrack: View {
 
 struct TabSidebarView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
-  @EnvironmentObject private var runtime: ApplicationRuntime
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
   @State private var pageSwipeState = SpacePageSwipeState()
   @State private var tabDrag = SidebarTabDrag()
@@ -137,7 +131,12 @@ struct TabSidebarView: View {
         footer
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(.ultraThinMaterial)
+      .background {
+        SidebarGlass()
+      }
+      .clipShape(UnevenRoundedRectangle(
+        topLeadingRadius: 18,
+        bottomLeadingRadius: 18))
       .background(SpaceSwipeMonitor { delta in
         pageSwipeState.scroll(delta, selectedIndex: selectedSpaceIndex,
                               count: workspace.spaces.count, width: geometry.size.width)
@@ -162,11 +161,6 @@ struct TabSidebarView: View {
           tabDragLabel(id, style: style)
         }
       }
-      .overlay(alignment: .topTrailing) {
-        titlebarControls
-          .padding(.top, 8)
-          .padding(.trailing, 8)
-      }
       .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
@@ -176,35 +170,11 @@ struct TabSidebarView: View {
         Task { @MainActor in tabDrag.gestureDidEnd() }
       }
       .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
-      .ignoresSafeArea(.container, edges: .top)
     }
   }
 
   private var selectedSpaceIndex: Int {
     workspace.spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
-  }
-
-  private var titlebarControls: some View {
-    HStack(spacing: 0) {
-      Button {
-        workspace.createTab(url: nil)
-      } label: {
-        Image(systemName: "plus.square.on.square")
-          .frame(width: 43, height: 36)
-      }
-      .help("New Tab")
-      .accessibilityLabel("New Tab")
-
-      Button(action: chromeLayout.hideSidebar) {
-        Image(systemName: "sidebar.left")
-          .frame(width: 43, height: 36)
-      }
-      .help("Hide Sidebar")
-      .accessibilityLabel("Hide Sidebar")
-    }
-    .font(.system(size: 15, weight: .medium))
-    .buttonStyle(.plain)
-    .browserChromeGlassSurface(in: Capsule())
   }
 
   private var spacePages: some View {
@@ -442,19 +412,6 @@ struct TabSidebarView: View {
 
   private var footer: some View {
     VStack(spacing: 7) {
-      HStack(spacing: 4) {
-        Button(action: runtime.showHistory) {
-          Image(systemName: "clock.arrow.circlepath")
-        }.help("History")
-        Button(action: runtime.showDownloads) {
-          Image(systemName: "arrow.down.circle")
-        }.help("Downloads")
-        Spacer()
-      }
-      .buttonStyle(.plain)
-      .font(.system(size: 15))
-      .padding(.horizontal, 8)
-
       HStack(spacing: 0) {
         let spaces = workspace.spaces
         let selectedIndex = spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
@@ -495,7 +452,6 @@ struct TabSidebarView: View {
     .padding(.horizontal, 12)
     .padding(.top, 9)
     .padding(.bottom, 11)
-    .background(.regularMaterial)
   }
 
   private func promptRename(_ space: BrowserSpace) {

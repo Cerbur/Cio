@@ -78,8 +78,8 @@ final class ApplicationRuntime: ObservableObject {
     var id: String { rawValue }
   }
 
-  /// The native sheet route keeps the stable Chromium host mounted while an
-  /// internal library is visible.
+  /// The selected internal library is presented in the main window while the
+  /// stable Chromium host remains mounted behind it.
   @Published var presentedInternalPanel: InternalBrowserPanel?
 
   @Published private(set) var cefStatus: CEFStatus = .notInitialized

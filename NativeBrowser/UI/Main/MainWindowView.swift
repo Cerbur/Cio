@@ -12,15 +12,14 @@ struct MainWindowView: View {
 
   var body: some View {
     NativeBrowserShellRepresentable(runtime: runtime)
-      .ignoresSafeArea(.container, edges: .top)
+      .padding(.horizontal, 10)
+      .padding(.bottom, 10)
+      .padding(.top, 4)
+      .background {
+        GlassBackdrop()
+          .ignoresSafeArea()
+      }
       .frame(minWidth: 900, minHeight: 500)
       .onAppear { runtime.noteMainWindowAppeared() }
-      .sheet(item: $runtime.presentedInternalPanel) { panel in
-        BrowserLibrarySheet(
-          panel: panel,
-          history: runtime.historyService,
-          downloads: runtime.downloadManager,
-          workspace: runtime.workspaceStore)
-      }
   }
 }

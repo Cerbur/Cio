@@ -10,6 +10,40 @@ import AppKit
 import Combine
 import SwiftUI
 
+private final class SeamlessSplitView: NSSplitView {
+  override func drawDivider(in rect: NSRect) {}
+}
+
+private struct SidebarToolbarIcon: View {
+  var body: some View {
+    Image(systemName: "sidebar.left")
+      .font(.system(size: 15, weight: .medium))
+      .frame(width: 36, height: 36)
+      .background(.regularMaterial, in: Circle())
+      .overlay {
+        Circle().strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.5)
+      }
+  }
+}
+
+private final class SidebarToolbarView: NSHostingView<SidebarToolbarIcon> {
+  var onActivate: (() -> Void)?
+
+  override func mouseDown(with event: NSEvent) {
+    onActivate?()
+  }
+
+  override var acceptsFirstResponder: Bool { true }
+
+  override func keyDown(with event: NSEvent) {
+    if event.keyCode == 36 || event.keyCode == 49 {
+      onActivate?()
+    } else {
+      super.keyDown(with: event)
+    }
+  }
+}
+
 struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
   let runtime: ApplicationRuntime
 
@@ -31,29 +65,34 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     static let forward = NSToolbarItem.Identifier("cio.forward")
     static let reload = NSToolbarItem.Identifier("cio.reload")
     static let address = NSToolbarItem.Identifier("cio.address")
-    static let trackingSeparator = NSToolbarItem.Identifier("cio.sidebar-tracking-separator")
+    static let leadingSpacer = NSToolbarItem.Identifier("cio.sidebar-leading-spacer")
   }
 
   private let runtime: ApplicationRuntime
   private let workspace: BrowserWorkspaceStore
   private let sidebarChromeLayout = SidebarChromeLayout()
+  private let railItem: NSSplitViewItem
   private let sidebarItem: NSSplitViewItem
   private let browserItem: NSSplitViewItem
 
   private var toolbar: NSToolbar?
   private weak var showSidebarToolbarItem: NSToolbarItem?
-  private weak var leadingFlexibleSpaceToolbarItem: NSToolbarItem?
-  private weak var trackingSeparatorToolbarItem: NSToolbarItem?
-  private weak var collapsedToggleNavSpacerItem: NSToolbarItem?
-  private weak var navAddressSpacerItem: NSToolbarItem?
+  private var sidebarButton: NSView?
+  private var leadingSpacerToolbarItem: NSToolbarItem?
+  private var leadingSpacerWidth: CGFloat = 0
+  private var browserFrameObservation: AnyCancellable?
   private weak var backToolbarItem: NSToolbarItem?
   private weak var forwardToolbarItem: NSToolbarItem?
   private weak var reloadToolbarItem: NSToolbarItem?
   private var workspaceObservation: AnyCancellable?
+  private var panelObservation: AnyCancellable?
+  private var sidebarWasCollapsedBeforeLibrary = false
+  private var wasShowingLibrary = false
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
   private var sidebarCollapseObservation: NSKeyValueObservation?
   private var didRestoreSidebarWidth = false
+  private var expandedSidebarWidth = BrowserLayout.sidebarDefaultWidth
 
   init(runtime: ApplicationRuntime) {
     self.runtime = runtime
@@ -61,19 +100,30 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
     let sidebarRootView = AnyView(
       TabSidebarView(workspace: runtime.workspaceStore)
-        .environmentObject(runtime)
         .environmentObject(sidebarChromeLayout)
         .frame(maxHeight: .infinity))
     let sidebarHostingController = NSHostingController(rootView: sidebarRootView)
+    sidebarHostingController.view.wantsLayer = true
+    sidebarHostingController.view.layer?.cornerRadius = 18
+    sidebarHostingController.view.layer?.maskedCorners = [
+      .layerMinXMinYCorner, .layerMinXMaxYCorner,
+    ]
+    sidebarHostingController.view.layer?.masksToBounds = true
+    let railHostingController = NSHostingController(rootView: NavigationRail(runtime: runtime))
     let browserHostingController = NSHostingController(
-      rootView: BrowserShellContentView(workspace: runtime.workspaceStore))
+      rootView: BrowserShellContentView(runtime: runtime, workspace: runtime.workspaceStore))
 
-    let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHostingController)
+    let railItem = NSSplitViewItem(viewController: railHostingController)
+    railItem.minimumThickness = BrowserLayout.railWidth
+    railItem.maximumThickness = BrowserLayout.railWidth
+    railItem.canCollapse = false
+    self.railItem = railItem
+
+    let sidebarItem = NSSplitViewItem(viewController: sidebarHostingController)
     sidebarItem.canCollapse = true
     sidebarItem.canCollapseFromWindowResize = false
     sidebarItem.minimumThickness = BrowserLayout.sidebarMinimumWidth
     sidebarItem.maximumThickness = BrowserLayout.sidebarMaximumWidth
-    sidebarItem.allowsFullHeightLayout = true
     sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
     self.sidebarItem = sidebarItem
 
@@ -82,12 +132,23 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
     super.init(nibName: nil, bundle: nil)
 
+    splitView = SeamlessSplitView()
     splitView.isVertical = true
     sidebarChromeLayout.splitView = splitView
-    sidebarChromeLayout.shellController = self
     splitView.dividerStyle = .thin
+    splitView.wantsLayer = true
+    splitView.layer?.cornerRadius = 18
+    splitView.layer?.masksToBounds = true
+    addSplitViewItem(railItem)
     addSplitViewItem(sidebarItem)
     addSplitViewItem(browserItem)
+    browserHostingController.view.postsFrameChangedNotifications = true
+    browserFrameObservation = NotificationCenter.default.publisher(
+      for: NSView.frameDidChangeNotification,
+      object: browserHostingController.view
+    ).sink { [weak self] _ in
+      MainActor.assumeIsolated { self?.updateSidebarButtonPosition() }
+    }
 
   }
 
@@ -100,6 +161,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     super.viewDidLoad()
     observeSidebarCollapse()
     observeWorkspace()
+    observePanelSelection()
     bindSelectedSession(workspace.selectedSession)
   }
 
@@ -125,9 +187,11 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
         defaults.set(true, forKey: BrowserLayout.sidebarWidthMigrationKey)
       }
       let desired = saved > 0 ? CGFloat(saved) : BrowserLayout.sidebarDefaultWidth
+      expandedSidebarWidth = min(max(desired, BrowserLayout.sidebarMinimumWidth),
+                                 BrowserLayout.sidebarMaximumWidth)
       splitView.setPosition(
-        min(max(desired, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth),
-        ofDividerAt: 0)
+        BrowserLayout.railWidth + expandedSidebarWidth,
+        ofDividerAt: 1)
     }
     installToolbarIfNeeded()
     updateSidebarChromeLayout()
@@ -136,17 +200,44 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   override func viewDidLayout() {
     super.viewDidLayout()
     updateSidebarChromeLayout()
+    updateSidebarButtonPosition()
   }
 
-  private func topChromeOverlap(in window: NSWindow) -> CGFloat {
-    guard let contentView = window.contentView else { return 0 }
-    let contentFrame = contentView.convert(contentView.bounds, to: nil)
-    return max(0, contentFrame.maxY - window.contentLayoutRect.maxY)
+  override func splitView(
+    _ splitView: NSSplitView,
+    shouldHideDividerAt dividerIndex: Int
+  ) -> Bool {
+    dividerIndex <= 1 || super.splitView(splitView, shouldHideDividerAt: dividerIndex)
   }
 
   private func updateSidebarChromeLayout() {
-    guard let window = view.window else { return }
-    sidebarChromeLayout.update(topInset: topChromeOverlap(in: window))
+    sidebarChromeLayout.update(topInset: 0)
+  }
+
+  private func observePanelSelection() {
+    panelObservation = runtime.$presentedInternalPanel
+      .receive(on: RunLoop.main)
+      .sink { [weak self] panel in
+        MainActor.assumeIsolated {
+          self?.showSection(panel)
+        }
+      }
+  }
+
+  private func showSection(_ panel: ApplicationRuntime.InternalBrowserPanel?) {
+    if panel != nil {
+      if !wasShowingLibrary {
+        sidebarWasCollapsedBeforeLibrary = sidebarItem.isCollapsed
+        if !sidebarItem.isCollapsed { toggleSpaceSidebar() }
+      }
+      wasShowingLibrary = true
+    } else if wasShowingLibrary {
+      wasShowingLibrary = false
+      if !sidebarWasCollapsedBeforeLibrary && sidebarItem.isCollapsed {
+        toggleSpaceSidebar()
+      }
+    }
+    applyToolbarLayout(forSidebarCollapsed: sidebarItem.isCollapsed)
   }
 
   private func installToolbarIfNeeded() {
@@ -163,6 +254,8 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     if !window.styleMask.contains(.fullSizeContentView) {
       window.styleMask.insert(.fullSizeContentView)
     }
+    window.isOpaque = false
+    window.backgroundColor = .clear
     window.titlebarAppearsTransparent = true
     window.toolbarStyle = .unified
     if window.toolbar !== toolbar {
@@ -171,6 +264,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     captureToolbarPresentationItems()
     bindSelectedSession(workspace.selectedSession)
     applyToolbarLayout(forSidebarCollapsed: sidebarItem.isCollapsed)
+    DispatchQueue.main.async { [weak self] in self?.updateSidebarButtonPosition() }
   }
 
   private func observeSidebarCollapse() {
@@ -269,186 +363,61 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     guard let toolbar else { return }
     let items = toolbar.items
     showSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.showSidebar }
-    leadingFlexibleSpaceToolbarItem = items.first {
-      $0.itemIdentifier == .flexibleSpace
-    }
-    trackingSeparatorToolbarItem = items.first {
-      $0.itemIdentifier == ToolbarID.trackingSeparator
-    }
+    leadingSpacerToolbarItem = items.first { $0.itemIdentifier == ToolbarID.leadingSpacer }
     backToolbarItem = items.first { $0.itemIdentifier == ToolbarID.back }
     forwardToolbarItem = items.first { $0.itemIdentifier == ToolbarID.forward }
     reloadToolbarItem = items.first { $0.itemIdentifier == ToolbarID.reload }
-    collapsedToggleNavSpacerItem = sidebarItem.isCollapsed
-      ? toolbarItem(immediatelyAfter: ToolbarID.showSidebar, withIdentifier: .space, in: toolbar)
-      : nil
-    navAddressSpacerItem = toolbarItem(
-      immediatelyAfter: ToolbarID.reload,
-      withIdentifier: .space,
-      in: toolbar)
-  }
-
-  private func toolbarItem(
-    immediatelyAfter anchorIdentifier: NSToolbarItem.Identifier,
-    withIdentifier expectedIdentifier: NSToolbarItem.Identifier,
-    in toolbar: NSToolbar
-  ) -> NSToolbarItem? {
-    let items = toolbar.items
-    guard let anchorIndex = items.firstIndex(where: {
-      $0.itemIdentifier == anchorIdentifier
-    }) else { return nil }
-    let followingIndex = items.index(after: anchorIndex)
-    guard followingIndex < items.endIndex else { return nil }
-    let item = items[followingIndex]
-    return item.itemIdentifier == expectedIdentifier ? item : nil
-  }
-
-  private var expandedToolbarItemIdentifiers: [NSToolbarItem.Identifier] {
-    [
-      .flexibleSpace,
-      ToolbarID.trackingSeparator,
-      ToolbarID.back,
-      ToolbarID.forward,
-      ToolbarID.reload,
-      .space,
-      ToolbarID.address,
-    ]
-  }
-
-  private var collapsedToolbarItemIdentifiers: [NSToolbarItem.Identifier] {
-    [
-      ToolbarID.showSidebar,
-      .space,
-      ToolbarID.back,
-      ToolbarID.forward,
-      ToolbarID.reload,
-      .space,
-      ToolbarID.address,
-    ]
   }
 
   private func applyToolbarLayout(forSidebarCollapsed isCollapsed: Bool) {
-    guard let toolbar else { return }
-
-    let expectedIdentifiers = isCollapsed
-      ? collapsedToolbarItemIdentifiers
-      : expandedToolbarItemIdentifiers
-    if toolbar.items.map(\.itemIdentifier) != expectedIdentifiers {
-      if isCollapsed {
-        applyCollapsedToolbarLayout(in: toolbar)
-      } else {
-        applyExpandedToolbarLayout(in: toolbar)
-      }
-    }
-
     captureToolbarPresentationItems()
-    assert(
-      toolbar.items.map(\.itemIdentifier) == expectedIdentifiers,
-      "Toolbar item order did not reconcile to the requested sidebar layout")
+    let title = isCollapsed ? "Show Sidebar" : "Hide Sidebar"
+    showSidebarToolbarItem?.label = title
+    showSidebarToolbarItem?.paletteLabel = title
+    showSidebarToolbarItem?.toolTip = title
+    sidebarButton?.toolTip = title
+    sidebarButton?.setAccessibilityLabel(title)
   }
 
-  private func applyCollapsedToolbarLayout(in toolbar: NSToolbar) {
-    removeExpandedToolbarSection(from: toolbar)
-    ensureToolbarItem(ToolbarID.showSidebar, at: 0, in: toolbar)
-    ensureCollapsedToggleNavSpacer(in: toolbar)
+  private func insertLeadingSpacer() {
+    guard let toolbar,
+          !toolbar.items.contains(where: { $0.itemIdentifier == ToolbarID.leadingSpacer })
+    else { return }
+    toolbar.insertItem(withItemIdentifier: ToolbarID.leadingSpacer, at: 0)
+    captureToolbarPresentationItems()
+    updateSidebarButtonPosition()
   }
 
-  private func applyExpandedToolbarLayout(in toolbar: NSToolbar) {
-    removeCollapsedLeadingItems(from: toolbar)
-    removeExpandedToolbarSection(from: toolbar)
-
-    let navigationIndex = toolbar.items.firstIndex {
-      $0.itemIdentifier == ToolbarID.back
-    } ?? toolbar.items.endIndex
-    let expandedSection: [NSToolbarItem.Identifier] = [
-      .flexibleSpace,
-      ToolbarID.trackingSeparator,
-    ]
-    for (offset, identifier) in expandedSection.enumerated() {
-      toolbar.insertItem(withItemIdentifier: identifier, at: navigationIndex + offset)
-    }
+  private func removeLeadingSpacer() {
+    guard let toolbar,
+          let index = toolbar.items.firstIndex(where: {
+            $0.itemIdentifier == ToolbarID.leadingSpacer
+          })
+    else { return }
+    toolbar.removeItem(at: index)
+    leadingSpacerWidth = 0
+    leadingSpacerToolbarItem = nil
   }
 
-  private func removeExpandedToolbarSection(from toolbar: NSToolbar) {
-    removeToolbarItems(
-      withIdentifiers: [
-        .flexibleSpace,
-        ToolbarID.trackingSeparator,
-      ],
-      from: toolbar)
-    leadingFlexibleSpaceToolbarItem = nil
-    trackingSeparatorToolbarItem = nil
-  }
+  private func updateSidebarButtonPosition() {
+    guard let window = view.window,
+          let button = sidebarButton,
+          let spacer = leadingSpacerToolbarItem,
+          let zoomButton = window.standardWindowButton(.zoomButton)
+    else { return }
 
-  private func removeToolbarItems(
-    withIdentifiers identifiers: Set<NSToolbarItem.Identifier>,
-    from toolbar: NSToolbar
-  ) {
-    let indices = toolbar.items.enumerated().compactMap { index, item in
-      identifiers.contains(item.itemIdentifier) ? index : nil
-    }
-    for index in indices.reversed() {
-      toolbar.removeItem(at: index)
-    }
-  }
-
-  private func ensureToolbarItem(
-    _ identifier: NSToolbarItem.Identifier,
-    at targetIndex: Int,
-    in toolbar: NSToolbar
-  ) {
-    let indices = toolbar.items.enumerated().compactMap { index, item in
-      item.itemIdentifier == identifier ? index : nil
-    }
-    if indices.count == 1, indices[0] == targetIndex { return }
-
-    for index in indices.reversed() {
-      toolbar.removeItem(at: index)
-    }
-    if identifier == ToolbarID.showSidebar {
-      showSidebarToolbarItem = nil
-    }
-    toolbar.insertItem(withItemIdentifier: identifier, at: min(targetIndex, toolbar.items.count))
-  }
-
-  private func ensureCollapsedToggleNavSpacer(in toolbar: NSToolbar) {
-    guard let showIndex = toolbar.items.firstIndex(where: {
-      $0.itemIdentifier == ToolbarID.showSidebar
-    }) else { return }
-
-    let spacerIndex = showIndex + 1
-    if spacerIndex < toolbar.items.count,
-       toolbar.items[spacerIndex].itemIdentifier == .space
-    {
-      collapsedToggleNavSpacerItem = toolbar.items[spacerIndex]
-      return
-    }
-
-    toolbar.insertItem(withItemIdentifier: .space, at: spacerIndex)
-    collapsedToggleNavSpacerItem = toolbar.items[spacerIndex]
-  }
-
-  private func removeCollapsedLeadingItems(from toolbar: NSToolbar) {
-    var indices: [Int] = []
-    if let spacer = collapsedToggleNavSpacerItem,
-       let spacerIndex = toolbar.items.firstIndex(where: { $0 === spacer })
-    {
-      indices.append(spacerIndex)
-    } else if let showIndex = toolbar.items.firstIndex(where: {
-      $0.itemIdentifier == ToolbarID.showSidebar
-    }), showIndex + 1 < toolbar.items.count,
-      toolbar.items[showIndex + 1].itemIdentifier == .space
-    {
-      indices.append(showIndex + 1)
-    }
-
-    indices.append(contentsOf: toolbar.items.enumerated().compactMap { index, item in
-      item.itemIdentifier == ToolbarID.showSidebar ? index : nil
-    })
-    for index in Set(indices).sorted(by: >) {
-      toolbar.removeItem(at: index)
-    }
-    showSidebarToolbarItem = nil
-    collapsedToggleNavSpacerItem = nil
+    let browserLeft = browserItem.viewController.view.convert(.zero, to: nil).x
+    let trafficLightsRight = zoomButton.convert(
+      NSPoint(x: zoomButton.bounds.maxX, y: 0), to: nil).x
+    let buttonLeft = button.convert(.zero, to: nil).x
+    let targetLeft = max(trafficLightsRight + 10,
+                         browserLeft - button.bounds.width - 10)
+    let nextWidth = max(0, leadingSpacerWidth + targetLeft - buttonLeft)
+    guard abs(nextWidth - leadingSpacerWidth) > 0.5 else { return }
+    leadingSpacerWidth = nextWidth
+    spacer.minSize = NSSize(width: nextWidth, height: 1)
+    spacer.maxSize = NSSize(width: nextWidth, height: 1)
+    spacer.view?.setFrameSize(NSSize(width: nextWidth, height: 1))
   }
 
   private func makeButtonItem(
@@ -504,8 +473,9 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     [
-      .flexibleSpace,
-      ToolbarID.trackingSeparator,
+      ToolbarID.leadingSpacer,
+      ToolbarID.showSidebar,
+      .space,
       ToolbarID.back,
       ToolbarID.forward,
       ToolbarID.reload,
@@ -515,7 +485,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    toolbarDefaultItemIdentifiers(toolbar) + [ToolbarID.showSidebar]
+    toolbarDefaultItemIdentifiers(toolbar)
   }
 
   func toolbar(
@@ -524,20 +494,32 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     willBeInsertedIntoToolbar flag: Bool
   ) -> NSToolbarItem? {
     switch itemIdentifier {
-    case ToolbarID.showSidebar:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "Show Sidebar",
-        symbol: "sidebar.left",
-        action: #selector(toggleSidebarAction(_:)))
-      showSidebarToolbarItem = item
+    case ToolbarID.leadingSpacer:
+      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+      item.isBordered = false
+      item.view = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: 1))
+      item.minSize = NSSize(width: 0, height: 1)
+      item.maxSize = NSSize(width: 0, height: 1)
+      leadingSpacerToolbarItem = item
       return item
-    case ToolbarID.trackingSeparator:
-      let item = NSTrackingSeparatorToolbarItem(
-        identifier: itemIdentifier,
-        splitView: splitView,
-        dividerIndex: 0)
-      trackingSeparatorToolbarItem = item
+    case ToolbarID.showSidebar:
+      let title = sidebarItem.isCollapsed ? "Show Sidebar" : "Hide Sidebar"
+      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+      item.label = title
+      item.paletteLabel = title
+      item.toolTip = title
+      item.isBordered = false
+      let button = SidebarToolbarView(rootView: SidebarToolbarIcon())
+      button.frame = NSRect(x: 0, y: 0, width: 36, height: 36)
+      button.toolTip = title
+      button.setAccessibilityRole(.button)
+      button.setAccessibilityLabel(title)
+      button.onActivate = { [weak self] in self?.handleSidebarToggle() }
+      item.view = button
+      item.minSize = button.frame.size
+      item.maxSize = button.frame.size
+      sidebarButton = button
+      showSidebarToolbarItem = item
       return item
     case ToolbarID.back:
       let item = makeButtonItem(
@@ -574,8 +556,42 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     }
   }
 
-  @objc private func toggleSidebarAction(_ sender: NSToolbarItem) {
-    super.toggleSidebar(sender)
+  private func handleSidebarToggle() {
+    if runtime.presentedInternalPanel != nil {
+      runtime.presentedInternalPanel = nil
+      if sidebarWasCollapsedBeforeLibrary { toggleSpaceSidebar() }
+      return
+    }
+    toggleSpaceSidebar()
+  }
+
+  func toggleSpaceSidebar() {
+    if sidebarItem.isCollapsed {
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.28
+        insertLeadingSpacer()
+        sidebarItem.animator().isCollapsed = false
+      }
+      let width = expandedSidebarWidth
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.splitView.setPosition(
+          BrowserLayout.railWidth + self.splitView.dividerThickness + width,
+          ofDividerAt: 1)
+      }
+    } else {
+      expandedSidebarWidth = sidebarItem.viewController.view.frame.width
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.28
+        sidebarItem.animator().isCollapsed = true
+      } completionHandler: { [weak self] in
+        guard let self, self.sidebarItem.isCollapsed else { return }
+        NSAnimationContext.runAnimationGroup { context in
+          context.duration = 0.16
+          self.removeLeadingSpacer()
+        }
+      }
+    }
   }
 
   @objc private func goBack(_ sender: NSToolbarItem) {
@@ -592,6 +608,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 }
 
 private struct BrowserShellContentView: View {
+  @ObservedObject var runtime: ApplicationRuntime
   @ObservedObject var workspace: BrowserWorkspaceStore
 
   var body: some View {
@@ -599,7 +616,18 @@ private struct BrowserShellContentView: View {
       BrowserSurfaceView(manager: workspace.sessionManager)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-      if let session = workspace.selectedSession, session.rendererCrashed {
+      if let panel = runtime.presentedInternalPanel {
+        BrowserLibraryView(
+          panel: panel,
+          history: runtime.historyService,
+          downloads: runtime.downloadManager,
+          workspace: workspace,
+          onClose: { runtime.presentedInternalPanel = nil })
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+
+      if runtime.presentedInternalPanel == nil,
+         let session = workspace.selectedSession, session.rendererCrashed {
         VStack(spacing: 12) {
           Image(systemName: "exclamationmark.triangle")
             .font(.system(size: 28))
@@ -625,6 +653,58 @@ private struct BrowserShellContentView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .windowBackgroundColor))
+  }
+}
+
+private struct NavigationRail: View {
+  @ObservedObject var runtime: ApplicationRuntime
+
+  var body: some View {
+    VStack(spacing: 0) {
+      VStack(spacing: 2) {
+        sectionButton("Space", symbol: "house.fill", panel: nil)
+        sectionButton("History", symbol: "clock.arrow.circlepath", panel: .history)
+        sectionButton("Downloads", symbol: "arrow.down.circle", panel: .downloads)
+      }
+      .padding(4)
+      .browserChromeGlassSurface(in: Capsule())
+      Spacer(minLength: 0)
+    }
+    .padding(.top, 14)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color.clear)
+  }
+
+  private func sectionButton(
+    _ title: String,
+    symbol: String,
+    panel: ApplicationRuntime.InternalBrowserPanel?
+  ) -> some View {
+    let isSelected = runtime.presentedInternalPanel == panel
+    return Button {
+      switch panel {
+      case .history: runtime.showHistory()
+      case .downloads: runtime.showDownloads()
+      case nil: runtime.presentedInternalPanel = nil
+      }
+    } label: {
+      Image(systemName: symbol)
+        .font(.system(size: 19, weight: isSelected ? .semibold : .regular))
+        .frame(width: 48, height: 48)
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+    .background {
+      if isSelected {
+        Capsule()
+          .fill(Color.primary.opacity(0.11))
+      }
+    }
+    .help(title)
+    .accessibilityLabel(title)
+    .accessibilityIdentifier("browser-section-\(panel?.rawValue ?? "space")")
+    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
   }
 }
 
