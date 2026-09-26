@@ -14,36 +14,6 @@ private final class SeamlessSplitView: NSSplitView {
   override func drawDivider(in rect: NSRect) {}
 }
 
-private struct SidebarToolbarIcon: View {
-  var body: some View {
-    Image(systemName: "sidebar.left")
-      .font(.system(size: 15, weight: .medium))
-      .frame(width: 36, height: 36)
-      .background(.regularMaterial, in: Circle())
-      .overlay {
-        Circle().strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.5)
-      }
-  }
-}
-
-private final class SidebarToolbarView: NSHostingView<SidebarToolbarIcon> {
-  var onActivate: (() -> Void)?
-
-  override func mouseDown(with event: NSEvent) {
-    onActivate?()
-  }
-
-  override var acceptsFirstResponder: Bool { true }
-
-  override func keyDown(with event: NSEvent) {
-    if event.keyCode == 36 || event.keyCode == 49 {
-      onActivate?()
-    } else {
-      super.keyDown(with: event)
-    }
-  }
-}
-
 struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
   let runtime: ApplicationRuntime
 
@@ -77,7 +47,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   private var toolbar: NSToolbar?
   private weak var showSidebarToolbarItem: NSToolbarItem?
-  private var sidebarButton: NSView?
+  private var sidebarButton: NSButton?
   private var leadingSpacerToolbarItem: NSToolbarItem?
   private var leadingSpacerWidth: CGFloat = 0
   private var browserFrameObservation: AnyCancellable?
@@ -508,13 +478,21 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       item.label = title
       item.paletteLabel = title
       item.toolTip = title
-      item.isBordered = false
-      let button = SidebarToolbarView(rootView: SidebarToolbarIcon())
-      button.frame = NSRect(x: 0, y: 0, width: 36, height: 36)
+      item.isBordered = true
+      let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+      button.bezelStyle = .glass
+      button.title = ""
+      button.image = toolbarImage(named: "sidebar.left", description: title)
+      button.imagePosition = .imageOnly
+      button.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        button.widthAnchor.constraint(equalToConstant: 36),
+        button.heightAnchor.constraint(equalToConstant: 36),
+      ])
       button.toolTip = title
-      button.setAccessibilityRole(.button)
       button.setAccessibilityLabel(title)
-      button.onActivate = { [weak self] in self?.handleSidebarToggle() }
+      button.target = self
+      button.action = #selector(handleSidebarToggle(_:))
       item.view = button
       item.minSize = button.frame.size
       item.maxSize = button.frame.size
@@ -556,7 +534,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     }
   }
 
-  private func handleSidebarToggle() {
+  @objc private func handleSidebarToggle(_ sender: NSButton) {
     if runtime.presentedInternalPanel != nil {
       runtime.presentedInternalPanel = nil
       if sidebarWasCollapsedBeforeLibrary { toggleSpaceSidebar() }

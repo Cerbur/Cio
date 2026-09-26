@@ -9,6 +9,11 @@
 import AppKit
 import SwiftUI
 
+enum SidebarTabAppearance {
+  static let faviconSize: CGFloat = 18
+  static let glassShape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+}
+
 @MainActor
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
@@ -270,7 +275,7 @@ struct TabSidebarView: View {
             .foregroundStyle(.tertiary)
             .frame(maxWidth: .infinity)
             .frame(height: topPinHeight)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+            .background(Color.primary.opacity(0.04), in: SidebarTabAppearance.glassShape)
             .help("Pin tabs for all Spaces")
           }
       }
@@ -396,9 +401,9 @@ struct TabSidebarView: View {
     if let tab = workspace.tab(withID: id) {
       HStack(spacing: 9) {
         TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
-                       size: style == .tile ? 26 : 18,
+                       size: SidebarTabAppearance.faviconSize,
                        fallbackLetter: style == .tile ? tab.pinFallbackLetter : nil)
-          .frame(width: style == .tile ? 26 : 20)
+          .frame(width: 20)
         if style == .row {
           Text(tab.displayTitle)
             .font(.callout.weight(.medium))
@@ -525,16 +530,17 @@ private struct PinnedTile: View {
       TabFaviconView(
         pageURL: tab.url,
         session: session,
-        size: 26,
+        size: SidebarTabAppearance.faviconSize,
         fallbackLetter: tab.pinFallbackLetter)
         .frame(maxWidth: .infinity)
         .frame(height: height)
-        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .contentShape(SidebarTabAppearance.glassShape)
     }
     .buttonStyle(.plain)
-    .browserChromeGlassSurface(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
     .overlay {
-      RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(selected ? 0.5 : 0.17), lineWidth: 1)
+      SidebarTabAppearance.glassShape.strokeBorder(
+        .white.opacity(selected ? 0.5 : 0.17), lineWidth: 1)
     }
     .shadow(color: .black.opacity(selected ? 0.18 : 0.06), radius: selected ? 13 : 5, y: selected ? 7 : 2)
     .scaleEffect(selected ? 1.02 : 1)
@@ -592,7 +598,7 @@ private struct SidebarTabRow: View {
     HStack(spacing: 0) {
       Button(action: onSelect) {
         HStack(spacing: 9) {
-          TabFaviconView(pageURL: tab.url, session: session, size: 18)
+          TabFaviconView(pageURL: tab.url, session: session, size: SidebarTabAppearance.faviconSize)
             .frame(width: 20)
           Text(tab.displayTitle)
             .font(.callout.weight(selected ? .semibold : .regular))
@@ -620,14 +626,14 @@ private struct SidebarTabRow: View {
     .padding(.trailing, 3)
     .background {
       if selected {
-        Color.clear.browserChromeGlassSurface(in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
       } else if showsHover {
-        RoundedRectangle(cornerRadius: 11).fill(.primary.opacity(0.06))
+        SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
       }
     }
     .overlay {
       if selected {
-        RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.35), lineWidth: 1)
+        SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
       }
     }
     .shadow(color: .black.opacity(selected ? 0.15 : 0), radius: 8, y: 4)
