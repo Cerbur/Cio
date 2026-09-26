@@ -341,13 +341,38 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(selectedRestore.selectedSpaceID, other)
     XCTAssertEqual(selectedRestore.selectedTabID, ids[0])
     XCTAssertTrue(collection.selectSpace(id: main))
+    XCTAssertEqual(collection.selectedGlobalTabID, ids[0])
+    XCTAssertEqual(collection.selectedTabID, ids[0])
+    XCTAssertTrue(collection.selectTab(id: ids[2]))
     XCTAssertNil(collection.selectedGlobalTabID)
-    XCTAssertEqual(collection.selectedTabID, collection.space(withID: main)?.selectedTabID)
+    XCTAssertEqual(collection.selectedTabID, ids[2])
 
     let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection))
     XCTAssertEqual(restored.globalPinnedTabs.map(\.title), ["B", "A"])
     XCTAssertEqual(restored.currentSpacePinnedTabs.map(\.title), ["C"])
     XCTAssertEqual(restored.currentTemporaryTabs.map(\.title), ["D"])
+  }
+
+  func testTopPinRemainsSelectedWhileSwitchingSpaces() {
+    var collection = WorkspaceCollection(initialTab: tab("Top"))
+    let first = collection.selectedSpaceID
+    let top = collection.selectedTabID!
+    XCTAssertTrue(collection.moveTab(top, to: .global))
+    let secondTab = tab("Second")
+    let second = collection.createSpace(initialTab: secondTab)!
+    XCTAssertTrue(collection.selectTab(id: top))
+
+    XCTAssertTrue(collection.selectSpace(id: first))
+    XCTAssertEqual(collection.selectedGlobalTabID, top)
+    XCTAssertEqual(collection.selectedTabID, top)
+    XCTAssertTrue(collection.selectSpace(id: second))
+    XCTAssertEqual(collection.selectedTabID, top)
+    XCTAssertEqual(collection.space(withID: second)?.selectedTabID, secondTab.id)
+
+    XCTAssertTrue(collection.selectTab(id: secondTab.id))
+    XCTAssertNil(collection.selectedGlobalTabID)
+    XCTAssertEqual(collection.selectedTabID, secondTab.id)
+    XCTAssertTrue(collection.validateInvariants())
   }
 
   func testMovingLastTabToAnotherSpaceKeepsSourceUsable() throws {

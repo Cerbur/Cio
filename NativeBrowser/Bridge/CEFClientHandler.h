@@ -60,6 +60,8 @@ class CEFClientHandler final : public CefClient,
   // CefDisplayHandler
   void OnTitleChange(CefRefPtr<CefBrowser> browser,
                      const CefString &title) override;
+  void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
+                          const std::vector<CefString> &icon_urls) override;
   void OnAddressChange(CefRefPtr<CefBrowser> browser,
                        CefRefPtr<CefFrame> frame,
                        const CefString &url) override;

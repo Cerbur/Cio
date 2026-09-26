@@ -2907,3 +2907,25 @@ cancel and accept responses and verifies the typed close invariants. A manual
 GUI pass remains useful for the actual red traffic-light/native-alert path,
 and real Chinese IME composition remains a human check when the automation
 environment cannot interact with the input method reliably.
+
+## 67. Current sidebar tab tiers and favicons
+
+Use these names in UI work: **top pin** is `WorkspaceCollection.TabTier.global`
+and stays visible across Spaces; **space pin** is `.space(spaceID)` and belongs
+to one Space; **temporary** is `.temporary(spaceID)`, the default destination
+for new tabs. The top pin grid is fixed. Space pin and temporary rows scroll
+with the selected Space. The Clear action removes temporary tabs except the
+active tab.
+
+All three tiers and the address bar render the same `TabFaviconView` component
+from `UI/Visual`. A selected top pin stays selected while switching Spaces;
+each Space retains its own selected tab until a tab in that Space is clicked.
+The toolbar Reload item's label stays fixed while its icon and help text change
+for page loading, avoiding toolbar width changes on tab selection.
+Selecting a tab does not recenter the Space's scroll view; its current scroll
+position stays put so the surrounding sidebar rows do not jump.
+`CEFClientHandler::OnFaviconURLChange` supplies preferred icon URLs for live
+browser sessions. Tabs restored without a CEF session use their page origin's
+`/favicon.ico`; the icon loader coalesces requests by URL and falls back to a
+letter in top pin or a globe in the other tiers when no image is available.
+Favicon data is presentation-only and is not part of session persistence.

@@ -26,6 +26,9 @@ NS_SWIFT_UI_ACTOR
 /// The Chromium browser object now exists and accepts commands.
 - (void)browserBridgeDidCreateBrowser:(BrowserBridge *)bridge;
 - (void)browserBridge:(BrowserBridge *)bridge didUpdateTitle:(NSString *)title;
+/// Candidate favicon URLs from Chromium's current page, in preference order.
+- (void)browserBridge:(BrowserBridge *)bridge
+    didUpdateFaviconURLs:(NSArray<NSString *> *)urls;
 - (void)browserBridge:(BrowserBridge *)bridge didUpdateURL:(NSString *)url;
 - (void)browserBridge:(BrowserBridge *)bridge
     didUpdateLoadingState:(BOOL)isLoading
@@ -186,6 +189,7 @@ NS_SWIFT_UI_ACTOR
 - (void)browserDidCreate;
 - (void)completeClose;
 - (void)browserDidUpdateTitle:(NSString *)title;
+- (void)browserDidUpdateFaviconURLs:(NSArray<NSString *> *)urls;
 - (void)browserDidUpdateURL:(NSString *)url;
 - (void)browserDidUpdateLoadingState:(BOOL)isLoading
                            canGoBack:(BOOL)canGoBack

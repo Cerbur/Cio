@@ -65,6 +65,21 @@ void CEFClientHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
   });
 }
 
+void CEFClientHandler::OnFaviconURLChange(
+    CefRefPtr<CefBrowser> browser,
+    const std::vector<CefString> &icon_urls) {
+  NSMutableArray<NSString *> *values =
+      [NSMutableArray arrayWithCapacity:icon_urls.size()];
+  for (const CefString &url : icon_urls) {
+    [values addObject:NSStringFromCefString(url)];
+  }
+  NSArray<NSString *> *urls = [values copy];
+  __weak BrowserBridge *bridge = bridge_;
+  OnMainThread(^{
+    [bridge browserDidUpdateFaviconURLs:urls];
+  });
+}
+
 void CEFClientHandler::OnAddressChange(CefRefPtr<CefBrowser> browser,
                                        CefRefPtr<CefFrame> frame,
                                        const CefString &url) {

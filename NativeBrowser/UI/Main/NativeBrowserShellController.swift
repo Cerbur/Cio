@@ -251,8 +251,10 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     reloadToolbarItem?.image = toolbarImage(
       named: isLoading ? "xmark" : "arrow.clockwise",
       description: isLoading ? "Stop" : "Reload")
-    reloadToolbarItem?.label = isLoading ? "Stop" : "Reload"
-    reloadToolbarItem?.paletteLabel = isLoading ? "Stop" : "Reload"
+    // Keep the item's measured width stable while a newly selected tab loads.
+    // Only its icon and help text need to change between Reload and Stop.
+    reloadToolbarItem?.label = "Reload"
+    reloadToolbarItem?.paletteLabel = "Reload"
     reloadToolbarItem?.toolTip = isLoading ? "Stop" : "Reload"
     reloadToolbarItem?.isEnabled = hasSession
   }
@@ -671,11 +673,11 @@ private struct ToolbarAddressFieldView: View {
 
   private func addressField(for session: BrowserSession) -> some View {
     HStack(spacing: 7) {
-      Image(systemName: "globe")
-        .font(.system(size: 14, weight: .regular))
-        .foregroundStyle(Color.secondary.opacity(0.88))
-        .frame(width: 14)
+      TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
+                     session: session, size: 16)
+        .frame(width: 16, height: 16)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
 
       AddressField(
         model: session.addressField,

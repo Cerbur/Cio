@@ -284,17 +284,18 @@ struct WorkspaceCollection: Equatable, Sendable {
     return true
   }
 
-  /// Selects an existing Space. Its own selected tab becomes effective
-  /// selection; the caller handles runtime focus and surface transition.
+  /// Selects an existing Space. A selected top pin stays effective across
+  /// Spaces; otherwise the destination Space's selected tab becomes effective.
+  /// The caller handles runtime focus and surface transition.
   @discardableResult
   mutating func selectSpace(id: UUID) -> Bool {
     guard spaces.contains(where: { $0.id == id }) else { return false }
     guard selectedSpaceID != id else { return false }
     selectedSpaceID = id
-    if let selectedTabID = space(withID: id)?.selectedTabID {
+    if selectedGlobalTabID == nil,
+      let selectedTabID = space(withID: id)?.selectedTabID {
       tabsByID[selectedTabID]?.lastActivatedAt = Date()
     }
-    selectedGlobalTabID = nil
     validateInvariants()
     return true
   }
@@ -582,6 +583,9 @@ struct WorkspaceCollection: Equatable, Sendable {
     return true
   }
 
+  /// Canonical sidebar names: top pin (`global`) stays across Spaces;
+  /// space pin (`space`) belongs to one Space; temporary (`temporary`) is the
+  /// default tier for new tabs and will later support idle expiration.
   enum TabTier: Equatable {
     case global
     case space(UUID)

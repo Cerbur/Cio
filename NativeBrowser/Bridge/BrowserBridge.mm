@@ -414,6 +414,10 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   [self.delegate browserBridge:self didUpdateTitle:title];
 }
 
+- (void)browserDidUpdateFaviconURLs:(NSArray<NSString *> *)urls {
+  [self.delegate browserBridge:self didUpdateFaviconURLs:urls];
+}
+
 - (void)browserDidUpdateURL:(NSString *)url {
   [self.delegate browserBridge:self didUpdateURL:url];
 }

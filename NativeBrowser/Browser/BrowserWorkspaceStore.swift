@@ -302,6 +302,18 @@ final class BrowserWorkspaceStore: ObservableObject {
     closeTab(id: id)
   }
 
+  /// Clears the temporary tier in one Space while preserving the tab that was
+  /// active when Clear was pressed. Each tab uses the normal close path, so a
+  /// page can still cancel its own beforeunload request.
+  func clearTemporaryTabs(in spaceID: UUID) {
+    guard !isTerminating, workspace.space(withID: spaceID) != nil else { return }
+    let activeTabID = selectedTabID
+    let ids = workspace.tabIDs(in: .temporary(spaceID))
+    for id in ids where id != activeTabID {
+      closeTab(id: id)
+    }
+  }
+
   /// Reopens the newest user-closed snapshot in its original Space and index.
   /// The tab and runtime identities are always new.
   @discardableResult

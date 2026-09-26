@@ -83,6 +83,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   @Published private(set) var title = ""
   @Published private(set) var url: URL?
+  /// Icon URLs reported by Chromium for this live page. Restored tabs without
+  /// a runtime use their page origin's /favicon.ico until activated.
+  @Published private(set) var faviconURLs: [URL] = []
   @Published private(set) var isLoading = false
   @Published private(set) var loadingProgress: Double = 0
   @Published private(set) var canGoBack = false
@@ -607,6 +610,15 @@ extension BrowserSession: BrowserBridgeDelegate {
     onTabMetadataChanged?(self)
   }
 
+  func browserBridge(_ bridge: BrowserBridge, didUpdateFaviconURLs urls: [String]) {
+    guard acceptsCallback(from: bridge) else { return }
+    let candidates = urls.compactMap(URL.init(string:)).filter {
+      $0.scheme == "https" || $0.scheme == "http"
+    }
+    guard faviconURLs != candidates else { return }
+    faviconURLs = candidates
+  }
+
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
     guard acceptsCallback(from: bridge) else { return }
     let value = URL(string: url)
@@ -619,6 +631,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     didReceiveMainFrameURL = true
     guard isFirstMainFrameURL || value != self.url else { return }
     self.url = value
+    faviconURLs = []
     mainFrameURLChangeCount += 1
     addressField.applyBrowserURL(value)
     // The session keeps the complete URL (the address field mirrors it); only
