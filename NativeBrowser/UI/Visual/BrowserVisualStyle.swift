@@ -13,10 +13,11 @@ import SwiftUI
 
 /// Shared geometry for the native AppKit sidebar and its SwiftUI content.
 enum BrowserLayout {
-  static let sidebarDefaultWidth: CGFloat = 288
-  static let sidebarMinimumWidth: CGFloat = 210
+  static let sidebarMinimumWidth: CGFloat = 182
+  static let sidebarDefaultWidth = sidebarMinimumWidth
   static let sidebarMaximumWidth: CGFloat = 480
   static let sidebarWidthPreferenceKey = "cio.sidebar.width"
+  static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
 }
 
 /// Ephemeral presentation state shared by the hover and focus surfaces. It

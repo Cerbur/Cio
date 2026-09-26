@@ -13,6 +13,7 @@ import SwiftUI
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
   weak var splitView: NSSplitView?
+  weak var shellController: NSSplitViewController?
 
   func update(topInset: CGFloat) {
     guard abs(self.topInset - topInset) > 0.5 else { return }
@@ -25,6 +26,10 @@ final class SidebarChromeLayout: ObservableObject {
     let width = min(max(x - splitOriginX + 5, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
     splitView.setPosition(width, ofDividerAt: 0)
     UserDefaults.standard.set(Double(width), forKey: BrowserLayout.sidebarWidthPreferenceKey)
+  }
+
+  func hideSidebar() {
+    shellController?.toggleSidebar(nil)
   }
 
 }
@@ -93,7 +98,7 @@ struct TabSidebarView: View {
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
-  private let topPinHeight: CGFloat = 54  // One and a half 36-point space tab rows.
+  private let topPinHeight: CGFloat = 40.5  // 75% of the former 54-point tiles.
 
   private func columns(for width: CGFloat) -> Int {
     width >= 365 ? 4 : (width >= 275 ? 3 : 2)
@@ -157,6 +162,11 @@ struct TabSidebarView: View {
           tabDragLabel(id, style: style)
         }
       }
+      .overlay(alignment: .topTrailing) {
+        titlebarControls
+          .padding(.top, 8)
+          .padding(.trailing, 8)
+      }
       .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
@@ -172,6 +182,29 @@ struct TabSidebarView: View {
 
   private var selectedSpaceIndex: Int {
     workspace.spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
+  }
+
+  private var titlebarControls: some View {
+    HStack(spacing: 0) {
+      Button {
+        workspace.createTab(url: nil)
+      } label: {
+        Image(systemName: "plus.square.on.square")
+          .frame(width: 43, height: 36)
+      }
+      .help("New Tab")
+      .accessibilityLabel("New Tab")
+
+      Button(action: chromeLayout.hideSidebar) {
+        Image(systemName: "sidebar.left")
+          .frame(width: 43, height: 36)
+      }
+      .help("Hide Sidebar")
+      .accessibilityLabel("Hide Sidebar")
+    }
+    .font(.system(size: 15, weight: .medium))
+    .buttonStyle(.plain)
+    .browserChromeGlassSurface(in: Capsule())
   }
 
   private var spacePages: some View {

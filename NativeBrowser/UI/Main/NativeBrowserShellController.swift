@@ -26,8 +26,6 @@ struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
 @MainActor
 final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelegate {
   private enum ToolbarID {
-    static let newTab = NSToolbarItem.Identifier("cio.new-tab")
-    static let hideSidebar = NSToolbarItem.Identifier("cio.hide-sidebar")
     static let showSidebar = NSToolbarItem.Identifier("cio.show-sidebar")
     static let back = NSToolbarItem.Identifier("cio.back")
     static let forward = NSToolbarItem.Identifier("cio.forward")
@@ -43,8 +41,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private let browserItem: NSSplitViewItem
 
   private var toolbar: NSToolbar?
-  private weak var newTabToolbarItem: NSToolbarItem?
-  private weak var hideSidebarToolbarItem: NSToolbarItem?
   private weak var showSidebarToolbarItem: NSToolbarItem?
   private weak var leadingFlexibleSpaceToolbarItem: NSToolbarItem?
   private weak var trackingSeparatorToolbarItem: NSToolbarItem?
@@ -88,6 +84,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
     splitView.isVertical = true
     sidebarChromeLayout.splitView = splitView
+    sidebarChromeLayout.shellController = self
     splitView.dividerStyle = .thin
     addSplitViewItem(sidebarItem)
     addSplitViewItem(browserItem)
@@ -117,7 +114,16 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     super.viewDidAppear()
     if !didRestoreSidebarWidth {
       didRestoreSidebarWidth = true
-      let saved = UserDefaults.standard.double(forKey: BrowserLayout.sidebarWidthPreferenceKey)
+      let defaults = UserDefaults.standard
+      var saved = defaults.double(forKey: BrowserLayout.sidebarWidthPreferenceKey)
+      if !defaults.bool(forKey: BrowserLayout.sidebarWidthMigrationKey) {
+        // A sidebar saved at the previous minimum should open at the new minimum.
+        if saved == 210 {
+          saved = Double(BrowserLayout.sidebarMinimumWidth)
+          defaults.set(saved, forKey: BrowserLayout.sidebarWidthPreferenceKey)
+        }
+        defaults.set(true, forKey: BrowserLayout.sidebarWidthMigrationKey)
+      }
       let desired = saved > 0 ? CGFloat(saved) : BrowserLayout.sidebarDefaultWidth
       splitView.setPosition(
         min(max(desired, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth),
@@ -262,8 +268,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private func captureToolbarPresentationItems() {
     guard let toolbar else { return }
     let items = toolbar.items
-    newTabToolbarItem = items.first { $0.itemIdentifier == ToolbarID.newTab }
-    hideSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.hideSidebar }
     showSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.showSidebar }
     leadingFlexibleSpaceToolbarItem = items.first {
       $0.itemIdentifier == .flexibleSpace
@@ -301,8 +305,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private var expandedToolbarItemIdentifiers: [NSToolbarItem.Identifier] {
     [
       .flexibleSpace,
-      ToolbarID.newTab,
-      ToolbarID.hideSidebar,
       ToolbarID.trackingSeparator,
       ToolbarID.back,
       ToolbarID.forward,
@@ -359,8 +361,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     } ?? toolbar.items.endIndex
     let expandedSection: [NSToolbarItem.Identifier] = [
       .flexibleSpace,
-      ToolbarID.newTab,
-      ToolbarID.hideSidebar,
       ToolbarID.trackingSeparator,
     ]
     for (offset, identifier) in expandedSection.enumerated() {
@@ -372,13 +372,9 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     removeToolbarItems(
       withIdentifiers: [
         .flexibleSpace,
-        ToolbarID.newTab,
-        ToolbarID.hideSidebar,
         ToolbarID.trackingSeparator,
       ],
       from: toolbar)
-    newTabToolbarItem = nil
-    hideSidebarToolbarItem = nil
     leadingFlexibleSpaceToolbarItem = nil
     trackingSeparatorToolbarItem = nil
   }
@@ -509,8 +505,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     [
       .flexibleSpace,
-      ToolbarID.newTab,
-      ToolbarID.hideSidebar,
       ToolbarID.trackingSeparator,
       ToolbarID.back,
       ToolbarID.forward,
@@ -530,22 +524,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     willBeInsertedIntoToolbar flag: Bool
   ) -> NSToolbarItem? {
     switch itemIdentifier {
-    case ToolbarID.newTab:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "New Tab",
-        symbol: "plus.square.on.square",
-        action: #selector(createTab(_:)))
-      newTabToolbarItem = item
-      return item
-    case ToolbarID.hideSidebar:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "Hide Sidebar",
-        symbol: "sidebar.left",
-        action: #selector(toggleSidebarAction(_:)))
-      hideSidebarToolbarItem = item
-      return item
     case ToolbarID.showSidebar:
       let item = makeButtonItem(
         identifier: itemIdentifier,
@@ -594,10 +572,6 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
       // AppKit creates the standard toggle-sidebar item itself.
       return nil
     }
-  }
-
-  @objc private func createTab(_ sender: NSToolbarItem) {
-    workspace.createTab(url: nil)
   }
 
   @objc private func toggleSidebarAction(_ sender: NSToolbarItem) {

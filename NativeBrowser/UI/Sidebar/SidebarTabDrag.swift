@@ -343,7 +343,7 @@ final class SidebarTabDrag {
     if style == Style(sourceTier) { return sourceSize }
     switch style {
     case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: 36)
-    case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 54)
+    case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 40.5)
     }
   }
 

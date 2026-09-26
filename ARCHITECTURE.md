@@ -2916,8 +2916,8 @@ and stays visible across Spaces. Space tab contains **space pin**
 (`.space(spaceID)`), which belongs to one Space, and **temporary**
 (`.temporary(spaceID)`), the default destination for new tabs. Space tab scrolls
 under a narrow, fading native material edge at the bottom of top pin; its scroll
-indicator is hidden. Top pin tiles are 54 points tall, 1.5 times the 36-point tab
-row height. The Clear action removes temporary tabs except the
+indicator is hidden. Top pin tiles are 40.5 points tall, 75% of their former
+54-point height. The Clear action removes temporary tabs except the
 active tab.
 
 All three tiers and the address bar render the same `TabFaviconView` component
