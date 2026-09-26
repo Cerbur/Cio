@@ -57,6 +57,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
   private var sidebarCollapseObservation: NSKeyValueObservation?
+  private var didRestoreSidebarWidth = false
 
   init(runtime: ApplicationRuntime) {
     self.runtime = runtime
@@ -74,8 +75,8 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHostingController)
     sidebarItem.canCollapse = true
     sidebarItem.canCollapseFromWindowResize = false
-    sidebarItem.minimumThickness = BrowserLayout.sidebarWidth
-    sidebarItem.maximumThickness = BrowserLayout.sidebarWidth
+    sidebarItem.minimumThickness = BrowserLayout.sidebarMinimumWidth
+    sidebarItem.maximumThickness = BrowserLayout.sidebarMaximumWidth
     sidebarItem.allowsFullHeightLayout = true
     sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
     self.sidebarItem = sidebarItem
@@ -86,6 +87,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     super.init(nibName: nil, bundle: nil)
 
     splitView.isVertical = true
+    sidebarChromeLayout.splitView = splitView
     splitView.dividerStyle = .thin
     addSplitViewItem(sidebarItem)
     addSplitViewItem(browserItem)
@@ -113,6 +115,14 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
 
   override func viewDidAppear() {
     super.viewDidAppear()
+    if !didRestoreSidebarWidth {
+      didRestoreSidebarWidth = true
+      let saved = UserDefaults.standard.double(forKey: BrowserLayout.sidebarWidthPreferenceKey)
+      let desired = saved > 0 ? CGFloat(saved) : BrowserLayout.sidebarDefaultWidth
+      splitView.setPosition(
+        min(max(desired, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth),
+        ofDividerAt: 0)
+    }
     installToolbarIfNeeded()
     updateSidebarChromeLayout()
   }

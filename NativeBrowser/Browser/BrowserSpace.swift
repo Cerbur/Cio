@@ -16,17 +16,20 @@ struct BrowserSpace: Identifiable, Equatable, Sendable {
   let id: UUID
   var name: String
   var tabIDs: [UUID]
+  var pinnedTabIDs: [UUID]
   var selectedTabID: UUID?
 
   init(
     id: UUID = UUID(),
     name: String,
     tabIDs: [UUID] = [],
+    pinnedTabIDs: [UUID] = [],
     selectedTabID: UUID? = nil
   ) {
     self.id = id
     self.name = name
     self.tabIDs = tabIDs
+    self.pinnedTabIDs = pinnedTabIDs
     self.selectedTabID = selectedTabID
   }
 }

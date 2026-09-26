@@ -94,6 +94,9 @@ final class BrowserWorkspaceStore: ObservableObject {
   var selectedTabID: UUID? { workspace.selectedTabID }
   var selectedTab: BrowserTab? { workspace.selectedTab }
   var tabs: [BrowserTab] { workspace.currentTabs }
+  var globalPinnedTabs: [BrowserTab] { workspace.globalPinnedTabs }
+  var spacePinnedTabs: [BrowserTab] { workspace.currentSpacePinnedTabs }
+  var temporaryTabs: [BrowserTab] { workspace.currentTemporaryTabs }
   var currentTabIDs: [UUID] { workspace.currentTabIDs }
   var allTabs: [BrowserTab] { workspace.allTabs }
   var allTabIDs: [UUID] { workspace.allTabIDs }
@@ -231,7 +234,8 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   func selectTab(id: UUID) {
-    guard workspace.spaceID(containing: id) == workspace.selectedSpaceID,
+    guard (workspace.globalPinnedTabIDs.contains(id)
+      || workspace.spaceID(containing: id) == workspace.selectedSpaceID),
       workspace.selectedTabID != id
     else { return }
 
@@ -243,6 +247,19 @@ final class BrowserWorkspaceStore: ObservableObject {
     }
     emit("tab:selected")
     AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
+  }
+
+  @discardableResult
+  func moveTab(_ id: UUID, to tier: WorkspaceCollection.TabTier, before targetID: UUID? = nil) -> Bool {
+    guard !isTerminating else { return false }
+    var moved = false
+    withSelectionTransition {
+      moved = workspace.moveTab(id, to: tier, before: targetID)
+      if moved, let selectedTab = workspace.selectedTab {
+        _ = ensureSession(for: selectedTab)
+      }
+    }
+    return moved
   }
 
   @discardableResult
@@ -480,7 +497,8 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// tab's Space, not the currently selected Space, determines ownership.
   private func openPopupInNewTab(url: String, from session: BrowserSession) {
     guard !isTerminating, !url.isEmpty, let target = URL(string: url),
-      let sourceSpaceID = workspace.spaceID(containing: session.tabID)
+      let sourceSpaceID = workspace.globalPinnedTabIDs.contains(session.tabID)
+        ? workspace.selectedSpaceID : workspace.spaceID(containing: session.tabID)
     else { return }
 
     let shouldSelect = workspace.selectedTabID == session.tabID

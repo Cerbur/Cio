@@ -2,30 +2,30 @@
 //  TabSidebarView.swift
 //  NativeBrowser
 //
-//  Milestone 5.1 sidebar: all Spaces at the top, then the selected Space's
-//  ordered tabs inside one continuous native sidebar material. The rows are
-//  value views and all lifecycle work goes through BrowserWorkspaceStore.
+//  Three durable tab tiers: workspace pins, Space pins and temporary tabs.
 //
 
 import AppKit
 import SwiftUI
 
-private enum SidebarLayout {
-  static let rowCornerRadius: CGFloat = 6
-  static let spaceRowHeight: CGFloat = 27
-  static let tabRowHeight: CGFloat = 32
-  static let closeHitTarget: CGFloat = 24
-  static let separatorOpacity: CGFloat = 0.09
-}
-
 @MainActor
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
+  weak var splitView: NSSplitView?
 
   func update(topInset: CGFloat) {
     guard abs(self.topInset - topInset) > 0.5 else { return }
     self.topInset = topInset
   }
+
+  func resizeSidebar(toWindowX x: CGFloat) {
+    guard let splitView else { return }
+    let splitOriginX = splitView.convert(.zero, to: nil).x
+    let width = min(max(x - splitOriginX + 5, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
+    splitView.setPosition(width, ofDividerAt: 0)
+    UserDefaults.standard.set(Double(width), forKey: BrowserLayout.sidebarWidthPreferenceKey)
+  }
+
 }
 
 struct TabSidebarView: View {
@@ -33,372 +33,479 @@ struct TabSidebarView: View {
   @EnvironmentObject private var runtime: ApplicationRuntime
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
 
+  private func columns(for width: CGFloat) -> Int {
+    width >= 365 ? 4 : (width >= 275 ? 3 : 2)
+  }
+
   var body: some View {
-    VStack(spacing: 0) {
-      ScrollViewReader { proxy in
-        ScrollView {
-          VStack(alignment: .leading, spacing: 0) {
-            SidebarSectionHeader {
-              workspace.createSpace()
-            } help: {
-              "New Space"
-            }
-            .padding(.bottom, 6)
+    GeometryReader { geometry in
+      VStack(spacing: 0) {
+        pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
+          .padding(.horizontal, 12)
+          .padding(.top, chromeLayout.topInset + 12)
+          .padding(.bottom, 12)
 
-            LazyVStack(spacing: 1) {
-              ForEach(workspace.spaces) { space in
-                SpaceRowView(
-                  space: space,
-                  isSelected: space.id == workspace.selectedSpaceID,
-                  workspace: workspace)
-                  .id("space-\(space.id.uuidString)")
+        Rectangle().fill(.primary.opacity(0.09)).frame(height: 0.5)
+          .padding(.horizontal, 14)
+
+        ScrollViewReader { proxy in
+          ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+              sectionTitle(workspace.selectedSpace?.name ?? "Space", symbol: "square.3.layers.3d", count: workspace.spacePinnedTabs.count)
+              tierRows(workspace.spacePinnedTabs, tier: .space(workspace.selectedSpaceID))
+
+              sectionTitle("Temporary", symbol: "clock.arrow.circlepath", count: workspace.temporaryTabs.count)
+              Label("Idle auto-close · coming soon", systemImage: "hourglass")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 10)
+              tierRows(workspace.temporaryTabs, tier: .temporary(workspace.selectedSpaceID))
+
+              Button {
+                _ = workspace.createTab()
+              } label: {
+                Label("New Tab", systemImage: "plus")
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.horizontal, 12)
+                  .frame(height: 34)
               }
-            }
-
-            Rectangle()
-              .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
-              .frame(height: 0.5)
-              .padding(.vertical, 8)
-
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-              Text("Tabs")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-              Spacer(minLength: 4)
-
-              Text("\(workspace.tabs.count)")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+              .buttonStyle(.plain)
+              .foregroundStyle(.secondary)
+              .help("Create a temporary tab")
             }
             .padding(.horizontal, 10)
-            .padding(.bottom, 5)
-
-            LazyVStack(spacing: 1) {
-              ForEach(workspace.tabs) { tab in
-                TabRowView(
-                  tab: tab,
-                  isSelected: tab.id == workspace.selectedTabID,
-                  onSelect: { workspace.selectTab(id: tab.id) },
-                  onClose: { workspace.closeTab(id: tab.id) })
-                  .id("tab-\(tab.id.uuidString)")
-              }
-            }
-            .padding(.horizontal, 3)
+            .padding(.top, 14)
+            .padding(.bottom, 18)
           }
-          .padding(.horizontal, 6)
-          .padding(.top, chromeLayout.topInset + 8)
-          .padding(.bottom, 12)
+          .onChange(of: workspace.selectedTabID) { _, id in
+            guard let id, !workspace.globalPinnedTabs.contains(where: { $0.id == id }) else { return }
+            withAnimation(.smooth(duration: 0.24)) { proxy.scrollTo(id, anchor: .center) }
+          }
         }
-        // Keep the sidebar content behind the transparent titlebar.
-        .ignoresSafeArea(.container, edges: .top)
         .frame(maxHeight: .infinity)
-        .onChange(of: workspace.selectedSpaceID) { _, id in
-          proxy.scrollTo("space-\(id.uuidString)", anchor: .center)
-        }
-        .onChange(of: workspace.selectedTabID) { _, id in
-          guard let id else { return }
-          proxy.scrollTo("tab-\(id.uuidString)", anchor: .center)
-        }
-      }
-      .frame(maxHeight: .infinity)
 
-      Rectangle()
-        .fill(Color.primary.opacity(SidebarLayout.separatorOpacity))
-        .frame(height: 0.5)
-
-      VStack(spacing: 2) {
-        SidebarUtilityButton(
-          title: "History",
-          systemImage: "clock",
-          action: runtime.showHistory)
-        SidebarUtilityButton(
-          title: "Downloads",
-          systemImage: "arrow.down.circle",
-          badge: runtime.downloadManager.activeDownloadCount,
-          action: runtime.showDownloads)
+        footer
       }
-      .padding(.horizontal, 10)
-      .padding(.top, 7)
-      .padding(.bottom, 11)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(.ultraThinMaterial)
+      .background(SpaceSwipeMonitor { step in
+        guard let index = workspace.spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) else { return }
+        let next = index + step
+        guard workspace.spaces.indices.contains(next) else { return }
+        withAnimation(.smooth(duration: 0.28)) {
+          workspace.selectSpace(id: workspace.spaces[next].id)
+        }
+      })
+      .overlay(alignment: .trailing) {
+        SidebarResizeHandle(layout: chromeLayout)
+          .frame(width: 10)
+          .accessibilityLabel("Resize Sidebar")
+      }
+      .ignoresSafeArea(.container, edges: .top)
     }
-    .frame(width: BrowserLayout.sidebarWidth)
-    .frame(maxHeight: .infinity)
   }
-}
 
-private struct SidebarUtilityButton: View {
-  let title: String
-  let systemImage: String
-  var badge: Int = 0
-  var iconTint: Color = .secondary
-  var labelWeight: Font.Weight = .regular
-  var helpText: String? = nil
-  let action: () -> Void
-  @StateObject private var interaction = BrowserInteractionState()
+  private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
+    let tileSide = (width - 24 - CGFloat(columns - 1) * 9) / CGFloat(columns)
+    return VStack(alignment: .leading, spacing: 9) {
+      HStack {
+        Text("PINNED")
+          .font(.system(size: 10, weight: .semibold, design: .rounded))
+          .tracking(1.2)
+          .foregroundStyle(.secondary)
+        Spacer()
+        Text("\(workspace.globalPinnedTabs.count)/16")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.tertiary)
+      }
+      .padding(.horizontal, 3)
 
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 9) {
-        Image(systemName: systemImage)
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(iconTint)
-          .frame(width: 16)
-        Text(title)
-          .font(.callout.weight(labelWeight))
-        Spacer(minLength: 4)
-        if badge > 0 {
-          Text("\(badge)")
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.secondary)
+      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: columns), spacing: 9) {
+        ForEach(workspace.globalPinnedTabs) { tab in
+          PinnedTile(tab: tab, selected: workspace.selectedTabID == tab.id, side: tileSide) {
+            workspace.selectTab(id: tab.id)
+          } onClose: {
+            workspace.closeTab(id: tab.id)
+          } onPinInSpace: {
+            withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
+          } onMakeTemporary: {
+            withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+          }
+          .draggable(tab.id.uuidString)
+          .dropDestination(for: String.self) { items, _ in
+            return move(items, to: .global, before: tab.id)
+          }
         }
       }
-      .padding(.horizontal, 8)
-      .frame(height: 28)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(SidebarUtilityButtonStyle(isHovered: interaction.isHovered))
-    .onHover { interaction.isHovered = $0 }
-    .help(helpText ?? title)
-    .accessibilityLabel(title)
-  }
-}
+      .animation(.smooth(duration: 0.28), value: workspace.globalPinnedTabs.map(\.id))
 
-private struct SidebarUtilityButtonStyle: ButtonStyle {
-  let isHovered: Bool
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .background(
-        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
-          .fill(
-            configuration.isPressed
-              ? Color.primary.opacity(0.13)
-              : (isHovered ? Color.primary.opacity(0.055) : Color.clear)
-          )
-      )
-      .contentShape(RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous))
-  }
-}
-
-private struct SidebarSectionHeader: View {
-  let action: () -> Void
-  let help: () -> String
-  @StateObject private var interaction = BrowserInteractionState()
-
-  var body: some View {
-    HStack(spacing: 8) {
-      Text("Spaces")
-        .font(.caption.weight(.medium))
-        .foregroundStyle(.secondary)
-
-      Spacer(minLength: 4)
-
-      Button(action: action) {
-        Image(systemName: "plus")
-          .font(.system(size: 11, weight: .semibold))
-          .frame(width: 24, height: 24)
+      if workspace.globalPinnedTabs.isEmpty {
+        Text("Drag tabs here to keep them in every Space")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity, minHeight: 58)
+          .background {
+            RoundedRectangle(cornerRadius: 17).strokeBorder(.primary.opacity(0.13), style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+          }
       }
-      .buttonStyle(SidebarHeaderButtonStyle(isHovered: interaction.isHovered))
-      .onHover { interaction.isHovered = $0 }
-      .contentShape(Rectangle())
-      .help(help())
-      .accessibilityLabel(help())
     }
-    .padding(.horizontal, 10)
+    .dropDestination(for: String.self) { items, _ in
+      return move(items, to: .global)
+    }
+    .help("Workspace pins stay visible when you switch Spaces")
   }
-}
 
-private struct SidebarHeaderButtonStyle: ButtonStyle {
-  let isHovered: Bool
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .foregroundStyle(.secondary)
-      .background(
-        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
-          .fill(
-            configuration.isPressed
-              ? Color.primary.opacity(0.13)
-              : (isHovered ? Color.primary.opacity(0.07) : Color.clear)
-          )
-      )
-      .contentShape(RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous))
+  private func sectionTitle(_ title: String, symbol: String, count: Int) -> some View {
+    HStack(spacing: 6) {
+      Image(systemName: symbol).frame(width: 16)
+      Text(title).lineLimit(1)
+      Spacer()
+      Text("\(count)").monospacedDigit()
+    }
+    .font(.caption.weight(.medium))
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 9)
   }
-}
 
-private struct SidebarSelectionButtonStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .overlay {
-        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
-          .fill(configuration.isPressed ? Color.primary.opacity(0.12) : Color.clear)
+  private func tierRows(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> some View {
+    VStack(spacing: 3) {
+      ForEach(tabs) { tab in
+        SidebarTabRow(tab: tab, selected: workspace.selectedTabID == tab.id, tier: tier) {
+          workspace.selectTab(id: tab.id)
+        } onClose: {
+          workspace.closeTab(id: tab.id)
+        } onPinGlobally: {
+          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .global) }
+        } onPinInSpace: {
+          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
+        } onMakeTemporary: {
+          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+        }
+        .id(tab.id)
+        .draggable(tab.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+          return move(items, to: tier, before: tab.id)
+        }
       }
+      Color.clear.frame(height: tabs.isEmpty ? 24 : 10)
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { items, _ in return move(items, to: tier) }
+    }
+    .animation(.smooth(duration: 0.28), value: tabs.map(\.id))
   }
-}
 
-private struct SpaceRowView: View {
-  let space: BrowserSpace
-  let isSelected: Bool
-  @ObservedObject var workspace: BrowserWorkspaceStore
-  @StateObject private var interaction = BrowserInteractionState()
+  private func move(_ items: [String], to tier: WorkspaceCollection.TabTier, before target: UUID? = nil) -> Bool {
+    guard let raw = items.first, let id = UUID(uuidString: raw) else { return false }
+    var moved = false
+    withAnimation(.smooth(duration: 0.28)) {
+      moved = workspace.moveTab(id, to: tier, before: target)
+    }
+    return moved
+  }
 
-  var body: some View {
-    Button {
-      workspace.selectSpace(id: space.id)
-    } label: {
-      HStack(spacing: 7) {
-        Image(systemName: isSelected ? "square.3.layers.3d.top.filled" : "square.3.layers.3d")
-          .font(.system(size: 12, weight: isSelected ? .medium : .regular))
-          .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-          .frame(width: 16)
-        Text(space.name)
-          .font(.footnote.weight(isSelected ? .medium : .regular))
+  private var footer: some View {
+    VStack(spacing: 7) {
+      HStack(spacing: 4) {
+        Button(action: runtime.showHistory) {
+          Image(systemName: "clock.arrow.circlepath")
+        }.help("History")
+        Button(action: runtime.showDownloads) {
+          Image(systemName: "arrow.down.circle")
+        }.help("Downloads")
+        Spacer()
+        Text(workspace.selectedSpace?.name ?? "Space")
+          .font(.caption.weight(.medium))
           .lineLimit(1)
-          .truncationMode(.tail)
-          Spacer(minLength: 4)
-          Text("\(space.tabIDs.count)")
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(isSelected ? Color.accentColor.opacity(0.9) : .secondary)
+          .foregroundStyle(.secondary)
+        Spacer()
       }
+      .buttonStyle(.plain)
+      .font(.system(size: 15))
       .padding(.horizontal, 8)
-      .frame(height: SidebarLayout.spaceRowHeight)
-      .background(
-        RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
-          .fill(
-            isSelected
-              ? Color.primary.opacity(0.075)
-              : (interaction.isHovered ? Color.primary.opacity(0.05) : Color.clear)
-          )
-      )
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(SidebarSelectionButtonStyle())
-    .onHover { interaction.isHovered = $0 }
-    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    .contextMenu {
-      Button("Rename") {
-        promptRename()
+
+      HStack(spacing: 0) {
+        let spaces = workspace.spaces
+        let selectedIndex = spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
+        let start = min(max(0, selectedIndex - 1), max(0, spaces.count - 4))
+        ForEach(Array(spaces.dropFirst(start).prefix(4))) { space in
+          Button {
+            withAnimation(.smooth(duration: 0.28)) { workspace.selectSpace(id: space.id) }
+          } label: {
+            Circle()
+              .fill(space.id == workspace.selectedSpaceID ? Color.accentColor : Color.primary.opacity(0.25))
+              .frame(width: space.id == workspace.selectedSpaceID ? 10 : 7,
+                     height: space.id == workspace.selectedSpaceID ? 10 : 7)
+              .frame(maxWidth: .infinity)
+              .frame(height: 27)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .help(space.name)
+          .accessibilityLabel("Space: \(space.name)")
+          .accessibilityAddTraits(space.id == workspace.selectedSpaceID ? [.isSelected] : [])
+          .contextMenu {
+            Button("Rename Space") { promptRename(space) }
+          }
+        }
+        Button {
+          withAnimation(.smooth(duration: 0.28)) { _ = workspace.createSpace() }
+        } label: {
+          Image(systemName: "plus")
+            .font(.system(size: 16, weight: .medium))
+            .frame(width: 32, height: 27)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("New Space")
+        .accessibilityLabel("New Space")
       }
     }
+    .padding(.horizontal, 12)
+    .padding(.top, 9)
+    .padding(.bottom, 11)
+    .background(.regularMaterial)
   }
 
-  private func promptRename() {
+  private func promptRename(_ space: BrowserSpace) {
     let alert = NSAlert()
     alert.messageText = "Rename Space"
-    alert.informativeText = "Surrounding whitespace is trimmed."
     let field = NSTextField(string: space.name)
     field.frame.size = NSSize(width: 240, height: 24)
     alert.accessoryView = field
     alert.addButton(withTitle: "Rename")
     alert.addButton(withTitle: "Cancel")
     guard alert.runModal() == .alertFirstButtonReturn else { return }
-    workspace.renameSpace(id: space.id, name: field.stringValue)
+    _ = workspace.renameSpace(id: space.id, name: field.stringValue)
   }
 }
 
-/// One sidebar tab row. It renders a BrowserTab and reports actions; it never
-/// owns a BrowserSession or decides which Space a tab belongs to.
-private struct TabRowView: View {
+private struct SidebarResizeHandle: NSViewRepresentable {
+  let layout: SidebarChromeLayout
+
+  func makeNSView(context: Context) -> ResizeView {
+    let view = ResizeView()
+    view.layout = layout
+    return view
+  }
+
+  func updateNSView(_ view: ResizeView, context: Context) {
+    view.layout = layout
+  }
+
+  final class ResizeView: NSView {
+    var layout: SidebarChromeLayout?
+
+    override func resetCursorRects() {
+      addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+      // Keep the drag sequence attached to this view.
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+      layout?.resizeSidebar(toWindowX: event.locationInWindow.x)
+    }
+
+  }
+}
+
+private struct PinnedTile: View {
   let tab: BrowserTab
-  let isSelected: Bool
+  let selected: Bool
+  let side: CGFloat
   let onSelect: () -> Void
   let onClose: () -> Void
+  let onPinInSpace: () -> Void
+  let onMakeTemporary: () -> Void
+
+  var body: some View {
+    Button(action: onSelect) {
+      VStack(spacing: 5) {
+        Text(String((tab.url?.host ?? tab.displayTitle).prefix(1)).uppercased())
+          .font(.system(size: 23, weight: .semibold, design: .rounded))
+          .foregroundStyle(selected ? Color.accentColor : .primary)
+        Text(tab.url?.host ?? tab.displayTitle)
+          .font(.system(size: 10, weight: .medium))
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .frame(maxWidth: max(0, side - 20))
+          .foregroundStyle(.secondary)
+      }
+      .frame(maxWidth: .infinity)
+      .frame(height: side)
+      .contentShape(RoundedRectangle(cornerRadius: 18))
+    }
+    .buttonStyle(.plain)
+    .browserChromeGlassSurface(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(selected ? 0.5 : 0.17), lineWidth: 1)
+    }
+    .overlay(alignment: .topTrailing) {
+      Image(systemName: "line.3.horizontal")
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(.secondary)
+        .frame(width: 26, height: 26)
+        .contentShape(Rectangle())
+        .draggable(tab.id.uuidString)
+        .accessibilityLabel("Drag Tab")
+    }
+    .shadow(color: .black.opacity(selected ? 0.18 : 0.06), radius: selected ? 13 : 5, y: selected ? 7 : 2)
+    .scaleEffect(selected ? 1.02 : 1)
+    .contextMenu {
+      Button("Pin in This Space", action: onPinInSpace)
+      Button("Make Temporary", action: onMakeTemporary)
+      Button("Close Tab", action: onClose)
+    }
+    .help(tab.displayTitle)
+    .accessibilityLabel(tab.displayTitle)
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+}
+
+private struct SidebarTabRow: View {
+  let tab: BrowserTab
+  let selected: Bool
+  let tier: WorkspaceCollection.TabTier
+  let onSelect: () -> Void
+  let onClose: () -> Void
+  let onPinGlobally: () -> Void
+  let onPinInSpace: () -> Void
+  let onMakeTemporary: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
 
   var body: some View {
-    ZStack(alignment: .trailing) {
+    HStack(spacing: 0) {
       Button(action: onSelect) {
-        HStack(spacing: 7) {
-          Image(systemName: "globe")
-            .font(.system(size: 12, weight: isSelected ? .medium : .regular))
-            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        HStack(spacing: 9) {
+          Image(systemName: tierSymbol)
+            .font(.system(size: 12, weight: .medium))
             .frame(width: 16)
-
+            .foregroundStyle(selected ? Color.accentColor : .secondary)
           Text(tab.displayTitle)
-            .font(.callout.weight(isSelected ? .medium : .regular))
+            .font(.callout.weight(selected ? .semibold : .regular))
             .lineLimit(1)
-            .truncationMode(.tail)
-
-          Spacer(minLength: 4)
-
-          // Keep a stable status slot so loading never changes title width.
-          ZStack {
-            Color.clear
-            if tab.isLoading {
-              ProgressView()
-                .progressViewStyle(.circular)
-                .controlSize(.small)
-                .scaleEffect(0.55)
-            }
+          Spacer(minLength: 0)
+          if tab.isLoading {
+            ProgressView().controlSize(.mini)
           }
-          .frame(width: 16, height: 16)
-
-          // Reserve space for the close control so revealing it never changes
-          // the title's layout or makes the sidebar jump.
-          Color.clear.frame(
-            width: SidebarLayout.closeHitTarget,
-            height: SidebarLayout.closeHitTarget)
         }
-        .padding(.horizontal, 8)
-        .frame(height: SidebarLayout.tabRowHeight)
+        .padding(.leading, 11)
+        .frame(maxWidth: .infinity, minHeight: 36)
         .contentShape(Rectangle())
       }
-      .buttonStyle(SidebarSelectionButtonStyle())
-
+      .buttonStyle(.plain)
+      Image(systemName: "line.3.horizontal")
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(.secondary)
+        .opacity(interaction.isHovered || selected ? 0.8 : 0.35)
+        .frame(width: 25, height: 32)
+        .contentShape(Rectangle())
+        .draggable(tab.id.uuidString)
+        .help("Drag to reorder or pin")
+        .accessibilityLabel("Drag Tab")
       Button(action: onClose) {
         Image(systemName: "xmark")
-          .font(.system(size: 9, weight: .semibold))
-          .frame(
-            width: SidebarLayout.closeHitTarget,
-            height: SidebarLayout.closeHitTarget)
-          .foregroundStyle(isSelected ? Color.primary : .secondary)
+          .font(.system(size: 10, weight: .semibold))
+          .frame(width: 29, height: 32)
       }
-      .buttonStyle(TabCloseButtonStyle(isHovered: interaction.isHovered))
-      .contentShape(Rectangle())
-      .opacity(interaction.isHovered || isSelected ? 1 : 0)
-      .allowsHitTesting(interaction.isHovered || isSelected)
-      .accessibilityHidden(false)
-      .help("Close Tab (⌘W)")
-      .accessibilityLabel("Close Tab")
+      .buttonStyle(.plain)
+      .opacity(interaction.isHovered || selected ? 0.7 : 0)
+      .allowsHitTesting(interaction.isHovered || selected)
+      .help("Close Tab")
     }
-    .padding(.horizontal, 2)
-    .background(
-      RoundedRectangle(cornerRadius: SidebarLayout.rowCornerRadius, style: .continuous)
-        .fill(
-          isSelected
-            ? Color.primary.opacity(0.105)
-            : (interaction.isHovered ? Color.primary.opacity(0.055) : Color.clear)
-        )
-    )
-    .overlay(alignment: .leading) {
-      if isSelected {
-        Rectangle()
-          .fill(Color.accentColor.opacity(0.95))
-          .frame(width: 2, height: 18)
+    .padding(.trailing, 3)
+    .background {
+      if selected {
+        Color.clear.browserChromeGlassSurface(in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+      } else if interaction.isHovered {
+        RoundedRectangle(cornerRadius: 11).fill(.primary.opacity(0.06))
       }
     }
+    .overlay {
+      if selected {
+        RoundedRectangle(cornerRadius: 11).strokeBorder(.white.opacity(0.35), lineWidth: 1)
+      }
+    }
+    .shadow(color: .black.opacity(selected ? 0.15 : 0), radius: 8, y: 4)
     .onHover { interaction.isHovered = $0 }
+    .contextMenu {
+      Button("Pin for All Spaces", action: onPinGlobally)
+      Button("Pin in This Space", action: onPinInSpace)
+      if case .space = tier { Button("Make Temporary", action: onMakeTemporary) }
+      Button("Close Tab", action: onClose)
+    }
     .help(tab.displayTitle)
-    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+
+  private var tierSymbol: String {
+    switch tier {
+    case .global: "pin.fill"
+    case .space: "pin"
+    case .temporary: "globe"
+    }
   }
 }
 
-private struct TabCloseButtonStyle: ButtonStyle {
-  let isHovered: Bool
+/// Observes horizontal precision scrolling without consuming the normal
+/// vertical scroll event used by the tab list.
+private struct SpaceSwipeMonitor: NSViewRepresentable {
+  let onStep: (Int) -> Void
 
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .background(
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-          .fill(
-            configuration.isPressed
-              ? Color.primary.opacity(0.14)
-              : Color.primary.opacity(isHovered ? 0.09 : 0.045)
-          )
-      )
-      .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+  func makeNSView(context: Context) -> MonitorView {
+    let view = MonitorView()
+    view.onStep = onStep
+    return view
+  }
+
+  func updateNSView(_ view: MonitorView, context: Context) {
+    view.onStep = onStep
+  }
+
+  final class MonitorView: NSView {
+    var onStep: ((Int) -> Void)?
+    nonisolated(unsafe) private var monitor: Any?
+    private var accumulated: CGFloat = 0
+    private var triggered = false
+    private var lastEventTime: TimeInterval = 0
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let monitor { NSEvent.removeMonitor(monitor) }
+      monitor = nil
+      guard window != nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+        self?.handle(event)
+        return event
+      }
+    }
+
+    deinit {
+      if let monitor { NSEvent.removeMonitor(monitor) }
+    }
+
+    private func handle(_ event: NSEvent) {
+      guard let window, event.window === window, event.hasPreciseScrollingDeltas else { return }
+      let point = convert(event.locationInWindow, from: nil)
+      guard bounds.contains(point) else { return }
+      guard event.momentumPhase == [] else { return }
+      if event.phase == .began || event.timestamp - lastEventTime > 0.5 {
+        accumulated = 0
+        triggered = false
+      }
+      lastEventTime = event.timestamp
+      if event.phase == .ended || event.phase == .cancelled {
+        accumulated = 0
+        triggered = false
+        return
+      }
+      guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.2, !triggered else { return }
+      accumulated += event.scrollingDeltaX
+      if abs(accumulated) >= 48 {
+        triggered = true
+        onStep?(accumulated > 0 ? 1 : -1)
+      }
+    }
   }
 }

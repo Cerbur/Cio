@@ -84,6 +84,24 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     XCTAssertTrue(restored.validateInvariants())
   }
 
+  func testLegacySnapshotWithoutPinFieldsStillRestores() throws {
+    let original = WorkspaceSessionSnapshot(workspace: populatedWorkspace())
+    let encoded = try encodedSnapshot(original)
+    var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    json.removeValue(forKey: "globalPinnedTabIDs")
+    json.removeValue(forKey: "selectedGlobalTabID")
+    var spaces = try XCTUnwrap(json["spaces"] as? [[String: Any]])
+    for index in spaces.indices { spaces[index].removeValue(forKey: "pinnedTabIDs") }
+    json["spaces"] = spaces
+    let legacy = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let restored = try WorkspaceCollection(restoring: decoder.decode(WorkspaceSessionSnapshot.self, from: legacy))
+    XCTAssertTrue(restored.globalPinnedTabs.isEmpty)
+    XCTAssertTrue(restored.spaces.allSatisfy { $0.pinnedTabIDs.isEmpty })
+    XCTAssertEqual(restored.allTabIDs, original.spaces.flatMap(\.tabs).map(\.id))
+  }
+
   func testSpaceAndTabOrderingAndSelectionsArePreserved() throws {
     let original = populatedWorkspace()
     let snapshot = WorkspaceSessionSnapshot(workspace: original)

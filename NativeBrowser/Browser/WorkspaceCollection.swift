@@ -43,6 +43,8 @@ struct WorkspaceCollection: Equatable, Sendable {
   private(set) var selectedSpaceID: UUID
   private(set) var tabsByID: [UUID: BrowserTab]
   private(set) var recentlyClosed: [ClosedTabSnapshot]
+  private(set) var globalPinnedTabIDs: [UUID]
+  private(set) var selectedGlobalTabID: UUID?
 
   /// Creates the normal application starting state: one Main Space, one tab,
   /// and both levels of selection pointing at that tab.
@@ -55,6 +57,8 @@ struct WorkspaceCollection: Equatable, Sendable {
     self.selectedSpaceID = space.id
     self.tabsByID = [initialTab.id: initialTab]
     self.recentlyClosed = []
+    self.globalPinnedTabIDs = []
+    self.selectedGlobalTabID = nil
     validateInvariants()
   }
 
@@ -123,11 +127,15 @@ struct WorkspaceCollection: Equatable, Sendable {
       guard orderedTabIDs.contains(selectedTabID) else {
         throw WorkspaceSessionSnapshotError.selectedTabNotInSpace
       }
+      guard Set(persistedSpace.pinnedTabIDs).count == persistedSpace.pinnedTabIDs.count,
+        persistedSpace.pinnedTabIDs.allSatisfy({ orderedTabIDs.contains($0) })
+      else { throw WorkspaceSessionSnapshotError.invalidPinnedTabs }
       restoredSpaces.append(
         BrowserSpace(
           id: persistedSpace.id,
           name: name,
           tabIDs: orderedTabIDs,
+          pinnedTabIDs: persistedSpace.pinnedTabIDs,
           selectedTabID: selectedTabID))
     }
 
@@ -139,6 +147,15 @@ struct WorkspaceCollection: Equatable, Sendable {
     self.selectedSpaceID = snapshot.selectedSpaceID
     self.tabsByID = restoredTabs
     self.recentlyClosed = []
+    self.globalPinnedTabIDs = snapshot.globalPinnedTabIDs
+    self.selectedGlobalTabID = snapshot.selectedGlobalTabID
+
+    guard globalPinnedTabIDs.count <= 16,
+      Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
+      globalPinnedTabIDs.allSatisfy({ restoredTabs[$0] != nil }),
+      selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true,
+      restoredSpaces.allSatisfy({ Set($0.pinnedTabIDs).isDisjoint(with: globalPinnedTabIDs) })
+    else { throw WorkspaceSessionSnapshotError.invalidPinnedTabs }
 
     guard validateInvariants() else {
       // The explicit checks above cover the serialized graph. Keep this final
@@ -156,7 +173,7 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   /// The one authoritative effective selected tab for the whole application.
   var selectedTabID: UUID? {
-    selectedSpace?.selectedTabID
+    selectedGlobalTabID ?? selectedSpace?.selectedTabID
   }
 
   var selectedTab: BrowserTab? {
@@ -176,6 +193,21 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   var currentTabs: [BrowserTab] {
     tabs(in: selectedSpaceID)
+  }
+
+  var globalPinnedTabs: [BrowserTab] {
+    globalPinnedTabIDs.compactMap { tabsByID[$0] }
+  }
+
+  var currentSpacePinnedTabs: [BrowserTab] {
+    guard let space = selectedSpace else { return [] }
+    return space.pinnedTabIDs.compactMap { tabsByID[$0] }
+  }
+
+  var currentTemporaryTabs: [BrowserTab] {
+    guard let space = selectedSpace else { return [] }
+    return space.tabIDs.filter { !space.pinnedTabIDs.contains($0) && !globalPinnedTabIDs.contains($0) }
+      .compactMap { tabsByID[$0] }
   }
 
   var currentTabIDs: [UUID] {
@@ -233,6 +265,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     tabsByID[initialTab.id] = initialTab
     if select {
       selectedSpaceID = spaceID
+      selectedGlobalTabID = nil
     }
     validateInvariants()
     return spaceID
@@ -261,6 +294,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     if let selectedTabID = space(withID: id)?.selectedTabID {
       tabsByID[selectedTabID]?.lastActivatedAt = Date()
     }
+    selectedGlobalTabID = nil
     validateInvariants()
     return true
   }
@@ -287,6 +321,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     tabsByID[tab.id] = tab
     if select || spaces[spaceIndex].selectedTabID == nil {
       spaces[spaceIndex].selectedTabID = tab.id
+      if select { selectedGlobalTabID = nil }
     }
     validateInvariants()
     return true
@@ -300,11 +335,19 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Selects a tab only when it belongs to the currently selected Space.
   @discardableResult
   mutating func selectTab(id: UUID) -> Bool {
+    if globalPinnedTabIDs.contains(id) {
+      guard selectedTabID != id else { return false }
+      selectedGlobalTabID = id
+      tabsByID[id]?.lastActivatedAt = Date()
+      validateInvariants()
+      return true
+    }
     guard let spaceIndex = index(of: selectedSpaceID),
       spaces[spaceIndex].tabIDs.contains(id)
     else { return false }
-    guard spaces[spaceIndex].selectedTabID != id else { return false }
+    guard selectedTabID != id else { return false }
     spaces[spaceIndex].selectedTabID = id
+    selectedGlobalTabID = nil
     tabsByID[id]?.lastActivatedAt = Date()
     validateInvariants()
     return true
@@ -318,9 +361,10 @@ struct WorkspaceCollection: Equatable, Sendable {
       spaces[spaceIndex].tabIDs.contains(tabID)
     else { return false }
 
-    let changed = selectedSpaceID != spaceID || spaces[spaceIndex].selectedTabID != tabID
+    let changed = selectedGlobalTabID != nil || selectedSpaceID != spaceID || spaces[spaceIndex].selectedTabID != tabID
     selectedSpaceID = spaceID
     spaces[spaceIndex].selectedTabID = tabID
+    selectedGlobalTabID = nil
     tabsByID[tabID]?.lastActivatedAt = Date()
     validateInvariants()
     return changed
@@ -381,6 +425,9 @@ struct WorkspaceCollection: Equatable, Sendable {
     }
 
     spaces[spaceIndex].tabIDs.remove(at: tabIndex)
+    spaces[spaceIndex].pinnedTabIDs.removeAll { $0 == tabID }
+    globalPinnedTabIDs.removeAll { $0 == tabID }
+    if selectedGlobalTabID == tabID { selectedGlobalTabID = nil }
     tabsByID.removeValue(forKey: tabID)
 
     if spaces[spaceIndex].tabIDs.isEmpty {
@@ -433,6 +480,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     spaces[spaceIndex].selectedTabID = tab.id
     tabsByID[tab.id] = tab
     selectedSpaceID = snapshot.spaceID
+    selectedGlobalTabID = nil
     validateInvariants()
     return true
   }
@@ -440,6 +488,114 @@ struct WorkspaceCollection: Equatable, Sendable {
   @discardableResult
   mutating func popRecentlyClosed() -> ClosedTabSnapshot? {
     recentlyClosed.popLast()
+  }
+
+  /// Moves a tab into a pin tier and places it before the indicated tab, or at
+  /// the end when `before` is nil. All three visible orders are durable.
+  @discardableResult
+  mutating func moveTab(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+    guard let ownerID = spaceID(containing: tabID),
+      let ownerIndex = index(of: ownerID),
+      tabsByID[tabID] != nil
+    else { return false }
+    if case .global = tier,
+      !globalPinnedTabIDs.contains(tabID), globalPinnedTabIDs.count >= 16 { return false }
+
+    let destinationSpaceID: UUID
+    switch tier {
+    case .global: destinationSpaceID = ownerID
+    case .space(let id), .temporary(let id):
+      guard index(of: id) != nil else { return false }
+      destinationSpaceID = id
+    }
+    if let targetID {
+      guard targetID != tabID,
+        tabIDs(in: tier).contains(targetID)
+      else { return false }
+    }
+
+    let wasSelected = selectedTabID == tabID
+    spaces[ownerIndex].tabIDs.removeAll { $0 == tabID }
+    spaces[ownerIndex].pinnedTabIDs.removeAll { $0 == tabID }
+    globalPinnedTabIDs.removeAll { $0 == tabID }
+
+    let destinationIndex = index(of: destinationSpaceID)!
+    if ownerID != destinationSpaceID {
+      if spaces[ownerIndex].tabIDs.isEmpty {
+        let replacement = BrowserTab()
+        tabsByID[replacement.id] = replacement
+        spaces[ownerIndex].tabIDs.append(replacement.id)
+      }
+      if spaces[ownerIndex].selectedTabID == tabID {
+        spaces[ownerIndex].selectedTabID = spaces[ownerIndex].tabIDs.first
+      }
+    }
+    if !spaces[destinationIndex].tabIDs.contains(tabID) {
+      spaces[destinationIndex].tabIDs.append(tabID)
+    }
+
+    switch tier {
+    case .global:
+      let index = targetID.flatMap { globalPinnedTabIDs.firstIndex(of: $0) } ?? globalPinnedTabIDs.count
+      globalPinnedTabIDs.insert(tabID, at: index)
+    case .space:
+      let pins = spaces[destinationIndex].pinnedTabIDs
+      let index = targetID.flatMap { pins.firstIndex(of: $0) } ?? pins.count
+      spaces[destinationIndex].pinnedTabIDs.insert(tabID, at: index)
+    case .temporary:
+      break
+    }
+
+    // The underlying per-Space order is used by keyboard selection and close
+    // fallback. Rebuild it from the visible pin and temporary orders.
+    if case .temporary = tier {
+      let pins = spaces[destinationIndex].pinnedTabIDs
+      var temporary = spaces[destinationIndex].tabIDs.filter {
+        !pins.contains($0) && !globalPinnedTabIDs.contains($0) && $0 != tabID
+      }
+      let insertAt = targetID.flatMap { temporary.firstIndex(of: $0) } ?? temporary.count
+      temporary.insert(tabID, at: insertAt)
+      spaces[destinationIndex].tabIDs = pins + temporary + spaces[destinationIndex].tabIDs.filter {
+        globalPinnedTabIDs.contains($0)
+      }
+    } else {
+      let ids = spaces[destinationIndex].tabIDs
+      spaces[destinationIndex].tabIDs = spaces[destinationIndex].pinnedTabIDs
+        + ids.filter { !spaces[destinationIndex].pinnedTabIDs.contains($0) }
+    }
+
+    if wasSelected {
+      if case .global = tier {
+        selectedGlobalTabID = tabID
+      } else {
+        selectedGlobalTabID = nil
+        selectedSpaceID = destinationSpaceID
+        spaces[destinationIndex].selectedTabID = tabID
+      }
+    } else if spaces[destinationIndex].selectedTabID == nil {
+      spaces[destinationIndex].selectedTabID = tabID
+    }
+    if selectedGlobalTabID == tabID, !globalPinnedTabIDs.contains(tabID) {
+      selectedGlobalTabID = nil
+    }
+    validateInvariants()
+    return true
+  }
+
+  enum TabTier: Equatable {
+    case global
+    case space(UUID)
+    case temporary(UUID)
+  }
+
+  func tabIDs(in tier: TabTier) -> [UUID] {
+    switch tier {
+    case .global: return globalPinnedTabIDs
+    case .space(let id): return space(withID: id)?.pinnedTabIDs ?? []
+    case .temporary(let id):
+      guard let space = space(withID: id) else { return [] }
+      return space.tabIDs.filter { !space.pinnedTabIDs.contains($0) && !globalPinnedTabIDs.contains($0) }
+    }
   }
 
   // MARK: - Invariants
@@ -453,8 +609,15 @@ struct WorkspaceCollection: Equatable, Sendable {
     else { return false }
 
     var seen = Set<UUID>()
+    guard globalPinnedTabIDs.count <= 16,
+      Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
+      selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true
+    else { return false }
     for space in spaces {
       guard Set(space.tabIDs).count == space.tabIDs.count else { return false }
+      guard Set(space.pinnedTabIDs).count == space.pinnedTabIDs.count,
+        space.pinnedTabIDs.allSatisfy({ space.tabIDs.contains($0) && !globalPinnedTabIDs.contains($0) })
+      else { return false }
       for tabID in space.tabIDs {
         guard tabsByID[tabID] != nil, seen.insert(tabID).inserted else { return false }
       }
@@ -465,6 +628,7 @@ struct WorkspaceCollection: Equatable, Sendable {
       }
     }
     guard seen == Set(tabsByID.keys) else { return false }
+    guard globalPinnedTabIDs.allSatisfy({ seen.contains($0) }) else { return false }
     return true
   }
 

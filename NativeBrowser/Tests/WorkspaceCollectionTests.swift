@@ -319,4 +319,60 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(collection.popRecentlyClosed()?.title, "T24")
     XCTAssertEqual(collection.popRecentlyClosed()?.title, "T23")
   }
+
+  func testThreeTiersReorderAndRestoreAcrossSpaceSwitch() throws {
+    var collection = workspace(["A", "B", "C", "D"])
+    let main = collection.selectedSpaceID
+    let ids = collection.currentTabIDs
+    XCTAssertTrue(collection.moveTab(ids[0], to: .global))
+    XCTAssertTrue(collection.moveTab(ids[1], to: .global, before: ids[0]))
+    XCTAssertTrue(collection.moveTab(ids[2], to: .space(main)))
+    XCTAssertEqual(collection.globalPinnedTabs.map(\.title), ["B", "A"])
+    XCTAssertEqual(collection.currentSpacePinnedTabs.map(\.title), ["C"])
+    XCTAssertEqual(collection.currentTemporaryTabs.map(\.title), ["D"])
+
+    let other = collection.createSpace(initialTab: tab("Other"))!
+    XCTAssertEqual(collection.globalPinnedTabs.map(\.title), ["B", "A"])
+    XCTAssertEqual(collection.currentSpacePinnedTabs.map(\.title), [])
+    XCTAssertTrue(collection.selectTab(id: ids[0]))
+    XCTAssertEqual(collection.selectedSpaceID, other)
+    XCTAssertEqual(collection.selectedTabID, ids[0])
+    let selectedRestore = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection))
+    XCTAssertEqual(selectedRestore.selectedSpaceID, other)
+    XCTAssertEqual(selectedRestore.selectedTabID, ids[0])
+    XCTAssertTrue(collection.selectSpace(id: main))
+    XCTAssertNil(collection.selectedGlobalTabID)
+    XCTAssertEqual(collection.selectedTabID, collection.space(withID: main)?.selectedTabID)
+
+    let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection))
+    XCTAssertEqual(restored.globalPinnedTabs.map(\.title), ["B", "A"])
+    XCTAssertEqual(restored.currentSpacePinnedTabs.map(\.title), ["C"])
+    XCTAssertEqual(restored.currentTemporaryTabs.map(\.title), ["D"])
+  }
+
+  func testMovingLastTabToAnotherSpaceKeepsSourceUsable() throws {
+    var collection = WorkspaceCollection(initialTab: tab("Only"))
+    let source = collection.selectedSpaceID
+    let onlyID = collection.selectedTabID!
+    let destination = collection.createSpace(initialTab: tab("Other"))!
+    XCTAssertTrue(collection.moveTab(onlyID, to: .space(destination)))
+    XCTAssertEqual(collection.tabs(in: source).count, 1)
+    XCTAssertEqual(collection.currentSpacePinnedTabs.map(\.title), ["Only"])
+    XCTAssertTrue(collection.validateInvariants())
+    XCTAssertNoThrow(try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection)))
+  }
+
+  func testGlobalPinLimitIsEnforced() {
+    var collection = WorkspaceCollection(initialTab: tab("0"))
+    let spaceID = collection.selectedSpaceID
+    for index in 1...16 {
+      XCTAssertTrue(collection.appendTab(tab("\(index)"), in: spaceID, select: false))
+    }
+    let ids = collection.currentTabIDs
+    for id in ids.prefix(16) {
+      XCTAssertTrue(collection.moveTab(id, to: .global))
+    }
+    XCTAssertFalse(collection.moveTab(ids[16], to: .global))
+    XCTAssertEqual(collection.globalPinnedTabs.count, 16)
+  }
 }

@@ -18,6 +18,8 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
   let schemaVersion: Int
   let selectedSpaceID: UUID
   let spaces: [PersistedSpace]
+  var globalPinnedTabIDs: [UUID] = []
+  var selectedGlobalTabID: UUID? = nil
 
   init(
     schemaVersion: Int = Self.currentSchemaVersion,
@@ -35,14 +37,30 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
   init(workspace: WorkspaceCollection) {
     schemaVersion = Self.currentSchemaVersion
     selectedSpaceID = workspace.selectedSpaceID
+    globalPinnedTabIDs = workspace.globalPinnedTabIDs
+    selectedGlobalTabID = workspace.selectedGlobalTabID
     spaces = workspace.spaces.map { space in
       let tabs = space.tabIDs.compactMap { workspace.tab(withID: $0) }.map(PersistedTab.init)
       return PersistedSpace(
         id: space.id,
         name: space.name,
         selectedTabID: space.selectedTabID,
-        tabs: tabs)
+        tabs: tabs,
+        pinnedTabIDs: space.pinnedTabIDs)
     }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case schemaVersion, selectedSpaceID, spaces, globalPinnedTabIDs, selectedGlobalTabID
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+    selectedSpaceID = try values.decode(UUID.self, forKey: .selectedSpaceID)
+    spaces = try values.decode([PersistedSpace].self, forKey: .spaces)
+    globalPinnedTabIDs = try values.decodeIfPresent([UUID].self, forKey: .globalPinnedTabIDs) ?? []
+    selectedGlobalTabID = try values.decodeIfPresent(UUID.self, forKey: .selectedGlobalTabID)
   }
 }
 
@@ -53,6 +71,28 @@ struct PersistedSpace: Codable, Equatable, Sendable {
   let name: String
   let selectedTabID: UUID?
   let tabs: [PersistedTab]
+  var pinnedTabIDs: [UUID] = []
+
+  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = []) {
+    self.id = id
+    self.name = name
+    self.selectedTabID = selectedTabID
+    self.tabs = tabs
+    self.pinnedTabIDs = pinnedTabIDs
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, selectedTabID, tabs, pinnedTabIDs
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(UUID.self, forKey: .id)
+    name = try values.decode(String.self, forKey: .name)
+    selectedTabID = try values.decodeIfPresent(UUID.self, forKey: .selectedTabID)
+    tabs = try values.decode([PersistedTab].self, forKey: .tabs)
+    pinnedTabIDs = try values.decodeIfPresent([UUID].self, forKey: .pinnedTabIDs) ?? []
+  }
 }
 
 /// One persisted tab, in the order in which it appears in its Space's `tabs`
@@ -104,6 +144,7 @@ enum WorkspaceSessionSnapshotError: Error, Equatable, Sendable, CustomStringConv
   case missingSelectedSpace
   case missingSelectedTab
   case selectedTabNotInSpace
+  case invalidPinnedTabs
 
   var description: String {
     switch self {
@@ -117,6 +158,7 @@ enum WorkspaceSessionSnapshotError: Error, Equatable, Sendable, CustomStringConv
     case .missingSelectedSpace: return "selected Space does not exist"
     case .missingSelectedTab: return "Space has no selected tab"
     case .selectedTabNotInSpace: return "selected tab is not a member of its Space"
+    case .invalidPinnedTabs: return "pinned tab membership or selection is invalid"
     }
   }
 }
