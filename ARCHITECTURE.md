@@ -2910,11 +2910,14 @@ environment cannot interact with the input method reliably.
 
 ## 67. Current sidebar tab tiers and favicons
 
-Use these names in UI work: **top pin** is `WorkspaceCollection.TabTier.global`
-and stays visible across Spaces; **space pin** is `.space(spaceID)` and belongs
-to one Space; **temporary** is `.temporary(spaceID)`, the default destination
-for new tabs. The top pin grid is fixed. Space pin and temporary rows scroll
-with the selected Space. The Clear action removes temporary tabs except the
+Use these names in UI work: the sidebar has a fixed **top pin** block and a
+scrolling **space tab** block. Top pin is `WorkspaceCollection.TabTier.global`
+and stays visible across Spaces. Space tab contains **space pin**
+(`.space(spaceID)`), which belongs to one Space, and **temporary**
+(`.temporary(spaceID)`), the default destination for new tabs. Space tab scrolls
+under a narrow, fading native material edge at the bottom of top pin; its scroll
+indicator is hidden. Top pin tiles are 54 points tall, 1.5 times the 36-point tab
+row height. The Clear action removes temporary tabs except the
 active tab.
 
 All three tiers and the address bar render the same `TabFaviconView` component

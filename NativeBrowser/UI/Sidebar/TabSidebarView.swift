@@ -2,8 +2,8 @@
 //  TabSidebarView.swift
 //  NativeBrowser
 //
-//  Sidebar terms: top pin = workspace-wide pin (.global), space pin = pin in
-//  one Space (.space), temporary = unpinned tab in one Space (.temporary).
+//  Sidebar blocks: fixed top pin (.global) and scrolling space tab.
+//  Space tab contains space pin (.space) and temporary (.temporary) tabs.
 //
 
 import AppKit
@@ -90,6 +90,7 @@ struct TabSidebarView: View {
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
   @State private var pageSwipeState = SpacePageSwipeState()
   private let pinGlassOverlap: CGFloat = 24
+  private let topPinHeight: CGFloat = 54  // One and a half 36-point space tab rows.
 
   private func columns(for width: CGFloat) -> Int {
     width >= 365 ? 4 : (width >= 275 ? 3 : 2)
@@ -98,18 +99,23 @@ struct TabSidebarView: View {
   var body: some View {
     GeometryReader { geometry in
       VStack(spacing: 0) {
+        // The fixed top pin and scrolling space tab share one sidebar material.
         pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
           .padding(.horizontal, 12)
           .padding(.top, chromeLayout.topInset + 6)
           .padding(.bottom, 6)
-          .background {
-            SidebarPinGlassEdge()
+          .background(alignment: .bottom) {
+            // Blur the scrolling space tab only where it passes under top pin.
+            // A narrow fade preserves the sidebar's continuous glass background.
+            Rectangle()
+              .fill(.ultraThinMaterial)
+              .frame(height: pinGlassOverlap + 8)
               .mask {
-                VStack(spacing: 0) {
-                  Rectangle()
-                  LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 28)
-                }
+                LinearGradient(
+                  stops: [.init(color: .white, location: 0),
+                          .init(color: .white, location: 0.55),
+                          .init(color: .clear, location: 1)],
+                  startPoint: .top, endPoint: .bottom)
               }
               .allowsHitTesting(false)
           }
@@ -209,15 +215,16 @@ struct TabSidebarView: View {
       .padding(.top, 8 + pinGlassOverlap)
       .padding(.bottom, 18)
     }
+    .scrollIndicators(.hidden)
+    .scrollEdgeEffectStyle(.soft, for: .top)
   }
 
   private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
-    let tileSide = (width - 24 - CGFloat(columns - 1) * 9) / CGFloat(columns)
     return VStack(alignment: .leading, spacing: 3) {
       LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: columns), spacing: 9) {
         ForEach(workspace.globalPinnedTabs) { tab in
           PinnedTile(tab: tab, session: workspace.session(for: tab.id),
-                     selected: workspace.selectedTabID == tab.id, side: tileSide) {
+                     selected: workspace.selectedTabID == tab.id, height: topPinHeight) {
             workspace.selectTab(id: tab.id)
           } onClose: {
             workspace.closeTab(id: tab.id)
@@ -236,7 +243,7 @@ struct TabSidebarView: View {
             .font(.system(size: 17, weight: .medium))
             .foregroundStyle(.tertiary)
             .frame(maxWidth: .infinity)
-            .frame(height: tileSide)
+            .frame(height: topPinHeight)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
             .modifier(TabInsertionDropModifier { items in move(items, to: .global) })
             .help("Pin tabs for all Spaces")
@@ -382,18 +389,6 @@ struct TabSidebarView: View {
   }
 }
 
-private struct SidebarPinGlassEdge: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSVisualEffectView {
-    let view = NSVisualEffectView()
-    view.material = .headerView
-    view.blendingMode = .withinWindow
-    view.state = .active
-    return view
-  }
-
-  func updateNSView(_ view: NSVisualEffectView, context: Context) {}
-}
-
 enum SpacePaging {
   static func destinationIndex(current: Int, count: Int, displacement: CGFloat, width: CGFloat) -> Int {
     guard count > 0, width > 0 else { return current }
@@ -470,7 +465,7 @@ private struct PinnedTile: View {
   let tab: BrowserTab
   let session: BrowserSession?
   let selected: Bool
-  let side: CGFloat
+  let height: CGFloat
   let onSelect: () -> Void
   let onClose: () -> Void
   let onPinInSpace: () -> Void
@@ -485,7 +480,7 @@ private struct PinnedTile: View {
         fallbackLetter: String((tab.url?.host ?? tab.displayTitle)
           .replacingOccurrences(of: "www.", with: "").prefix(1)).uppercased())
         .frame(maxWidth: .infinity)
-        .frame(height: side)
+        .frame(height: height)
         .contentShape(RoundedRectangle(cornerRadius: 18))
     }
     .buttonStyle(.plain)
