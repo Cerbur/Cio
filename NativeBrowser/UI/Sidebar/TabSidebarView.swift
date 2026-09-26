@@ -323,7 +323,8 @@ struct TabSidebarView: View {
 
   private func row(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
     SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
-                  selected: workspace.selectedTabID == tab.id, tier: tier) {
+                  selected: workspace.selectedTabID == tab.id, tier: tier,
+                  isTabDragActive: tabDrag.tabID != nil) {
       select(tab.id)
     } onClose: {
       workspace.closeTab(id: tab.id)
@@ -587,12 +588,16 @@ private struct SidebarTabRow: View {
   let session: BrowserSession?
   let selected: Bool
   let tier: WorkspaceCollection.TabTier
+  let isTabDragActive: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
   let onPinGlobally: () -> Void
   let onPinInSpace: () -> Void
   let onMakeTemporary: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
+
+  private var showsHover: Bool { interaction.isHovered && !isTabDragActive }
+  private var showsCloseButton: Bool { (interaction.isHovered || selected) && !isTabDragActive }
 
   var body: some View {
     HStack(spacing: 0) {
@@ -619,15 +624,15 @@ private struct SidebarTabRow: View {
           .frame(width: 29, height: 32)
       }
       .buttonStyle(.plain)
-      .opacity(interaction.isHovered || selected ? 0.7 : 0)
-      .allowsHitTesting(interaction.isHovered || selected)
+      .opacity(showsCloseButton ? 0.7 : 0)
+      .allowsHitTesting(showsCloseButton)
       .help("Close Tab")
     }
     .padding(.trailing, 3)
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-      } else if interaction.isHovered {
+      } else if showsHover {
         RoundedRectangle(cornerRadius: 11).fill(.primary.opacity(0.06))
       }
     }
