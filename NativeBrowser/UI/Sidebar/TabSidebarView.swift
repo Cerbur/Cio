@@ -89,6 +89,9 @@ struct TabSidebarView: View {
   @EnvironmentObject private var runtime: ApplicationRuntime
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
   @State private var pageSwipeState = SpacePageSwipeState()
+  @State private var tabDrag = SidebarTabDrag()
+  @GestureState private var isTabDragGestureActive = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
   private let topPinHeight: CGFloat = 54  // One and a half 36-point space tab rows.
 
@@ -104,6 +107,7 @@ struct TabSidebarView: View {
           .padding(.horizontal, 12)
           .padding(.top, chromeLayout.topInset + 6)
           .padding(.bottom, 6)
+          .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
           .background(alignment: .bottom) {
             // Blur the scrolling space tab only where it passes under top pin.
             // A narrow fade preserves the sidebar's continuous glass background.
@@ -148,6 +152,20 @@ struct TabSidebarView: View {
           .frame(width: 10)
           .accessibilityLabel("Resize Sidebar")
       }
+      .overlay {
+        SidebarTabDragOverlay(drag: tabDrag) { id, style in
+          tabDragLabel(id, style: style)
+        }
+      }
+      .simultaneousGesture(tabDragGesture(width: geometry.size.width))
+      .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
+      .coordinateSpace(.named(SidebarTabDragSpace.name))
+      .onChange(of: isTabDragGestureActive) { _, isActive in
+        guard !isActive else { return }
+        // Runs after `onEnded`, so only a cancelled gesture is still dragging.
+        Task { @MainActor in tabDrag.gestureDidEnd() }
+      }
+      .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
       .ignoresSafeArea(.container, edges: .top)
     }
   }
@@ -159,6 +177,7 @@ struct TabSidebarView: View {
   private var spacePages: some View {
     SpacePageTrack(swipeState: pageSwipeState, selectedIndex: selectedSpaceIndex,
                    pages: workspace.spaces.map { AnyView(spacePage($0)) })
+    .onSidebarFrameChange { tabDrag.spaceFrame = $0 }
     .accessibilityIdentifier("space-pages")
   }
 
@@ -169,13 +188,13 @@ struct TabSidebarView: View {
       .filter { !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) }
       .compactMap(workspace.tab(withID:))
     let clearableCount = temporaryTabs.filter { $0.id != workspace.selectedTabID }.count
+    let pinSlots = slots(pinnedTabs, tier: .space(space.id))
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
         sectionTitle(space.name, symbol: "square.3.layers.3d")
-          .modifier(TabInsertionDropModifier { items in move(items, to: .space(space.id)) })
-        tierRows(pinnedTabs, tier: .space(space.id))
-          .padding(.bottom, pinnedTabs.isEmpty ? 0 : -6)
+        tierRows(pinSlots, tier: .space(space.id))
+          .padding(.bottom, pinSlots.isEmpty ? 0 : -6)
 
         if clearableCount > 0 {
           HStack(spacing: 8) {
@@ -209,7 +228,7 @@ struct TabSidebarView: View {
         .foregroundStyle(.secondary)
         .help("Create a temporary tab")
 
-        tierRows(temporaryTabs, tier: .temporary(space.id))
+        tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
       .padding(.horizontal, 10)
       .padding(.top, 8 + pinGlassOverlap)
@@ -217,44 +236,45 @@ struct TabSidebarView: View {
     }
     .scrollIndicators(.hidden)
     .scrollEdgeEffectStyle(.soft, for: .top)
+    .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
   }
 
   private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
+    let tileSlots = slots(workspace.globalPinnedTabs, tier: .global)
     return VStack(alignment: .leading, spacing: 3) {
       LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: columns), spacing: 9) {
-        ForEach(workspace.globalPinnedTabs) { tab in
-          PinnedTile(tab: tab, session: workspace.session(for: tab.id),
-                     selected: workspace.selectedTabID == tab.id, height: topPinHeight) {
-            workspace.selectTab(id: tab.id)
-          } onClose: {
-            workspace.closeTab(id: tab.id)
-          } onPinInSpace: {
-            withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
-          } onMakeTemporary: {
-            withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+        ForEach(tileSlots) { slot in
+          switch slot {
+          case .tab(let tab):
+            PinnedTile(tab: tab, session: workspace.session(for: tab.id),
+                       selected: workspace.selectedTabID == tab.id, height: topPinHeight) {
+              select(tab.id)
+            } onClose: {
+              workspace.closeTab(id: tab.id)
+            } onPinInSpace: {
+              withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
+            } onMakeTemporary: {
+              withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+            }
+            .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
+          case .gap:
+            Color.clear.frame(height: topPinHeight)
           }
-          .draggable(tab.id.uuidString)
-          .modifier(TabInsertionDropModifier { items in
-            move(items, to: .global, before: tab.id)
-          })
         }
-        if workspace.globalPinnedTabs.isEmpty {
+        if tileSlots.isEmpty {
           Image(systemName: "pin")
             .font(.system(size: 17, weight: .medium))
             .foregroundStyle(.tertiary)
             .frame(maxWidth: .infinity)
             .frame(height: topPinHeight)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
-            .modifier(TabInsertionDropModifier { items in move(items, to: .global) })
             .help("Pin tabs for all Spaces")
           }
       }
-      .animation(.smooth(duration: 0.28), value: workspace.globalPinnedTabs.map(\.id))
+      .animation(.smooth(duration: 0.28), value: tileSlots.map(\.id))
 
-      if !workspace.globalPinnedTabs.isEmpty {
+      if !tileSlots.isEmpty {
         Color.clear.frame(height: 8)
-          .contentShape(Rectangle())
-          .modifier(TabInsertionDropModifier { items in move(items, to: .global) })
       }
     }
     .help("Workspace pins stay visible when you switch Spaces")
@@ -273,49 +293,117 @@ struct TabSidebarView: View {
     .contentShape(Rectangle())
   }
 
-  private func tierRows(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> some View {
-    LazyVStack(spacing: 5) {
-      ForEach(tabs) { tab in
-        SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
-                      selected: workspace.selectedTabID == tab.id, tier: tier) {
-          workspace.selectTab(id: tab.id)
-        } onClose: {
-          workspace.closeTab(id: tab.id)
-        } onPinGlobally: {
-          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .global) }
-        } onPinInSpace: {
-          let spaceID: UUID
-          switch tier {
-          case .space(let id), .temporary(let id): spaceID = id
-          case .global: spaceID = workspace.selectedSpaceID
-          }
-          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(spaceID)) }
-        } onMakeTemporary: {
-          let spaceID: UUID
-          switch tier {
-          case .space(let id), .temporary(let id): spaceID = id
-          case .global: spaceID = workspace.selectedSpaceID
-          }
-          withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(spaceID)) }
-        }
-        .id(tab.id)
-        .draggable(tab.id.uuidString)
-        .modifier(TabInsertionDropModifier { items in move(items, to: tier, before: tab.id) })
-      }
-      Color.clear.frame(height: tabs.isEmpty ? 16 : 8)
-        .contentShape(Rectangle())
-        .modifier(TabInsertionDropModifier { items in move(items, to: tier) })
+  /// While a tab is lifted it leaves its tier, and the tier it would land in
+  /// opens a gap at that place.
+  private func slots(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> [SidebarSlot] {
+    guard let lifted = tabDrag.liftedTabID else { return tabs.map(SidebarSlot.tab) }
+    var slots = tabs.filter { $0.id != lifted }.map(SidebarSlot.tab)
+    if let target = tabDrag.target, target.tier == tier {
+      let index = target.before.flatMap { before in slots.firstIndex { $0.id == before } }
+      slots.insert(.gap, at: index ?? slots.count)
     }
-    .animation(.smooth(duration: 0.28), value: tabs.map(\.id))
+    return slots
   }
 
-  private func move(_ items: [String], to tier: WorkspaceCollection.TabTier, before target: UUID? = nil) -> Bool {
-    guard let raw = items.first, let id = UUID(uuidString: raw) else { return false }
+  private func tierRows(_ slots: [SidebarSlot], tier: WorkspaceCollection.TabTier) -> some View {
+    LazyVStack(spacing: 5) {
+      ForEach(slots) { slot in
+        switch slot {
+        case .tab(let tab):
+          row(tab, tier: tier)
+        case .gap:
+          Color.clear.frame(height: 36)
+        }
+      }
+      Color.clear.frame(height: slots.isEmpty ? 16 : 8)
+    }
+    .onSidebarFrameChange { tabDrag.register(tier, frame: $0) }
+    .animation(.smooth(duration: 0.28), value: slots.map(\.id))
+  }
+
+  private func row(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
+    SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
+                  selected: workspace.selectedTabID == tab.id, tier: tier) {
+      select(tab.id)
+    } onClose: {
+      workspace.closeTab(id: tab.id)
+    } onPinGlobally: {
+      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .global) }
+    } onPinInSpace: {
+      let spaceID: UUID
+      switch tier {
+      case .space(let id), .temporary(let id): spaceID = id
+      case .global: spaceID = workspace.selectedSpaceID
+      }
+      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(spaceID)) }
+    } onMakeTemporary: {
+      let spaceID: UUID
+      switch tier {
+      case .space(let id), .temporary(let id): spaceID = id
+      case .global: spaceID = workspace.selectedSpaceID
+      }
+      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(spaceID)) }
+    }
+    .id(tab.id)
+    .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: tier))
+  }
+
+  private func select(_ id: UUID) {
+    guard !tabDrag.suppressesClick(on: id) else { return }
+    workspace.selectTab(id: id)
+  }
+
+  private func move(_ id: UUID, to target: SidebarTabDropTarget) -> Bool {
     var moved = false
     withAnimation(.smooth(duration: 0.28)) {
-      moved = workspace.moveTab(id, to: tier, before: target)
+      moved = workspace.moveTab(id, to: target.tier, before: target.before)
     }
     return moved
+  }
+
+  private func tabDragGesture(width: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 4, coordinateSpace: .named(SidebarTabDragSpace.name))
+      .updating($isTabDragGestureActive) { _, isActive, _ in isActive = true }
+      .onChanged { value in
+        tabDrag.pointerMoved(from: value.startLocation, to: value.location,
+                             layout: tabDragLayout(width: width))
+      }
+      .onEnded { _ in
+        tabDrag.drop(move)
+      }
+  }
+
+  private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
+    let space = workspace.spaces.first { $0.id == workspace.selectedSpaceID }
+    let globalIDs = workspace.globalPinnedTabs.map(\.id)
+    let pinIDs = space?.pinnedTabIDs ?? []
+    let columns = CGFloat(columns(for: width))
+    return SidebarTabDragLayout(
+      spaceID: workspace.selectedSpaceID,
+      globalTabIDs: globalIDs,
+      spacePinTabIDs: pinIDs,
+      temporaryTabIDs: (space?.tabIDs ?? []).filter { !pinIDs.contains($0) && !globalIDs.contains($0) },
+      tileSize: CGSize(width: (width - 24 - 9 * (columns - 1)) / columns, height: topPinHeight),
+      topInset: chromeLayout.topInset)
+  }
+
+  @ViewBuilder
+  private func tabDragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
+    if let tab = workspace.tab(withID: id) {
+      HStack(spacing: 9) {
+        TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
+                       size: style == .tile ? 26 : 18,
+                       fallbackLetter: style == .tile ? tab.pinFallbackLetter : nil)
+          .frame(width: style == .tile ? 26 : 20)
+        if style == .row {
+          Text(tab.displayTitle)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+          Spacer(minLength: 0)
+        }
+      }
+      .padding(.horizontal, style == .row ? 11 : 0)
+    }
   }
 
   private var footer: some View {
@@ -399,37 +487,6 @@ enum SpacePaging {
   }
 }
 
-private struct TabInsertionDropModifier: ViewModifier {
-  let onDrop: ([String]) -> Bool
-  @State private var isTargeted = false
-
-  func body(content: Content) -> some View {
-    content
-      .overlay(alignment: .top) {
-        if isTargeted {
-          HStack(spacing: 0) {
-            Circle()
-              .fill(.background)
-              .frame(width: 7, height: 7)
-              .overlay { Circle().strokeBorder(Color.accentColor, lineWidth: 2) }
-            Rectangle()
-              .fill(Color.accentColor)
-              .frame(height: 2)
-          }
-          .shadow(color: Color.accentColor.opacity(0.25), radius: 3)
-          .frame(height: 8)
-          .allowsHitTesting(false)
-          .transition(.opacity)
-        }
-      }
-      .dropDestination(for: String.self) { items, _ in
-        onDrop(items)
-      } isTargeted: { targeted in
-        withAnimation(.easeOut(duration: 0.12)) { isTargeted = targeted }
-      }
-  }
-}
-
 private struct SidebarResizeHandle: NSViewRepresentable {
   let layout: SidebarChromeLayout
 
@@ -452,9 +509,11 @@ private struct SidebarResizeHandle: NSViewRepresentable {
 
     override func mouseDown(with event: NSEvent) {
       // Keep the drag sequence attached to this view.
+      print("PROBE resize mouseDown"); fflush(stdout) // PROBE-LINE
     }
 
     override func mouseDragged(with event: NSEvent) {
+      print("PROBE resize mouseDragged \(event.locationInWindow.x)"); fflush(stdout) // PROBE-LINE
       layout?.resizeSidebar(toWindowX: event.locationInWindow.x)
     }
 
@@ -477,8 +536,7 @@ private struct PinnedTile: View {
         pageURL: tab.url,
         session: session,
         size: 26,
-        fallbackLetter: String((tab.url?.host ?? tab.displayTitle)
-          .replacingOccurrences(of: "www.", with: "").prefix(1)).uppercased())
+        fallbackLetter: tab.pinFallbackLetter)
         .frame(maxWidth: .infinity)
         .frame(height: height)
         .contentShape(RoundedRectangle(cornerRadius: 18))
@@ -498,6 +556,29 @@ private struct PinnedTile: View {
     .help(tab.displayTitle)
     .accessibilityLabel(tab.displayTitle)
     .accessibilityAddTraits(selected ? [.isSelected] : [])
+  }
+}
+
+/// A tab, or the gap a lifted tab would land in.
+private enum SidebarSlot: Identifiable {
+  case tab(BrowserTab)
+  case gap
+
+  private static let gapID = UUID()
+
+  var id: UUID {
+    switch self {
+    case .tab(let tab): return tab.id
+    case .gap: return Self.gapID
+    }
+  }
+}
+
+private extension BrowserTab {
+  /// Top pin shows a site's initial when it has no favicon.
+  var pinFallbackLetter: String {
+    String((url?.host ?? displayTitle)
+      .replacingOccurrences(of: "www.", with: "").prefix(1)).uppercased()
   }
 }
 

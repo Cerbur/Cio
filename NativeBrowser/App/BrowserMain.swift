@@ -87,6 +87,7 @@ enum BrowserMain {
     SpacesSelfTest.installIfRequested(runtime: runtime)
 
     scheduleToolingHooksIfRequested(runtime: runtime)
+    SidebarDragProbe.installIfRequested(runtime: runtime) // PROBE-LINE
 
     AppLog.app.info("entering the NSApplication run loop")
     // Runs the NSApplication run loop until the app terminates.

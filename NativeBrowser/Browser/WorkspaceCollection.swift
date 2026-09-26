@@ -38,6 +38,7 @@ struct WorkspaceTabCloseResult: Equatable, Sendable {
 /// Space's `tabIDs`, so Space and tab order are deterministic.
 struct WorkspaceCollection: Equatable, Sendable {
   static let recentlyClosedLimit = 10
+  static let globalPinnedTabLimit = 16
 
   private(set) var spaces: [BrowserSpace]
   private(set) var selectedSpaceID: UUID
@@ -150,7 +151,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     self.globalPinnedTabIDs = snapshot.globalPinnedTabIDs
     self.selectedGlobalTabID = snapshot.selectedGlobalTabID
 
-    guard globalPinnedTabIDs.count <= 16,
+    guard globalPinnedTabIDs.count <= Self.globalPinnedTabLimit,
       Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
       globalPinnedTabIDs.allSatisfy({ restoredTabs[$0] != nil }),
       selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true,
@@ -500,7 +501,8 @@ struct WorkspaceCollection: Equatable, Sendable {
       tabsByID[tabID] != nil
     else { return false }
     if case .global = tier,
-      !globalPinnedTabIDs.contains(tabID), globalPinnedTabIDs.count >= 16 { return false }
+      !globalPinnedTabIDs.contains(tabID),
+      globalPinnedTabIDs.count >= Self.globalPinnedTabLimit { return false }
 
     let destinationSpaceID: UUID
     switch tier {
@@ -586,7 +588,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Canonical sidebar names: top pin (`global`) stays across Spaces;
   /// space pin (`space`) belongs to one Space; temporary (`temporary`) is the
   /// default tier for new tabs and will later support idle expiration.
-  enum TabTier: Equatable {
+  enum TabTier: Hashable {
     case global
     case space(UUID)
     case temporary(UUID)
@@ -613,7 +615,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     else { return false }
 
     var seen = Set<UUID>()
-    guard globalPinnedTabIDs.count <= 16,
+    guard globalPinnedTabIDs.count <= Self.globalPinnedTabLimit,
       Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
       selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true
     else { return false }
