@@ -13,6 +13,8 @@ import SwiftUI
 
 /// Shared geometry for the native AppKit sidebar and its SwiftUI content.
 enum BrowserLayout {
+  static let shellCornerRadius: CGFloat = 18
+  static let shellInset: CGFloat = 4
   static let railWidth: CGFloat = 68
   static let sidebarMinimumWidth: CGFloat = 182
   static let sidebarDefaultWidth = sidebarMinimumWidth

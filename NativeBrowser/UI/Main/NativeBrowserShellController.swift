@@ -74,7 +74,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
         .frame(maxHeight: .infinity))
     let sidebarHostingController = NSHostingController(rootView: sidebarRootView)
     sidebarHostingController.view.wantsLayer = true
-    sidebarHostingController.view.layer?.cornerRadius = 18
+    sidebarHostingController.view.layer?.cornerRadius = BrowserLayout.shellCornerRadius
     sidebarHostingController.view.layer?.maskedCorners = [
       .layerMinXMinYCorner, .layerMinXMaxYCorner,
     ]
@@ -82,6 +82,12 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     let railHostingController = NSHostingController(rootView: NavigationRail(runtime: runtime))
     let browserHostingController = NSHostingController(
       rootView: BrowserShellContentView(runtime: runtime, workspace: runtime.workspaceStore))
+    browserHostingController.view.wantsLayer = true
+    browserHostingController.view.layer?.cornerRadius = BrowserLayout.shellCornerRadius
+    browserHostingController.view.layer?.maskedCorners = [
+      .layerMaxXMinYCorner, .layerMaxXMaxYCorner,
+    ]
+    browserHostingController.view.layer?.masksToBounds = true
 
     let railItem = NSSplitViewItem(viewController: railHostingController)
     railItem.minimumThickness = BrowserLayout.railWidth
@@ -107,7 +113,7 @@ final class NativeBrowserShellController: NSSplitViewController, NSToolbarDelega
     sidebarChromeLayout.splitView = splitView
     splitView.dividerStyle = .thin
     splitView.wantsLayer = true
-    splitView.layer?.cornerRadius = 18
+    splitView.layer?.cornerRadius = BrowserLayout.shellCornerRadius
     splitView.layer?.masksToBounds = true
     addSplitViewItem(railItem)
     addSplitViewItem(sidebarItem)
