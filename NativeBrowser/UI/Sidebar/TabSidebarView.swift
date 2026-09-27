@@ -553,8 +553,6 @@ private struct PinnedTile: View {
           .white.opacity(selected ? 0.5 : 0.25), lineWidth: 1)
       }
     }
-    .shadow(color: .black.opacity(selected ? 0.18 : (showsHover ? 0.08 : 0)),
-            radius: selected ? 13 : 5, y: selected ? 7 : 2)
     .scaleEffect(selected ? 1.02 : 1)
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
@@ -649,7 +647,6 @@ private struct SidebarTabRow: View {
         SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
       }
     }
-    .shadow(color: .black.opacity(selected ? 0.15 : 0), radius: 8, y: 4)
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
       Button("Pin for All Spaces", action: onPinGlobally)
