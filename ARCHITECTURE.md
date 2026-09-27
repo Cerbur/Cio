@@ -2086,7 +2086,8 @@ whole Space/tab *policy*, also Foundation-only:
 
 - create / rename / select Spaces, append / insert-at-index / select tabs,
 - one selected tab per Space and a derived effective selected tab,
-- the selection rule for a close (right neighbour, else left neighbour, else a
+- the selection rule for a close (the Space's most recent valid stable tab,
+  else the temporary queue head, else the first remaining tab, else a
   replacement in the same Space),
 - the recently-closed stack, bounded to `recentlyClosedLimit = 10` entries and
   in memory only,
@@ -2267,7 +2268,8 @@ Consequences:
   and Chromium's own focus request for the new browser is cancelled) while the
   toolbar re-binds to the selected session's model.
 - **Closing the selected tab transfers the keyboard** to the tab the collection
-  selects (right neighbour, else left, else the last-tab replacement), and the
+  selects (recent valid stable tab, else temporary queue head, else a remaining
+  tab or the last-tab replacement), and the
   hand-over happens before the closing session is asked to close.
   `-completeClose` clears only that browser's own CEF focus and only that browser
   view's AppKit responder (`NBResponderBelongsToView`), so the new selection keeps
@@ -2932,3 +2934,20 @@ browser sessions. Tabs restored without a CEF session use their page origin's
 `/favicon.ico`; the icon loader coalesces requests by URL and falls back to a
 letter in top pin or a globe in the other tiers when no image is available.
 Favicon data is presentation-only and is not part of session persistence.
+
+## Stable Tab Stack
+
+Each Space keeps a `stableTabStack` of tab UUIDs, separate from sidebar tab
+ordering. Opening a tab appends it; activating an existing tab moves it to the
+top. Closing the effective selected tab removes it, skips stale stack entries,
+and selects the newest valid tab in that same Space. If the stack has no valid
+entry, selection falls back to the temporary queue head, then to another tab
+in the Space. Closing a background tab leaves the stack untouched, so stale
+references are expected until a selected close. Space switches, metadata
+updates and tab moves do not rewrite the stack.
+
+The stack is an advisory field in each persisted Space. Older snapshots load
+with an empty stack. Invalid stack encoding or duplicate entries clear only
+that Space's stack; the tab graph still restores. A tab moved to another Space
+is a stale entry in its former Space and is skipped on close. Tab IDs already
+identify entries without another allocation.

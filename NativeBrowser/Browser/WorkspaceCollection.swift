@@ -53,7 +53,8 @@ struct WorkspaceCollection: Equatable, Sendable {
     let space = BrowserSpace(
       name: Self.normalizedInitialSpaceName(spaceName),
       tabIDs: [initialTab.id],
-      selectedTabID: initialTab.id)
+      selectedTabID: initialTab.id,
+      stableTabStack: [initialTab.id])
     self.spaces = [space]
     self.selectedSpaceID = space.id
     self.tabsByID = [initialTab.id: initialTab]
@@ -137,7 +138,8 @@ struct WorkspaceCollection: Equatable, Sendable {
           name: name,
           tabIDs: orderedTabIDs,
           pinnedTabIDs: persistedSpace.pinnedTabIDs,
-          selectedTabID: selectedTabID))
+          selectedTabID: selectedTabID,
+          stableTabStack: persistedSpace.stableTabStack))
     }
 
     guard spaceIDs.contains(snapshot.selectedSpaceID) else {
@@ -150,6 +152,15 @@ struct WorkspaceCollection: Equatable, Sendable {
     self.recentlyClosed = []
     self.globalPinnedTabIDs = snapshot.globalPinnedTabIDs
     self.selectedGlobalTabID = snapshot.selectedGlobalTabID
+
+    // The stack is a soft link into the tab graph. Missing or moved IDs can
+    // remain after background operations; duplicate entries are corrupt.
+    for index in spaces.indices {
+      let stack = spaces[index].stableTabStack
+      if Set(stack).count != stack.count {
+        spaces[index].stableTabStack = []
+      }
+    }
 
     guard globalPinnedTabIDs.count <= Self.globalPinnedTabLimit,
       Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
@@ -261,7 +272,8 @@ struct WorkspaceCollection: Equatable, Sendable {
       id: spaceID,
       name: Self.safeSpaceName(defaultName, fallback: "Space \(spaces.count + 1)"),
       tabIDs: [initialTab.id],
-      selectedTabID: initialTab.id)
+      selectedTabID: initialTab.id,
+      stableTabStack: [initialTab.id])
     spaces.append(space)
     tabsByID[initialTab.id] = initialTab
     if select {
@@ -321,6 +333,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     let clamped = min(max(index, 0), spaces[spaceIndex].tabIDs.count)
     spaces[spaceIndex].tabIDs.insert(tab.id, at: clamped)
     tabsByID[tab.id] = tab
+    recordStableTab(tab.id, in: spaceIndex)
     if select || spaces[spaceIndex].selectedTabID == nil {
       spaces[spaceIndex].selectedTabID = tab.id
       if select { selectedGlobalTabID = nil }
@@ -341,6 +354,9 @@ struct WorkspaceCollection: Equatable, Sendable {
       guard selectedTabID != id else { return false }
       selectedGlobalTabID = id
       tabsByID[id]?.lastActivatedAt = Date()
+      if let ownerIndex = spaceID(containing: id).flatMap(index(of:)) {
+        recordStableTab(id, in: ownerIndex)
+      }
       validateInvariants()
       return true
     }
@@ -351,6 +367,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     spaces[spaceIndex].selectedTabID = id
     selectedGlobalTabID = nil
     tabsByID[id]?.lastActivatedAt = Date()
+    recordStableTab(id, in: spaceIndex)
     validateInvariants()
     return true
   }
@@ -368,6 +385,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     spaces[spaceIndex].selectedTabID = tabID
     selectedGlobalTabID = nil
     tabsByID[tabID]?.lastActivatedAt = Date()
+    recordStableTab(tabID, in: spaceIndex)
     validateInvariants()
     return changed
   }
@@ -413,6 +431,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     }
 
     let wasSelected = spaces[spaceIndex].selectedTabID == tabID
+    let wasEffectiveSelection = selectedTabID == tabID
     var snapshot: ClosedTabSnapshot?
     if reason == .userClosed, tab.url != nil {
       snapshot = ClosedTabSnapshot(
@@ -431,6 +450,24 @@ struct WorkspaceCollection: Equatable, Sendable {
     globalPinnedTabIDs.removeAll { $0 == tabID }
     if selectedGlobalTabID == tabID { selectedGlobalTabID = nil }
     tabsByID.removeValue(forKey: tabID)
+
+    var nextStableID: UUID?
+    if reason == .userClosed && wasEffectiveSelection {
+      var stack = spaces[spaceIndex].stableTabStack
+      if Set(stack).count != stack.count {
+        stack.removeAll()
+      } else {
+        stack.removeAll { $0 == tabID }
+        while let candidate = stack.popLast() {
+          if spaces[spaceIndex].tabIDs.contains(candidate), tabsByID[candidate] != nil {
+            nextStableID = candidate
+            stack.append(candidate)
+            break
+          }
+        }
+      }
+      spaces[spaceIndex].stableTabStack = stack
+    }
 
     if spaces[spaceIndex].tabIDs.isEmpty {
       spaces[spaceIndex].selectedTabID = nil
@@ -451,10 +488,15 @@ struct WorkspaceCollection: Equatable, Sendable {
         needsReplacementTab: false)
     }
 
-    let nextIndex = tabIndex < spaces[spaceIndex].tabIDs.count
-      ? tabIndex
-      : spaces[spaceIndex].tabIDs.count - 1
-    let nextID = spaces[spaceIndex].tabIDs[nextIndex]
+    let nextID: UUID
+    if reason == .userClosed && wasEffectiveSelection {
+      nextID = nextStableID
+        ?? tabIDs(in: .temporary(spaceID)).first
+        ?? spaces[spaceIndex].tabIDs[0]
+    } else {
+      let nextIndex = min(tabIndex, spaces[spaceIndex].tabIDs.count - 1)
+      nextID = spaces[spaceIndex].tabIDs[nextIndex]
+    }
     spaces[spaceIndex].selectedTabID = nextID
     validateInvariants()
     return WorkspaceTabCloseResult(
@@ -481,6 +523,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     spaces[spaceIndex].tabIDs.insert(tab.id, at: index)
     spaces[spaceIndex].selectedTabID = tab.id
     tabsByID[tab.id] = tab
+    recordStableTab(tab.id, in: spaceIndex)
     selectedSpaceID = snapshot.spaceID
     selectedGlobalTabID = nil
     validateInvariants()
@@ -640,6 +683,11 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   private static func normalizedInitialSpaceName(_ name: String) -> String {
     safeSpaceName(name, fallback: "Main")
+  }
+
+  private mutating func recordStableTab(_ tabID: UUID, in spaceIndex: Int) {
+    spaces[spaceIndex].stableTabStack.removeAll { $0 == tabID }
+    spaces[spaceIndex].stableTabStack.append(tabID)
   }
 
   private static func safeSpaceName(_ name: String, fallback: String) -> String {

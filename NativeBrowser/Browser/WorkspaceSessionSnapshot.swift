@@ -46,7 +46,8 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
         name: space.name,
         selectedTabID: space.selectedTabID,
         tabs: tabs,
-        pinnedTabIDs: space.pinnedTabIDs)
+        pinnedTabIDs: space.pinnedTabIDs,
+        stableTabStack: space.stableTabStack)
     }
   }
 
@@ -72,17 +73,19 @@ struct PersistedSpace: Codable, Equatable, Sendable {
   let selectedTabID: UUID?
   let tabs: [PersistedTab]
   var pinnedTabIDs: [UUID] = []
+  var stableTabStack: [UUID] = []
 
-  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = []) {
+  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = []) {
     self.id = id
     self.name = name
     self.selectedTabID = selectedTabID
     self.tabs = tabs
     self.pinnedTabIDs = pinnedTabIDs
+    self.stableTabStack = stableTabStack
   }
 
   private enum CodingKeys: String, CodingKey {
-    case id, name, selectedTabID, tabs, pinnedTabIDs
+    case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack
   }
 
   init(from decoder: Decoder) throws {
@@ -92,6 +95,8 @@ struct PersistedSpace: Codable, Equatable, Sendable {
     selectedTabID = try values.decodeIfPresent(UUID.self, forKey: .selectedTabID)
     tabs = try values.decode([PersistedTab].self, forKey: .tabs)
     pinnedTabIDs = try values.decodeIfPresent([UUID].self, forKey: .pinnedTabIDs) ?? []
+    // A malformed advisory stack never invalidates the durable tab graph.
+    stableTabStack = (try? values.decode([UUID].self, forKey: .stableTabStack)) ?? []
   }
 }
 

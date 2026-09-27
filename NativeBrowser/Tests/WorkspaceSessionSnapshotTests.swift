@@ -81,6 +81,7 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     XCTAssertEqual(restored.allTabIDs, original.allTabIDs)
     XCTAssertEqual(restored.selectedSpaceID, original.selectedSpaceID)
     XCTAssertEqual(restored.selectedTabID, original.selectedTabID)
+    XCTAssertEqual(restored.spaces.map(\.stableTabStack), original.spaces.map(\.stableTabStack))
     XCTAssertTrue(restored.validateInvariants())
   }
 
@@ -91,7 +92,10 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     json.removeValue(forKey: "globalPinnedTabIDs")
     json.removeValue(forKey: "selectedGlobalTabID")
     var spaces = try XCTUnwrap(json["spaces"] as? [[String: Any]])
-    for index in spaces.indices { spaces[index].removeValue(forKey: "pinnedTabIDs") }
+    for index in spaces.indices {
+      spaces[index].removeValue(forKey: "pinnedTabIDs")
+      spaces[index].removeValue(forKey: "stableTabStack")
+    }
     json["spaces"] = spaces
     let legacy = try JSONSerialization.data(withJSONObject: json)
     let decoder = JSONDecoder()
@@ -99,7 +103,25 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     let restored = try WorkspaceCollection(restoring: decoder.decode(WorkspaceSessionSnapshot.self, from: legacy))
     XCTAssertTrue(restored.globalPinnedTabs.isEmpty)
     XCTAssertTrue(restored.spaces.allSatisfy { $0.pinnedTabIDs.isEmpty })
+    XCTAssertTrue(restored.spaces.allSatisfy { $0.stableTabStack.isEmpty })
     XCTAssertEqual(restored.allTabIDs, original.spaces.flatMap(\.tabs).map(\.id))
+  }
+
+  func testMalformedStableStackClearsWithoutLosingTabs() throws {
+    let original = WorkspaceSessionSnapshot(workspace: populatedWorkspace())
+    let encoded = try encodedSnapshot(original)
+    var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    var spaces = try XCTUnwrap(json["spaces"] as? [[String: Any]])
+    spaces[0]["stableTabStack"] = [42, "invalid UUID"]
+    json["spaces"] = spaces
+    let data = try JSONSerialization.data(withJSONObject: json)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let restored = try WorkspaceCollection(restoring: decoder.decode(WorkspaceSessionSnapshot.self, from: data))
+    XCTAssertEqual(restored.allTabIDs, original.spaces.flatMap(\.tabs).map(\.id))
+    XCTAssertTrue(restored.spaces[0].stableTabStack.isEmpty)
+    XCTAssertEqual(restored.spaces[1].stableTabStack, original.spaces[1].stableTabStack)
   }
 
   func testSpaceAndTabOrderingAndSelectionsArePreserved() throws {
@@ -302,6 +324,7 @@ final class WorkspaceSessionSnapshotTests: XCTestCase {
     XCTAssertEqual(loaded.selectedSpaceID, snapshot.selectedSpaceID)
     XCTAssertEqual(loaded.spaces.map(\.id), snapshot.spaces.map(\.id))
     XCTAssertEqual(loaded.spaces.map(\.name), snapshot.spaces.map(\.name))
+    XCTAssertEqual(loaded.spaces.map(\.stableTabStack), snapshot.spaces.map(\.stableTabStack))
     XCTAssertEqual(
       loaded.spaces.flatMap(\.tabs).map(\.id),
       snapshot.spaces.flatMap(\.tabs).map(\.id))

@@ -164,7 +164,7 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(collection.selectedTabID, foreignTabID)
   }
 
-  func testClosingSelectedTabChoosesRightNeighbourInSameSpace() {
+  func testClosingSelectedTabUsesMostRecentlyOpenedTabInSameSpace() {
     var collection = workspace(["A", "B", "C"])
     let spaceID = collection.selectedSpaceID
     let middle = collection.currentTabIDs[1]
@@ -175,6 +175,124 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(result.spaceID, spaceID)
     XCTAssertEqual(result.outcome, .removedSelectionMoved(to: collection.currentTabIDs[1]))
     XCTAssertEqual(collection.currentTabs.map(\.title), ["A", "C"])
+  }
+
+  func testClosingSelectedTabReturnsToMostRecentlyActivatedTab() {
+    var collection = workspace(["A", "B", "C", "D"])
+    let ids = collection.currentTabIDs
+    XCTAssertTrue(collection.selectTab(id: ids[3]))
+    XCTAssertTrue(collection.selectTab(id: ids[1]))
+
+    let result = collection.close(ids[1], reason: .userClosed)
+
+    XCTAssertEqual(result.outcome, .removedSelectionMoved(to: ids[3]))
+    XCTAssertEqual(collection.selectedTabID, ids[3])
+    XCTAssertEqual(collection.currentTabIDs, [ids[0], ids[2], ids[3]])
+  }
+
+  func testBackgroundCloseKeepsStaleStackEntryUntilSelectedClose() {
+    var collection = workspace(["A", "B", "C"])
+    let ids = collection.currentTabIDs
+    XCTAssertTrue(collection.selectTab(id: ids[2]))
+    let stack = collection.selectedSpace!.stableTabStack
+
+    XCTAssertEqual(collection.close(ids[1], reason: .userClosed).outcome, .removedSelectionUnchanged)
+    XCTAssertEqual(collection.selectedSpace!.stableTabStack, stack)
+
+    XCTAssertEqual(collection.close(ids[2], reason: .userClosed).outcome, .removedSelectionMoved(to: ids[0]))
+    XCTAssertEqual(collection.selectedSpace!.stableTabStack, [ids[0]])
+  }
+
+  func testEmptyStackFallsBackToTemporaryQueueHead() throws {
+    var collection = workspace(["A", "B", "C"])
+    let ids = collection.currentTabIDs
+    let space = collection.selectedSpace!
+    let snapshot = WorkspaceSessionSnapshot(
+      selectedSpaceID: space.id,
+      spaces: [PersistedSpace(
+        id: space.id, name: space.name, selectedTabID: ids[2],
+        tabs: collection.currentTabs.map(PersistedTab.init))])
+    collection = try WorkspaceCollection(restoring: snapshot)
+
+    XCTAssertEqual(collection.close(ids[2], reason: .userClosed).outcome, .removedSelectionMoved(to: ids[0]))
+    XCTAssertTrue(collection.selectedSpace!.stableTabStack.isEmpty)
+  }
+
+  func testStableStacksAreSeparateForEachSpaceAndSurviveRestore() throws {
+    var collection = workspace(["A", "B"])
+    let first = collection.selectedSpaceID
+    let firstIDs = collection.currentTabIDs
+    let otherInitial = tab("Other A")
+    let second = collection.createSpace(initialTab: otherInitial)!
+    let otherB = tab("Other B")
+    XCTAssertTrue(collection.appendTab(otherB, in: second, select: true))
+    let secondStack = collection.space(withID: second)!.stableTabStack
+
+    XCTAssertTrue(collection.selectSpace(id: first))
+    XCTAssertTrue(collection.selectTab(id: firstIDs[1]))
+    XCTAssertEqual(collection.space(withID: second)!.stableTabStack, secondStack)
+
+    collection = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection))
+    XCTAssertEqual(collection.space(withID: first)!.stableTabStack.last, firstIDs[1])
+    XCTAssertEqual(collection.space(withID: second)!.stableTabStack, secondStack)
+    XCTAssertEqual(collection.close(firstIDs[1], reason: .userClosed).outcome,
+      .removedSelectionMoved(to: firstIDs[0]))
+    XCTAssertEqual(collection.space(withID: second)!.stableTabStack, secondStack)
+  }
+
+  func testCorruptStableStackClearsWithoutRejectingWorkspace() throws {
+    let collection = workspace(["A", "B"])
+    let space = collection.selectedSpace!
+    let ids = collection.currentTabIDs
+    let snapshot = WorkspaceSessionSnapshot(
+      selectedSpaceID: space.id,
+      spaces: [PersistedSpace(
+        id: space.id, name: space.name, selectedTabID: ids[1],
+        tabs: collection.currentTabs.map(PersistedTab.init),
+        stableTabStack: [ids[0], ids[0]])])
+
+    var restored = try WorkspaceCollection(restoring: snapshot)
+    XCTAssertTrue(restored.selectedSpace!.stableTabStack.isEmpty)
+    XCTAssertEqual(restored.close(ids[1], reason: .userClosed).outcome,
+      .removedSelectionMoved(to: ids[0]))
+  }
+
+  func testMoveAndSpaceSwitchLeaveStaleStackEntryToBeSkipped() throws {
+    var collection = workspace(["A", "B", "C"])
+    let first = collection.selectedSpaceID
+    let ids = collection.currentTabIDs
+    let second = collection.createSpace(initialTab: tab("Other"))!
+    XCTAssertTrue(collection.selectSpace(id: first))
+    XCTAssertTrue(collection.selectTab(id: ids[2]))
+    let firstStack = collection.space(withID: first)!.stableTabStack
+    let secondStack = collection.space(withID: second)!.stableTabStack
+
+    XCTAssertTrue(collection.moveTab(ids[1], to: .space(second)))
+    XCTAssertEqual(collection.space(withID: first)!.stableTabStack, firstStack)
+    XCTAssertEqual(collection.space(withID: second)!.stableTabStack, secondStack)
+
+    collection = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection))
+    XCTAssertEqual(collection.space(withID: first)!.stableTabStack, firstStack)
+    XCTAssertEqual(collection.close(ids[2], reason: .userClosed).outcome,
+      .removedSelectionMoved(to: ids[0]))
+    XCTAssertEqual(collection.space(withID: first)!.stableTabStack, [ids[0]])
+  }
+
+  func testClosingGlobalPinFromAnotherSpaceDoesNotUseForeignStack() {
+    var collection = WorkspaceCollection(initialTab: tab("Top"))
+    let owner = collection.selectedSpaceID
+    let top = collection.selectedTabID!
+    XCTAssertTrue(collection.moveTab(top, to: .global))
+    let otherTab = tab("Other")
+    let other = collection.createSpace(initialTab: otherTab)!
+    XCTAssertTrue(collection.selectTab(id: top))
+    let otherStack = collection.space(withID: other)!.stableTabStack
+
+    XCTAssertEqual(collection.close(top, reason: .userClosed).outcome, .removedLast)
+    XCTAssertEqual(collection.selectedSpaceID, other)
+    XCTAssertEqual(collection.selectedTabID, otherTab.id)
+    XCTAssertEqual(collection.space(withID: other)!.stableTabStack, otherStack)
+    XCTAssertTrue(collection.space(withID: owner)!.stableTabStack.isEmpty)
   }
 
   func testClosingBackgroundTabLeavesSpaceSelectionIntact() {

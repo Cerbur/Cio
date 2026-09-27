@@ -18,18 +18,23 @@ struct BrowserSpace: Identifiable, Equatable, Sendable {
   var tabIDs: [UUID]
   var pinnedTabIDs: [UUID]
   var selectedTabID: UUID?
+  /// Opening/activation history, oldest first. Closed background tabs may
+  /// leave stale IDs here until a selected close consumes them.
+  var stableTabStack: [UUID]
 
   init(
     id: UUID = UUID(),
     name: String,
     tabIDs: [UUID] = [],
     pinnedTabIDs: [UUID] = [],
-    selectedTabID: UUID? = nil
+    selectedTabID: UUID? = nil,
+    stableTabStack: [UUID] = []
   ) {
     self.id = id
     self.name = name
     self.tabIDs = tabIDs
     self.pinnedTabIDs = pinnedTabIDs
     self.selectedTabID = selectedTabID
+    self.stableTabStack = stableTabStack
   }
 }
