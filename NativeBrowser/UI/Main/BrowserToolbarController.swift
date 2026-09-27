@@ -19,6 +19,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     static let reload = NSToolbarItem.Identifier("cio.reload")
     static let address = NSToolbarItem.Identifier("cio.address")
     static let leadingSpacer = NSToolbarItem.Identifier("cio.sidebar-leading-spacer")
+    static let sectionPlaceholder = NSToolbarItem.Identifier("cio.section-toolbar-placeholder")
   }
 
   private let workspace: BrowserWorkspaceStore
@@ -27,6 +28,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private let onSidebarToggle: () -> Void
   private weak var window: NSWindow?
   private var toolbar: NSToolbar?
+  private var showsSpaceControls = true
   private weak var showSidebarToolbarItem: NSToolbarItem?
   private var sidebarButton: NSButton?
   private var leadingSpacerToolbarItem: NSToolbarItem?
@@ -61,8 +63,18 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     bindSelectedSession(workspace.selectedSession)
   }
 
-  func setVisible(_ visible: Bool) {
-    toolbar?.isVisible = visible
+  func setSpaceControlsVisible(_ visible: Bool) {
+    showsSpaceControls = visible
+    updateSectionItems()
+  }
+
+  private func updateSectionItems() {
+    // Keep the native toolbar installed and visible so its titlebar height and
+    // traffic-light placement are the same in every section.
+    toolbar?.items.forEach { item in
+      item.isHidden = item.itemIdentifier == ToolbarID.sectionPlaceholder
+        ? showsSpaceControls : !showsSpaceControls
+    }
   }
 
   func install(in window: NSWindow, showsSpaceToolbar: Bool) {
@@ -86,7 +98,8 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     if window.toolbar !== toolbar {
       window.toolbar = toolbar
     }
-    toolbar?.isVisible = showsSpaceToolbar
+    toolbar?.isVisible = true
+    setSpaceControlsVisible(showsSpaceToolbar)
     captureToolbarPresentationItems()
     bindSelectedSession(workspace.selectedSession)
     updateSidebarState()
@@ -199,6 +212,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
           !toolbar.items.contains(where: { $0.itemIdentifier == ToolbarID.leadingSpacer })
     else { return }
     toolbar.insertItem(withItemIdentifier: ToolbarID.leadingSpacer, at: 0)
+    updateSectionItems()
     captureToolbarPresentationItems()
     updateSidebarButtonPosition()
   }
@@ -296,6 +310,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       ToolbarID.reload,
       .space,
       ToolbarID.address,
+      ToolbarID.sectionPlaceholder,
     ]
   }
 
@@ -309,6 +324,17 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     willBeInsertedIntoToolbar flag: Bool
   ) -> NSToolbarItem? {
     switch itemIdentifier {
+    case ToolbarID.sectionPlaceholder:
+      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+      item.isBordered = false
+      let view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 36))
+      view.translatesAutoresizingMaskIntoConstraints = false
+      NSLayoutConstraint.activate([
+        view.widthAnchor.constraint(equalToConstant: 1),
+        view.heightAnchor.constraint(equalToConstant: 36),
+      ])
+      item.view = view
+      return item
     case ToolbarID.leadingSpacer:
       let item = NSToolbarItem(itemIdentifier: itemIdentifier)
       item.isBordered = false

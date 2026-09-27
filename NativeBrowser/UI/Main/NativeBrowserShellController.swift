@@ -150,7 +150,7 @@ final class NativeBrowserShellController: NSSplitViewController {
         toggleSpaceSidebar()
       }
     }
-    browserToolbar.setVisible(panel == nil)
+    browserToolbar.setSpaceControlsVisible(panel == nil)
     browserToolbar.updateSidebarState()
   }
 
