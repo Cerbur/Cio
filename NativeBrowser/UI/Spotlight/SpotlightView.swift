@@ -20,39 +20,43 @@ struct SpotlightView: View {
     SpotlightMode.suggestions(for: text)
   }
 
+  private var isExpanded: Bool { !suggestions.isEmpty }
+
+  private var panelShape: RoundedRectangle {
+    RoundedRectangle(cornerRadius: isExpanded ? 24 : 33, style: .continuous)
+  }
+
   var body: some View {
     GeometryReader { geometry in
-      ZStack {
+      ZStack(alignment: .top) {
         Color.clear
           .contentShape(Rectangle())
           .onTapGesture(perform: onDismiss)
 
-        HStack(spacing: 16) {
-          Image(systemName: "magnifyingglass")
-            .font(.system(size: 22, weight: .medium))
-            .foregroundStyle(.secondary)
-            .frame(width: 28)
-            .accessibilityHidden(true)
+        VStack(spacing: 0) {
+          HStack(spacing: 16) {
+            Image(systemName: "magnifyingglass")
+              .font(.system(size: 22, weight: .medium))
+              .foregroundStyle(.secondary)
+              .frame(width: 28)
+              .accessibilityHidden(true)
 
-          SpotlightInputField(
-            text: text,
-            onChange: { text = $0; selectedIndex = 0 },
-            onSubmit: submitSelected,
-            onEscape: onDismiss,
-            onMove: moveSelection)
-            .frame(height: 32)
-            .accessibilityLabel("Spotlight search or website")
-        }
-        .padding(.horizontal, 23)
-        .frame(height: 66)
-        .frame(maxWidth: .infinity)
-        .browserChromeGlassSurface(in: Capsule())
-        .overlay {
-          Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1)
-            .allowsHitTesting(false)
-        }
-        .overlay(alignment: .top) {
-          if !suggestions.isEmpty {
+            SpotlightInputField(
+              text: text,
+              onChange: { text = $0; selectedIndex = 0 },
+              onSubmit: submitSelected,
+              onEscape: onDismiss,
+              onMove: moveSelection)
+              .frame(height: 32)
+              .accessibilityLabel("Spotlight search or website")
+          }
+          .padding(.horizontal, 23)
+          .frame(height: 66)
+
+          if isExpanded {
+            Divider()
+              .padding(.horizontal, 20)
+
             VStack(spacing: 4) {
               ForEach(Array(suggestions.enumerated()), id: \.offset) { index, mode in
                 Button {
@@ -91,13 +95,19 @@ struct SpotlightView: View {
             }
             .padding(8)
             .frame(maxWidth: .infinity)
-            .browserChromeGlassSurface(
-              in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .offset(y: 76)
+            .transition(.opacity)
           }
         }
         .frame(width: min(geometry.size.width - 48, 720))
-        .offset(y: -geometry.size.height / 6)
+        .browserChromeGlassSurface(in: panelShape)
+        .overlay {
+          panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
+            .allowsHitTesting(false)
+        }
+        .clipShape(panelShape)
+        // Keep the input at the shell's upper third while results grow below it.
+        .padding(.top, max(16, geometry.size.height / 3 - 33))
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isExpanded)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
