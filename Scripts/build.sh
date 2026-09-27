@@ -31,3 +31,17 @@ xcodebuild \
   -derivedDataPath "$DERIVED_DATA" \
   build \
   "$@"
+
+APP_EXECUTABLE="$DERIVED_DATA/Build/Products/$CONFIGURATION/NativeBrowser.app/Contents/MacOS/NativeBrowser"
+if command -v pgrep >/dev/null 2>&1; then
+  while IFS= read -r pid; do
+    running_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    case "$running_command" in
+      "$APP_EXECUTABLE"|"$APP_EXECUTABLE "*)
+        printf '\nBuilt %s, but NativeBrowser is already running (PID %s). Quit and reopen it to use this build.\n' \
+          "$APP_EXECUTABLE" "$pid"
+        break
+        ;;
+    esac
+  done < <(pgrep -x NativeBrowser 2>/dev/null || true)
+fi

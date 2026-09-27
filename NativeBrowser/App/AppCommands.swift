@@ -41,7 +41,10 @@ struct BrowserCommands: Commands {
 
       Divider()
 
-      Button("Open Location…") { workspace.selectedSession?.requestAddressFieldFocus() }
+      Button("Open Location…") {
+        workspace.dismissSpotlight(focusPage: false)
+        workspace.selectedSession?.requestAddressFieldFocus()
+      }
         .keyboardShortcut("l", modifiers: .command)
     }
 
@@ -50,7 +53,7 @@ struct BrowserCommands: Commands {
     // AppDelegate so that Command-W cannot mean "close the window" while tabs
     // exist (section 21).
     CommandMenu("Tabs") {
-      Button("New Tab") { workspace.createTab(url: nil) }
+      Button("New Tab") { workspace.presentSpotlight() }
         .keyboardShortcut("t", modifiers: .command)
 
       Button("Close Tab") { workspace.closeSelectedTab() }

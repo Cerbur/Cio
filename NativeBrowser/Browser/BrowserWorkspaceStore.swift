@@ -24,6 +24,9 @@ final class BrowserWorkspaceStore: ObservableObject {
   private var workspace: WorkspaceCollection
   private var lastSavedSnapshot: WorkspaceSessionSnapshot?
 
+  /// A shell-level command surface. Opening it does not create a tab.
+  @Published private(set) var isSpotlightPresented = false
+
   /// Diagnostics and verification hooks. The store forwards runtime lifecycle
   /// events but remains the owner of all domain transitions.
   var onLifecycleEvent: ((String) -> Void)?
@@ -239,6 +242,25 @@ final class BrowserWorkspaceStore: ObservableObject {
     return tab.id
   }
 
+  func presentSpotlight() {
+    guard !isTerminating else { return }
+    selectedSession?.blur()
+    isSpotlightPresented = true
+  }
+
+  func dismissSpotlight(focusPage: Bool = true) {
+    guard isSpotlightPresented else { return }
+    isSpotlightPresented = false
+    if focusPage { selectedSession?.focusPage() }
+  }
+
+  func submitSpotlight(_ mode: SpotlightMode) {
+    guard isSpotlightPresented else { return }
+    isSpotlightPresented = false
+    guard createTab(url: mode.destinationURL) != nil else { return }
+    selectedSession?.focusPage()
+  }
+
   func selectTab(id: UUID) {
     guard (workspace.globalPinnedTabIDs.contains(id)
       || workspace.spaceID(containing: id) == workspace.selectedSpaceID),
@@ -381,11 +403,17 @@ final class BrowserWorkspaceStore: ObservableObject {
   ) -> T {
     let outgoing = selectedSession
     let previousSelection = workspace.selectedTabID
+    let previousSpace = workspace.selectedSpaceID
     let pageHeldKeyboard = pageHeldKeyboardOverride ?? outgoing?.ownsPageKeyboard ?? false
     let beforeSnapshot = sessionSnapshot
 
     let result = change()
     persistIfNeeded(comparedTo: beforeSnapshot)
+
+    if isSpotlightPresented,
+       (workspace.selectedTabID != previousSelection || workspace.selectedSpaceID != previousSpace) {
+      isSpotlightPresented = false
+    }
 
     guard workspace.selectedTabID != previousSelection else {
       publishWorkspace()

@@ -24,10 +24,21 @@ struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
 }
 
 @MainActor
-final class NativeBrowserShellController: NSSplitViewController {
+private final class ShellSplitController: NSSplitViewController {
+  override func splitView(
+    _ splitView: NSSplitView,
+    shouldHideDividerAt dividerIndex: Int
+  ) -> Bool {
+    dividerIndex == 0 || super.splitView(splitView, shouldHideDividerAt: dividerIndex)
+  }
+}
+
+@MainActor
+final class NativeBrowserShellController: NSViewController {
   private let runtime: ApplicationRuntime
   private let sidebarChromeLayout = SidebarChromeLayout()
   private let mainViewController: BrowserMainViewController
+  private let shellSplitController: ShellSplitController
   private lazy var browserToolbar = BrowserToolbarController(
     workspace: runtime.workspaceStore,
     browserView: browserItem.viewController.view,
@@ -38,6 +49,8 @@ final class NativeBrowserShellController: NSSplitViewController {
   private var spaceSplitView: NSSplitView { mainViewController.spaceSplitView }
 
   private var panelObservation: AnyCancellable?
+  private var spotlightObservation: AnyCancellable?
+  private var spotlightHostingView: NSHostingView<SpotlightView>?
   private var sidebarWasCollapsedBeforeLibrary = false
   private var wasShowingLibrary = false
   private var sidebarCollapseObservation: NSKeyValueObservation?
@@ -56,13 +69,15 @@ final class NativeBrowserShellController: NSSplitViewController {
     let mainItem = NSSplitViewItem(viewController: mainViewController)
     mainItem.canCollapse = false
 
-    super.init(nibName: nil, bundle: nil)
+    let splitController = ShellSplitController()
+    splitController.splitView = SeamlessSplitView()
+    splitController.splitView.isVertical = true
+    splitController.splitView.dividerStyle = .thin
+    splitController.addSplitViewItem(railItem)
+    splitController.addSplitViewItem(mainItem)
+    shellSplitController = splitController
 
-    splitView = SeamlessSplitView()
-    splitView.isVertical = true
-    splitView.dividerStyle = .thin
-    addSplitViewItem(railItem)
-    addSplitViewItem(mainItem)
+    super.init(nibName: nil, bundle: nil)
   }
 
   @available(*, unavailable)
@@ -70,16 +85,31 @@ final class NativeBrowserShellController: NSSplitViewController {
     fatalError("init(coder:) is not supported")
   }
 
+  override func loadView() {
+    let shellView = NSView()
+    view = shellView
+    addChild(shellSplitController)
+    shellView.addSubview(shellSplitController.view)
+    shellSplitController.view.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      shellSplitController.view.leadingAnchor.constraint(equalTo: shellView.leadingAnchor),
+      shellSplitController.view.trailingAnchor.constraint(equalTo: shellView.trailingAnchor),
+      shellSplitController.view.topAnchor.constraint(equalTo: shellView.topAnchor),
+      shellSplitController.view.bottomAnchor.constraint(equalTo: shellView.bottomAnchor),
+    ])
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     observeSidebarCollapse()
     observePanelSelection()
+    observeSpotlight()
   }
 
   override func viewWillAppear() {
     super.viewWillAppear()
-    // Configure full-size content before NSSplitViewController lays out its
-    // full-height sidebar beneath the toolbar.
+    // Configure full-size content before the nested split controller lays out
+    // its full-height sidebar beneath the toolbar.
     if let window = view.window {
       browserToolbar.install(in: window, showsSpaceToolbar: runtime.presentedInternalPanel == nil)
     }
@@ -108,6 +138,7 @@ final class NativeBrowserShellController: NSSplitViewController {
       browserToolbar.install(in: window, showsSpaceToolbar: runtime.presentedInternalPanel == nil)
     }
     updateSidebarChromeLayout()
+    updateSpotlightPresentation(runtime.workspaceStore.isSpotlightPresented)
   }
 
   override func viewDidLayout() {
@@ -116,15 +147,46 @@ final class NativeBrowserShellController: NSSplitViewController {
     browserToolbar.updateSidebarButtonPosition()
   }
 
-  override func splitView(
-    _ splitView: NSSplitView,
-    shouldHideDividerAt dividerIndex: Int
-  ) -> Bool {
-    dividerIndex == 0 || super.splitView(splitView, shouldHideDividerAt: dividerIndex)
-  }
-
   private func updateSidebarChromeLayout() {
     sidebarChromeLayout.update(topInset: 0)
+  }
+
+  private func observeSpotlight() {
+    spotlightObservation = runtime.workspaceStore.$isSpotlightPresented
+      .receive(on: RunLoop.main)
+      .sink { [weak self] isPresented in
+        MainActor.assumeIsolated {
+          self?.updateSpotlightPresentation(isPresented)
+        }
+      }
+  }
+
+  /// The overlay is a sibling of the entire rail/sidebar/browser split, so it
+  /// uses the shell's full bounds and stays above every content section.
+  private func updateSpotlightPresentation(_ isPresented: Bool) {
+    if !isPresented {
+      spotlightHostingView?.removeFromSuperview()
+      spotlightHostingView = nil
+      return
+    }
+    guard spotlightHostingView == nil else { return }
+
+    let workspace = runtime.workspaceStore
+    let hostingView = NSHostingView(rootView: SpotlightView(
+      onSelect: { [weak self] mode in
+        self?.runtime.presentedInternalPanel = nil
+        workspace.submitSpotlight(mode)
+      },
+      onDismiss: { workspace.dismissSpotlight() }))
+    hostingView.translatesAutoresizingMaskIntoConstraints = false
+    view.addSubview(hostingView, positioned: .above, relativeTo: shellSplitController.view)
+    NSLayoutConstraint.activate([
+      hostingView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      hostingView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      hostingView.topAnchor.constraint(equalTo: view.topAnchor),
+      hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+    spotlightHostingView = hostingView
   }
 
   private func observePanelSelection() {

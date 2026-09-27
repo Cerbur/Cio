@@ -240,7 +240,7 @@ struct TabSidebarView: View {
 
         Button {
           workspace.selectSpace(id: space.id)
-          _ = workspace.createTab()
+          workspace.presentSpotlight()
         } label: {
           Label("New Tab", systemImage: "plus")
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,7 +249,7 @@ struct TabSidebarView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help("Create a temporary tab")
+        .help("Open Spotlight to create a tab")
 
         tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
