@@ -95,6 +95,9 @@ struct TabSidebarView: View {
   @State private var pageSwipeState = SpacePageSwipeState()
   @State private var tabDrag = SidebarTabDrag()
   @State private var isSidebarHovered = false
+  @State private var isClearHovered = false
+  @State private var clearingSpaceID: UUID?
+  @State private var dumpAngle: Double = 0
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
@@ -176,6 +179,11 @@ struct TabSidebarView: View {
         Task { @MainActor in tabDrag.gestureDidEnd() }
       }
       .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
+      .onChange(of: isSidebarHovered) { _, isHovered in
+        if !isHovered {
+          withAnimation(.easeOut(duration: 0.18)) { isClearHovered = false }
+        }
+      }
     }
   }
 
@@ -207,21 +215,26 @@ struct TabSidebarView: View {
 
         HStack(spacing: 8) {
           Rectangle().fill(.primary.opacity(0.12)).frame(height: 0.5)
-          if clearableCount > 0 && isSidebarHovered {
+          if clearableCount > 0 && (isSidebarHovered || clearingSpaceID == space.id) {
             Button {
-              withAnimation(.smooth(duration: 0.28)) {
-                workspace.clearTemporaryTabs(in: space.id)
-              }
+              animateClear(in: space.id)
             } label: {
-              Label("Clear", systemImage: "arrow.down")
-                .font(.caption.weight(.semibold))
+              ClearTrashIcon(isLidOpen: isClearHovered,
+                             dumpAngle: clearingSpaceID == space.id ? dumpAngle : 0)
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Clear")
             .help("Close idle tabs except the active tab")
+            .allowsHitTesting(clearingSpaceID == nil)
+            .onHover { isHovered in
+              withAnimation(.easeOut(duration: 0.18)) { isClearHovered = isHovered }
+            }
           }
         }
-        .frame(height: 18)
+        .frame(height: 24)
         .padding(.horizontal, 9)
         .padding(.vertical, 2)
 
@@ -247,6 +260,24 @@ struct TabSidebarView: View {
     .scrollIndicators(.hidden)
     .scrollEdgeEffectStyle(.soft, for: .top)
     .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
+  }
+
+  private func animateClear(in spaceID: UUID) {
+    guard clearingSpaceID == nil else { return }
+    clearingSpaceID = spaceID
+    withAnimation(.easeOut(duration: 0.14), completionCriteria: .logicallyComplete) {
+      isClearHovered = false
+      dumpAngle = 18
+    } completion: {
+      withAnimation(.easeInOut(duration: 0.16), completionCriteria: .logicallyComplete) {
+        dumpAngle = 0
+      } completion: {
+        withAnimation(.smooth(duration: 0.28)) {
+          workspace.clearTemporaryTabs(in: spaceID)
+        }
+        clearingSpaceID = nil
+      }
+    }
   }
 
   private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
@@ -482,6 +513,44 @@ enum SpacePaging {
     if displacement <= -threshold { return min(current + 1, count - 1) }
     if displacement >= threshold { return max(current - 1, 0) }
     return current
+  }
+}
+
+/// A small outlined trash can with a lid that can move independently of its body.
+private struct ClearTrashIcon: View {
+  let isLidOpen: Bool
+  let dumpAngle: Double
+
+  var body: some View {
+    ZStack {
+      Path { path in
+        path.move(to: CGPoint(x: 2.1, y: 4.7))
+        path.addLine(to: CGPoint(x: 3, y: 12))
+        path.addQuadCurve(to: CGPoint(x: 4, y: 13), control: CGPoint(x: 3.1, y: 13))
+        path.addLine(to: CGPoint(x: 10, y: 13))
+        path.addQuadCurve(to: CGPoint(x: 11, y: 12), control: CGPoint(x: 10.9, y: 13))
+        path.addLine(to: CGPoint(x: 11.9, y: 4.7))
+        path.move(to: CGPoint(x: 5.2, y: 6.5))
+        path.addLine(to: CGPoint(x: 5.5, y: 10.8))
+        path.move(to: CGPoint(x: 8.8, y: 6.5))
+        path.addLine(to: CGPoint(x: 8.5, y: 10.8))
+      }
+      .stroke(style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
+
+      Path { path in
+        path.move(to: CGPoint(x: 1, y: 3.5))
+        path.addLine(to: CGPoint(x: 13, y: 3.5))
+        path.move(to: CGPoint(x: 5, y: 3.5))
+        path.addLine(to: CGPoint(x: 5.5, y: 1.5))
+        path.addLine(to: CGPoint(x: 8.5, y: 1.5))
+        path.addLine(to: CGPoint(x: 9, y: 3.5))
+      }
+      .stroke(style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
+      .rotationEffect(.degrees(isLidOpen ? -18 : 0), anchor: UnitPoint(x: 1 / 14, y: 3.5 / 14))
+    }
+    .frame(width: 14, height: 14)
+    .rotationEffect(.degrees(dumpAngle), anchor: .bottom)
+    .accessibilityHidden(true)
   }
 }
 
