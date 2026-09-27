@@ -17,7 +17,7 @@ enum BrowserLayout {
   static let shellInset: CGFloat = 4
   static let mainViewEdgeInset: CGFloat = 4
   static let mainViewCornerRadius = shellCornerRadius - mainViewEdgeInset
-  static let railWidth: CGFloat = 68
+  static let railWidth: CGFloat = 51
   static let sidebarMinimumWidth: CGFloat = 182
   static let sidebarDefaultWidth = sidebarMinimumWidth
   static let sidebarMaximumWidth: CGFloat = 480

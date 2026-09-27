@@ -10,18 +10,20 @@ import SwiftUI
 struct NavigationRail: View {
   @ObservedObject var runtime: ApplicationRuntime
 
+  private let buttonSize: CGFloat = 36
+
   var body: some View {
     VStack(spacing: 0) {
-      VStack(spacing: 2) {
+      VStack(spacing: 1.5) {
         sectionButton("Space", symbol: "house.fill", panel: nil)
         sectionButton("History", symbol: "clock.arrow.circlepath", panel: .history)
         sectionButton("Downloads", symbol: "arrow.down.circle", panel: .downloads)
       }
-      .padding(4)
-      .browserChromeGlassSurface(in: Capsule())
+      // Balance the shell's leading inset against the split view's thin divider.
+      .offset(x: -(BrowserLayout.shellInset - 1) / 2)
       Spacer(minLength: 0)
     }
-    .padding(.top, 14)
+    .padding(.top, 10.5)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color.clear)
   }
@@ -40,16 +42,20 @@ struct NavigationRail: View {
       }
     } label: {
       Image(systemName: symbol)
-        .font(.system(size: 19, weight: isSelected ? .semibold : .regular))
-        .frame(width: 48, height: 48)
-        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .font(.system(size: 14.25, weight: isSelected ? .semibold : .regular))
+        .frame(width: buttonSize, height: buttonSize)
+        .contentShape(SidebarTabAppearance.glassShape)
     }
     .buttonStyle(.plain)
     .foregroundStyle(isSelected ? Color.primary : Color.secondary)
     .background {
       if isSelected {
-        Capsule()
-          .fill(Color.primary.opacity(0.11))
+        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+      }
+    }
+    .overlay {
+      if isSelected {
+        SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.5), lineWidth: 1)
       }
     }
     .help(title)
