@@ -27,9 +27,9 @@ final class SidebarChromeLayout: ObservableObject {
   func resizeSidebar(toWindowX x: CGFloat) {
     guard let splitView else { return }
     let splitOriginX = splitView.convert(.zero, to: nil).x
-    let width = min(max(x - splitOriginX - BrowserLayout.railWidth + 5,
+    let width = min(max(x - splitOriginX + 5,
                         BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
-    splitView.setPosition(BrowserLayout.railWidth + width, ofDividerAt: 1)
+    splitView.setPosition(width, ofDividerAt: 0)
     UserDefaults.standard.set(Double(width), forKey: BrowserLayout.sidebarWidthPreferenceKey)
   }
 }
@@ -139,9 +139,6 @@ struct TabSidebarView: View {
       .background {
         SidebarGlass()
       }
-      .clipShape(UnevenRoundedRectangle(
-        topLeadingRadius: 18,
-        bottomLeadingRadius: 18))
       .background(SpaceSwipeMonitor { delta in
         pageSwipeState.scroll(delta, selectedIndex: selectedSpaceIndex,
                               count: workspace.spaces.count, width: geometry.size.width)

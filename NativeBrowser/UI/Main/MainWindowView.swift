@@ -12,7 +12,8 @@ struct MainWindowView: View {
 
   var body: some View {
     NativeBrowserShellRepresentable(runtime: runtime)
-      .padding(BrowserLayout.shellInset)
+      .padding(.top, BrowserLayout.shellInset)
+      .padding(.leading, BrowserLayout.shellInset)
       .background {
         GlassBackdrop()
           .ignoresSafeArea()
