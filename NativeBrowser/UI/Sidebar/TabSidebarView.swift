@@ -94,6 +94,7 @@ struct TabSidebarView: View {
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
   @State private var pageSwipeState = SpacePageSwipeState()
   @State private var tabDrag = SidebarTabDrag()
+  @State private var isSidebarHovered = false
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
@@ -137,6 +138,8 @@ struct TabSidebarView: View {
         footer
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .contentShape(Rectangle())
+      .onHover { isSidebarHovered = $0 }
       .background {
         SidebarGlass()
       }
@@ -202,9 +205,9 @@ struct TabSidebarView: View {
         tierRows(pinSlots, tier: .space(space.id))
           .padding(.bottom, pinSlots.isEmpty ? 0 : -6)
 
-        if clearableCount > 0 {
-          HStack(spacing: 8) {
-            Rectangle().fill(.primary.opacity(0.12)).frame(height: 0.5)
+        HStack(spacing: 8) {
+          Rectangle().fill(.primary.opacity(0.12)).frame(height: 0.5)
+          if clearableCount > 0 && isSidebarHovered {
             Button {
               withAnimation(.smooth(duration: 0.28)) {
                 workspace.clearTemporaryTabs(in: space.id)
@@ -217,9 +220,10 @@ struct TabSidebarView: View {
             .foregroundStyle(.secondary)
             .help("Close idle tabs except the active tab")
           }
-          .padding(.horizontal, 9)
-          .padding(.vertical, 2)
         }
+        .frame(height: 18)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
 
         Button {
           workspace.selectSpace(id: space.id)
