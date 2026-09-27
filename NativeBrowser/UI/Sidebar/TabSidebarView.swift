@@ -97,6 +97,7 @@ struct TabSidebarView: View {
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
+  private let topPinEdgeInset: CGFloat = 12
   private let topPinHeight: CGFloat = 40.5  // 75% of the former 54-point tiles.
 
   private func columns(for width: CGFloat) -> Int {
@@ -108,8 +109,8 @@ struct TabSidebarView: View {
       VStack(spacing: 0) {
         // The fixed top pin and scrolling space tab share one sidebar material.
         pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
-          .padding(.horizontal, 12)
-          .padding(.top, chromeLayout.topInset + 6)
+          .padding(.horizontal, topPinEdgeInset)
+          .padding(.top, chromeLayout.topInset + topPinEdgeInset)
           .padding(.bottom, 6)
           .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
           .background(alignment: .bottom) {

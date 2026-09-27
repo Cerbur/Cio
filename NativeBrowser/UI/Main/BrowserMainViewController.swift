@@ -46,7 +46,8 @@ final class BrowserMainViewController: NSViewController {
     splitController.splitView.isVertical = true
     splitController.splitView.dividerStyle = .thin
     splitController.splitView.wantsLayer = true
-    splitController.splitView.layer?.cornerRadius = BrowserLayout.shellCornerRadius
+    splitController.splitView.layer?.cornerRadius = BrowserLayout.mainViewCornerRadius
+    splitController.splitView.layer?.cornerCurve = .continuous
     splitController.splitView.layer?.masksToBounds = true
     splitController.addSplitViewItem(sidebarItem)
     splitController.addSplitViewItem(browserItem)
