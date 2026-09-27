@@ -9,12 +9,25 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+final class SpotlightPresentationState: ObservableObject {
+  @Published var isPresented = true
+}
+
 struct SpotlightView: View {
+  @ObservedObject var presentation: SpotlightPresentationState
   let onSelect: (SpotlightMode) -> Void
   let onDismiss: () -> Void
 
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Namespace private var glassNamespace
   @State private var text = ""
   @State private var selectedIndex = 0
+  @State private var showsPanel = false
+  @State private var showsSeed = true
+  @State private var panelHeight: CGFloat = 66
+  @State private var focusGeneration = 0
+  @State private var seedDismissalTask: Task<Void, Never>?
 
   private var suggestions: [SpotlightMode] {
     SpotlightMode.suggestions(for: text)
@@ -23,95 +36,152 @@ struct SpotlightView: View {
   private var isExpanded: Bool { !suggestions.isEmpty }
 
   private var panelShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: isExpanded ? 24 : 33, style: .continuous)
+    RoundedRectangle(cornerRadius: 33, style: .continuous)
   }
 
   var body: some View {
     GeometryReader { geometry in
-      ZStack(alignment: .top) {
-        Color.clear
-          .contentShape(Rectangle())
-          .onTapGesture(perform: onDismiss)
+      let panelTop = max(16, geometry.size.height / 3 - 33)
+      GlassEffectContainer {
+        ZStack(alignment: .top) {
+          Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onDismiss)
 
-        VStack(spacing: 0) {
-          HStack(spacing: 16) {
-            Image(systemName: "magnifyingglass")
-              .font(.system(size: 22, weight: .medium))
-              .foregroundStyle(.secondary)
-              .frame(width: 28)
-              .accessibilityHidden(true)
-
-            SpotlightInputField(
-              text: text,
-              onChange: { text = $0; selectedIndex = 0 },
-              onSubmit: submitSelected,
-              onEscape: onDismiss,
-              onMove: moveSelection)
-              .frame(height: 32)
-              .accessibilityLabel("Spotlight search or website")
+          if showsPanel {
+            panelContents
+              .frame(width: min(geometry.size.width - 48, 720))
+              .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                panelHeight = $0
+              }
+              .background {
+                // The compact glass needs the same soft blur as the taller panel.
+                panelShape.fill(.regularMaterial).opacity(isExpanded ? 0 : 0.65)
+              }
+              .glassEffect(.regular, in: panelShape)
+              .glassEffectID("spotlight", in: glassNamespace)
+              .glassEffectTransition(.matchedGeometry)
+              .overlay {
+                panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                  .allowsHitTesting(false)
+              }
+              .clipShape(panelShape)
+              .padding(.top, panelTop)
+              .transition(.opacity)
+              .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isExpanded)
           }
-          .padding(.horizontal, 23)
-          .frame(height: 66)
 
-          if isExpanded {
-            Divider()
-              .padding(.horizontal, 20)
+          if showsSeed {
+            Color.clear
+              .frame(width: 34, height: 34)
+              .glassEffect(.regular, in: Circle())
+              .glassEffectID("spotlight", in: glassNamespace)
+              .glassEffectTransition(.matchedGeometry)
+              .frame(maxWidth: .infinity)
+              .padding(.top, panelTop + panelHeight / 2 - 17)
+              .allowsHitTesting(false)
+              .transition(.opacity)
+          }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .onAppear { animatePresentation(presentation.isPresented) }
+    .onChange(of: presentation.isPresented) { _, presented in animatePresentation(presented) }
+    .onDisappear { seedDismissalTask?.cancel() }
+    .accessibilityIdentifier("spotlight")
+  }
 
-            VStack(spacing: 4) {
-              ForEach(Array(suggestions.enumerated()), id: \.offset) { index, mode in
-                Button {
-                  onSelect(mode)
-                } label: {
-                  HStack(spacing: 14) {
-                    Image(systemName: mode.symbolName)
-                      .font(.system(size: 18, weight: .medium))
-                      .frame(width: 24)
-                      .foregroundStyle(index == selectedIndex ? .primary : .secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                      Text(mode.title)
-                        .lineLimit(1)
-                        .font(.system(size: 15, weight: .medium))
-                      Text(mode.subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                  }
-                  .padding(.horizontal, 16)
-                  .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                  .background {
-                    if index == selectedIndex {
-                      RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.24))
-                    }
-                  }
-                  .contentShape(RoundedRectangle(cornerRadius: 12))
+  private var panelContents: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 16) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 22, weight: .medium))
+          .foregroundStyle(.secondary)
+          .frame(width: 28)
+          .accessibilityHidden(true)
+
+        SpotlightInputField(
+          text: text,
+          focusGeneration: focusGeneration,
+          onChange: { text = $0; selectedIndex = 0 },
+          onSubmit: submitSelected,
+          onEscape: onDismiss,
+          onMove: moveSelection)
+          .frame(height: 32)
+          .accessibilityLabel("Spotlight search or website")
+      }
+      .padding(.horizontal, 23)
+      .frame(height: 66)
+
+      if isExpanded {
+        Divider()
+          .padding(.horizontal, 20)
+
+        VStack(spacing: 4) {
+          ForEach(Array(suggestions.enumerated()), id: \.offset) { index, mode in
+            Button {
+              onSelect(mode)
+            } label: {
+              HStack(spacing: 14) {
+                Image(systemName: mode.symbolName)
+                  .font(.system(size: 18, weight: .medium))
+                  .frame(width: 24)
+                  .foregroundStyle(index == selectedIndex ? .primary : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(mode.title)
+                    .lineLimit(1)
+                    .font(.system(size: 15, weight: .medium))
+                  Text(mode.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .onHover { hovering in
-                  if hovering { selectedIndex = index }
+                Spacer(minLength: 0)
+              }
+              .padding(.horizontal, 16)
+              .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+              .background {
+                if index == selectedIndex {
+                  RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.24))
                 }
               }
+              .contentShape(RoundedRectangle(cornerRadius: 12))
             }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .transition(.opacity)
+            .buttonStyle(.plain)
+            .onHover { hovering in
+              if hovering { selectedIndex = index }
+            }
           }
         }
-        .frame(width: min(geometry.size.width - 48, 720))
-        .browserChromeGlassSurface(in: panelShape)
-        .overlay {
-          panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
-            .allowsHitTesting(false)
-        }
-        .clipShape(panelShape)
-        // Keep the input at the shell's upper third while results grow below it.
-        .padding(.top, max(16, geometry.size.height / 3 - 33))
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isExpanded)
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .transition(.opacity)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .accessibilityIdentifier("spotlight")
+  }
+
+  private func animatePresentation(_ presented: Bool) {
+    seedDismissalTask?.cancel()
+    if presented {
+      withAnimation(reduceMotion
+        ? .easeOut(duration: 0.12)
+        : .spring(response: 0.42, dampingFraction: 0.68)) {
+        showsSeed = false
+        showsPanel = true
+      }
+      focusGeneration += 1
+    } else {
+      withAnimation(.easeIn(duration: reduceMotion ? 0.12 : 0.22)) {
+        showsPanel = false
+        showsSeed = true
+      }
+      seedDismissalTask = Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(reduceMotion ? 120 : 220))
+        guard !Task.isCancelled else { return }
+        withAnimation(.easeOut(duration: 0.08)) { showsSeed = false }
+      }
+    }
   }
 
   private func submitSelected() {
@@ -127,6 +197,7 @@ struct SpotlightView: View {
 
 private struct SpotlightInputField: NSViewRepresentable {
   let text: String
+  let focusGeneration: Int
   let onChange: (String) -> Void
   let onSubmit: () -> Void
   let onEscape: () -> Void
@@ -136,6 +207,7 @@ private struct SpotlightInputField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> NativeBrowserAddressField {
     let field = NativeBrowserAddressField()
+    context.coordinator.lastFocusGeneration = focusGeneration
     field.delegate = context.coordinator
     field.placeholderString = "Search or enter a website"
     field.font = .systemFont(ofSize: 20)
@@ -156,11 +228,19 @@ private struct SpotlightInputField: NSViewRepresentable {
   func updateNSView(_ field: NativeBrowserAddressField, context: Context) {
     context.coordinator.parent = self
     if field.stringValue != text { field.stringValue = text }
+    if context.coordinator.lastFocusGeneration != focusGeneration {
+      context.coordinator.lastFocusGeneration = focusGeneration
+      DispatchQueue.main.async { [weak field] in
+        guard let field, field.window != nil else { return }
+        field.focusAndSelectAll()
+      }
+    }
   }
 
   @MainActor
   final class Coordinator: NSObject, NSTextFieldDelegate {
     var parent: SpotlightInputField
+    var lastFocusGeneration = 0
 
     init(parent: SpotlightInputField) { self.parent = parent }
 

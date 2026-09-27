@@ -51,6 +51,8 @@ final class NativeBrowserShellController: NSViewController {
   private var panelObservation: AnyCancellable?
   private var spotlightObservation: AnyCancellable?
   private var spotlightHostingView: NSHostingView<SpotlightView>?
+  private var spotlightPresentationState: SpotlightPresentationState?
+  private var spotlightRemovalTask: Task<Void, Never>?
   private var sidebarWasCollapsedBeforeLibrary = false
   private var wasShowingLibrary = false
   private var sidebarCollapseObservation: NSKeyValueObservation?
@@ -164,20 +166,26 @@ final class NativeBrowserShellController: NSViewController {
   /// The overlay is a sibling of the entire rail/sidebar/browser split, so it
   /// uses the shell's full bounds and stays above every content section.
   private func updateSpotlightPresentation(_ isPresented: Bool) {
-    if !isPresented {
-      spotlightHostingView?.removeFromSuperview()
-      spotlightHostingView = nil
+    spotlightRemovalTask?.cancel()
+    if let hostingView = spotlightHostingView {
+      spotlightPresentationState?.isPresented = isPresented
+      if !isPresented {
+        spotlightRemovalTask = Task { @MainActor [weak self, weak hostingView] in
+          try? await Task.sleep(for: .milliseconds(320))
+          guard !Task.isCancelled,
+                let self, let hostingView,
+                self.spotlightHostingView === hostingView else { return }
+          hostingView.removeFromSuperview()
+          self.spotlightHostingView = nil
+          self.spotlightPresentationState = nil
+        }
+      }
       return
     }
-    guard spotlightHostingView == nil else { return }
+    guard isPresented else { return }
 
-    let workspace = runtime.workspaceStore
-    let hostingView = NSHostingView(rootView: SpotlightView(
-      onSelect: { [weak self] mode in
-        self?.runtime.presentedInternalPanel = nil
-        workspace.submitSpotlight(mode)
-      },
-      onDismiss: { workspace.dismissSpotlight() }))
+    let presentation = SpotlightPresentationState()
+    let hostingView = NSHostingView(rootView: makeSpotlightView(presentation: presentation))
     hostingView.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(hostingView, positioned: .above, relativeTo: shellSplitController.view)
     NSLayoutConstraint.activate([
@@ -187,6 +195,18 @@ final class NativeBrowserShellController: NSViewController {
       hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
     spotlightHostingView = hostingView
+    spotlightPresentationState = presentation
+  }
+
+  private func makeSpotlightView(presentation: SpotlightPresentationState) -> SpotlightView {
+    let workspace = runtime.workspaceStore
+    return SpotlightView(
+      presentation: presentation,
+      onSelect: { [weak self] mode in
+        self?.runtime.presentedInternalPanel = nil
+        workspace.submitSpotlight(mode)
+      },
+      onDismiss: { workspace.dismissSpotlight() })
   }
 
   private func observePanelSelection() {
