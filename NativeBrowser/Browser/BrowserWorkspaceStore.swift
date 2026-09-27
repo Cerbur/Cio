@@ -202,26 +202,32 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   // MARK: - Tab lifecycle
 
-  /// Creates a tab in the currently selected Space.
+  /// Creates a tab at the front of the currently selected Space.
   @discardableResult
   func createTab(url: URL? = nil, select: Bool = true, title: String = "") -> UUID? {
     createTab(url: url, in: workspace.selectedSpaceID, select: select, title: title)
   }
 
-  /// Creates a tab in an explicit Space. A background-space popup uses
-  /// `select: false`, so it cannot switch Spaces or take keyboard focus.
+  /// Creates a tab at the front of an explicit Space, or immediately after
+  /// `sourceTabID` when that tab belongs to the Space. A background-space
+  /// popup uses `select: false`, so it cannot switch Spaces or take keyboard focus.
   @discardableResult
-  func createTab(url: URL?, in spaceID: UUID, select: Bool, title: String = "") -> UUID? {
+  func createTab(
+    url: URL?, in spaceID: UUID, select: Bool, title: String = "", after sourceTabID: UUID? = nil
+  ) -> UUID? {
     guard !isTerminating,
       workspace.space(withID: spaceID) != nil,
       !select || workspace.selectedSpaceID == spaceID
     else { return nil }
 
+    let insertionIndex = sourceTabID
+      .flatMap { workspace.space(withID: spaceID)?.tabIDs.firstIndex(of: $0) }
+      .map { $0 + 1 } ?? 0
     let tab = BrowserTab(title: title, url: url)
     let initialURL = url ?? homeURL
     var inserted = false
     withSelectionTransition {
-      inserted = workspace.appendTab(tab, in: spaceID, select: select)
+      inserted = workspace.insertTab(tab, in: spaceID, at: insertionIndex, select: select)
       guard inserted else { return }
       _ = sessionManager.createSession(
         for: tab.id,
@@ -519,7 +525,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       "popup routed to source Space=\(sourceSpaceID.uuidString, privacy: .public) url=\(loggedURL, privacy: .public)"
     )
     emit("popup:new-tab(\(loggedURL))")
-    _ = createTab(url: target, in: sourceSpaceID, select: shouldSelect)
+    _ = createTab(url: target, in: sourceSpaceID, select: shouldSelect, after: session.tabID)
   }
 
   private func publishWorkspace() {

@@ -271,14 +271,17 @@ final class SpacesSelfTest {
   }
 
   private func createTabsInEachSpace() -> Step {
-    Step(
+    var createdTabIDs: [UUID: [UUID]] = [:]
+    return Step(
       name: "create-tabs-in-each-space",
       timeout: 420,
       begin: {
         for (spaceIndex, spaceID) in self.spaceIDs.enumerated() {
           self.workspace.selectSpace(id: spaceID)
           for url in Self.spaceTabURLs[spaceIndex] {
-            _ = self.workspace.createTab(url: url)
+            if let tabID = self.workspace.createTab(url: url) {
+              createdTabIDs[spaceID, default: []].append(tabID)
+            }
           }
         }
         if let first = self.spaceIDs.first {
@@ -300,6 +303,14 @@ final class SpacesSelfTest {
           "multiple-tabs-per-space",
           completed && self.spaceIDs.allSatisfy { self.workspace.tabs(in: $0).count == 3 },
           "counts=\(self.spaceIDs.map { self.workspace.tabs(in: $0).count })")
+        let newTabsLead = self.spaceIDs.allSatisfy { spaceID in
+          Array(self.workspace.tabs(in: spaceID).prefix(2).map(\.id))
+            == Array((createdTabIDs[spaceID] ?? []).reversed())
+        }
+        self.report(
+          "new-tabs-insert-at-front",
+          completed && newTabsLead,
+          "ordered=\(newTabsLead)")
         self.report(
           "distinct-space-browser-identities",
           completed && identifiers.count == sessions.count
@@ -1018,10 +1029,23 @@ final class SpacesSelfTest {
           self.popupTabID.flatMap { self.workspace.spaceID(forTabID: $0) == id }
         } ?? false
         let activeStayed = self.workspace.selectedSpaceID == self.popupActiveSpaceID
+        let popupFollowsSource = self.popupSourceSpaceID.flatMap { spaceID in
+          self.popupSourceSession.flatMap { session in
+            self.popupTabID.map { popupID in
+              let ids = self.workspace.tabs(in: spaceID).map(\.id)
+              guard let sourceIndex = ids.firstIndex(of: session.tabID) else { return false }
+              return ids.indices.contains(sourceIndex + 1) && ids[sourceIndex + 1] == popupID
+            }
+          }
+        } ?? false
         self.report(
           "popup-from-inactive-space-uses-source-space",
           completed && sourceStayed,
           "source=\(self.shortID(self.popupSourceSpaceID)) popup=\(self.shortID(self.popupTabID))")
+        self.report(
+          "popup-inserts-after-source-tab",
+          completed && popupFollowsSource,
+          "follows-source=\(popupFollowsSource)")
         self.report(
           "inactive-popup-does-not-switch-space-or-focus",
           completed && activeStayed && self.popupTabID.flatMap { self.manager.session(for: $0)?.isSurfaceVisible == false } == true,

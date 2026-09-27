@@ -262,6 +262,7 @@ for CHECK in \
   each-space-has-one-fresh-tab \
   space-browsers-created \
   multiple-tabs-per-space \
+  new-tabs-insert-at-front \
   distinct-space-browser-identities \
   all-existing-sessions-created-once \
   independent-space-selections \
@@ -285,6 +286,7 @@ for CHECK in \
   reopen-restores-original-index \
   reopen-selects-original-space \
   popup-from-inactive-space-uses-source-space \
+  popup-inserts-after-source-tab \
   inactive-popup-does-not-switch-space-or-focus \
   all-spaces-shutdown-closes-every-runtime \
   termination-creates-no-replacement-or-history \
