@@ -253,7 +253,8 @@ struct TabSidebarView: View {
           switch slot {
           case .tab(let tab):
             PinnedTile(tab: tab, session: workspace.session(for: tab.id),
-                       selected: workspace.selectedTabID == tab.id, height: topPinHeight) {
+                       selected: workspace.selectedTabID == tab.id, height: topPinHeight,
+                       isTabDragActive: tabDrag.tabID != nil) {
               select(tab.id)
             } onClose: {
               workspace.closeTab(id: tab.id)
@@ -518,10 +519,14 @@ private struct PinnedTile: View {
   let session: BrowserSession?
   let selected: Bool
   let height: CGFloat
+  let isTabDragActive: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
   let onPinInSpace: () -> Void
   let onMakeTemporary: () -> Void
+  @StateObject private var interaction = BrowserInteractionState()
+
+  private var showsHover: Bool { interaction.isHovered && !isTabDragActive }
 
   var body: some View {
     Button(action: onSelect) {
@@ -535,13 +540,23 @@ private struct PinnedTile: View {
         .contentShape(SidebarTabAppearance.glassShape)
     }
     .buttonStyle(.plain)
-    .browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
-    .overlay {
-      SidebarTabAppearance.glassShape.strokeBorder(
-        .white.opacity(selected ? 0.5 : 0.17), lineWidth: 1)
+    .background {
+      if selected {
+        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+      } else {
+        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : 0.04))
+      }
     }
-    .shadow(color: .black.opacity(selected ? 0.18 : 0.06), radius: selected ? 13 : 5, y: selected ? 7 : 2)
+    .overlay {
+      if selected || showsHover {
+        SidebarTabAppearance.glassShape.strokeBorder(
+          .white.opacity(selected ? 0.5 : 0.25), lineWidth: 1)
+      }
+    }
+    .shadow(color: .black.opacity(selected ? 0.18 : (showsHover ? 0.08 : 0)),
+            radius: selected ? 13 : 5, y: selected ? 7 : 2)
     .scaleEffect(selected ? 1.02 : 1)
+    .onHover { interaction.isHovered = $0 }
     .contextMenu {
       Button("Pin in This Space", action: onPinInSpace)
       Button("Make Temporary", action: onMakeTemporary)
