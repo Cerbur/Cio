@@ -199,8 +199,9 @@ NativeBrowser/
     NavigationURLPreservationTests.swift # explicit URLs keep query + fragment
   UI/
     Main/MainWindowView.swift  # window chrome + toolbar + Chromium surface
+    Main/BrowserToolbarController.swift # NSToolbar items: sidebar, navigation, address
     CommandBar/
-      BrowserToolbarView.swift # Back / Forward / Reload-Stop / address field
+      ToolbarAddressFieldView.swift # address capsule: favicon + address field + glass
       AddressField.swift       # native NSTextField bridge (IME + focus + select-all)
       AddressFieldModel.swift  # committed URL vs. edit buffer
       BrowserCommandNotifications.swift # command-L focus plumbing

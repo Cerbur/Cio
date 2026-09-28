@@ -282,20 +282,24 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     item.paletteLabel = "Address"
 
     let hostingView = NSHostingView(rootView: ToolbarAddressFieldView(workspace: workspace))
-    hostingView.frame = NSRect(x: 0, y: 0, width: 320, height: 36)
+    hostingView.frame = NSRect(x: 0, y: 0,
+                               width: AddressCapsuleLayout.preferredWidth,
+                               height: AddressCapsuleLayout.height)
     hostingView.setContentHuggingPriority(.defaultLow, for: .horizontal)
     hostingView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     hostingView.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      hostingView.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
-      hostingView.heightAnchor.constraint(equalToConstant: 36),
+      hostingView.widthAnchor.constraint(
+        greaterThanOrEqualToConstant: AddressCapsuleLayout.minimumWidth),
+      hostingView.heightAnchor.constraint(equalToConstant: AddressCapsuleLayout.height),
     ])
     // NSToolbarItem's view constraints establish the minimum, but AppKit does
     // not stretch an NSHostingView beyond its fitting width without a maximum.
     // These legacy sizing properties remain the native way to make this custom
     // item absorb the remaining toolbar width.
-    item.minSize = NSSize(width: 240, height: 36)
-    item.maxSize = NSSize(width: 10_000, height: 36)
+    item.minSize = NSSize(width: AddressCapsuleLayout.minimumWidth,
+                          height: AddressCapsuleLayout.height)
+    item.maxSize = NSSize(width: 10_000, height: AddressCapsuleLayout.height)
     item.view = hostingView
     return item
   }
@@ -419,66 +423,5 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
 
   @objc private func reloadOrStop(_ sender: NSToolbarItem) {
     workspace.selectedSession?.reloadOrStop()
-  }
-}
-
-private struct ToolbarAddressFieldView: View {
-  @ObservedObject var workspace: BrowserWorkspaceStore
-  @StateObject private var interaction = BrowserInteractionState()
-
-  var body: some View {
-    Group {
-      if let session = workspace.selectedSession {
-        addressField(for: session)
-      } else {
-        Color.clear
-          .accessibilityHidden(true)
-      }
-    }
-    .frame(minWidth: 240, maxWidth: .infinity)
-    .frame(height: 36)
-  }
-
-  private func addressField(for session: BrowserSession) -> some View {
-    HStack(spacing: 7) {
-      TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
-                     session: session, size: 16)
-        .frame(width: 16, height: 16)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-
-      AddressField(
-        model: session.addressField,
-        onChange: { session.addressField.userChangedText($0) },
-        onSubmit: { session.submitAddressField() },
-        onEscape: { session.cancelAddressEditing() },
-        onFocusChange: { focused in
-          interaction.isFocused = focused
-          session.addressFieldFocusChanged(focused)
-        }
-      )
-      .frame(minWidth: 240, maxWidth: .infinity, minHeight: 20, idealHeight: 22)
-      .layoutPriority(1)
-      .contentShape(Rectangle())
-      .allowsHitTesting(true)
-    }
-    .padding(.horizontal, 8)
-    .frame(minWidth: 240, maxWidth: .infinity)
-    .frame(height: 36)
-    .browserAddressFieldSurface(cornerRadius: 18)
-    .overlay {
-      if interaction.isFocused || session.addressField.isEditing {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .strokeBorder(Color.accentColor.opacity(0.38), lineWidth: 1)
-          .allowsHitTesting(false)
-      }
-    }
-    .onReceive(NotificationCenter.default.publisher(for: .browserFocusAddressField)) {
-      notification in
-      guard (notification.object as? BrowserSession) === session else { return }
-      NotificationCenter.default.post(
-        name: .browserAddressFieldShouldFocus,
-        object: session.addressField)
-    }
   }
 }
