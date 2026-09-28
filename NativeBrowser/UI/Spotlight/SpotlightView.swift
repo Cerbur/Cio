@@ -20,14 +20,13 @@ struct SpotlightView: View {
   let onDismiss: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Namespace private var glassNamespace
   @State private var text = ""
   @State private var selectedIndex = 0
-  @State private var showsPanel = false
-  @State private var showsSeed = true
+  @State private var glassProgress: CGFloat = 0
+  @State private var glassOpacity = 0.0
+  @State private var isContentVisible = false
   @State private var panelHeight: CGFloat = 66
   @State private var focusGeneration = 0
-  @State private var seedDismissalTask: Task<Void, Never>?
 
   private var suggestions: [SpotlightMode] {
     SpotlightMode.suggestions(for: text)
@@ -36,59 +35,54 @@ struct SpotlightView: View {
   private var isExpanded: Bool { !suggestions.isEmpty }
 
   private var panelShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 33, style: .continuous)
+    RoundedRectangle(cornerRadius: 17 + 16 * glassProgress, style: .continuous)
   }
 
   var body: some View {
     GeometryReader { geometry in
+      let panelWidth = min(geometry.size.width - 48, 720)
       let panelTop = max(16, geometry.size.height / 3 - 33)
-      GlassEffectContainer {
+      let glassHeight = 34 + (panelHeight - 34) * glassProgress
+      ZStack(alignment: .top) {
+        Color.clear
+          .contentShape(Rectangle())
+          .onTapGesture(perform: onDismiss)
+
         ZStack(alignment: .top) {
           Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onDismiss)
+            .frame(
+              width: 34 + (panelWidth - 34) * glassProgress,
+              height: glassHeight)
+            .background {
+              panelShape.fill(.regularMaterial).opacity(0.5)
+            }
+            .glassEffect(.regular, in: panelShape)
+            .overlay {
+              panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                .allowsHitTesting(false)
+            }
+            .opacity(glassOpacity)
+            .offset(y: (panelHeight - glassHeight) / 2)
 
-          if showsPanel {
-            panelContents
-              .frame(width: min(geometry.size.width - 48, 720))
-              .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                panelHeight = $0
+          panelContents
+            .frame(width: panelWidth)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+              withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                panelHeight = height
               }
-              .background {
-                // The compact glass needs the same soft blur as the taller panel.
-                panelShape.fill(.regularMaterial).opacity(isExpanded ? 0 : 0.65)
-              }
-              .glassEffect(.regular, in: panelShape)
-              .glassEffectID("spotlight", in: glassNamespace)
-              .glassEffectTransition(.matchedGeometry)
-              .overlay {
-                panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                  .allowsHitTesting(false)
-              }
-              .clipShape(panelShape)
-              .padding(.top, panelTop)
-              .transition(.opacity)
-              .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isExpanded)
-          }
-
-          if showsSeed {
-            Color.clear
-              .frame(width: 34, height: 34)
-              .glassEffect(.regular, in: Circle())
-              .glassEffectID("spotlight", in: glassNamespace)
-              .glassEffectTransition(.matchedGeometry)
-              .frame(maxWidth: .infinity)
-              .padding(.top, panelTop + panelHeight / 2 - 17)
-              .allowsHitTesting(false)
-              .transition(.opacity)
-          }
+            }
+            .opacity(isContentVisible ? 1 : 0)
+            .allowsHitTesting(isContentVisible)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: panelWidth)
+        // Suggestions grow downward from the capsule's top edge. Presentation
+        // alone moves the smaller glass toward the panel's center.
+        .padding(.top, panelTop)
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .onAppear { animatePresentation(presentation.isPresented) }
     .onChange(of: presentation.isPresented) { _, presented in animatePresentation(presented) }
-    .onDisappear { seedDismissalTask?.cancel() }
     .accessibilityIdentifier("spotlight")
   }
 
@@ -162,24 +156,30 @@ struct SpotlightView: View {
   }
 
   private func animatePresentation(_ presented: Bool) {
-    seedDismissalTask?.cancel()
     if presented {
-      withAnimation(reduceMotion
-        ? .easeOut(duration: 0.12)
-        : .spring(response: 0.42, dampingFraction: 0.68)) {
-        showsSeed = false
-        showsPanel = true
+      if reduceMotion {
+        glassProgress = 1
+      } else {
+        withAnimation(.spring(response: 0.31, dampingFraction: 0.68)) {
+          glassProgress = 1
+        }
+      }
+      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.12)) {
+        glassOpacity = 1
+      }
+      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.12).delay(reduceMotion ? 0 : 0.067)) {
+        isContentVisible = true
       }
       focusGeneration += 1
     } else {
-      withAnimation(.easeIn(duration: reduceMotion ? 0.12 : 0.22)) {
-        showsPanel = false
-        showsSeed = true
+      withAnimation(.easeIn(duration: 0.05)) { isContentVisible = false }
+      if reduceMotion {
+        glassProgress = 0
+      } else {
+        withAnimation(.easeInOut(duration: 0.26)) { glassProgress = 0 }
       }
-      seedDismissalTask = Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(reduceMotion ? 120 : 220))
-        guard !Task.isCancelled else { return }
-        withAnimation(.easeOut(duration: 0.08)) { showsSeed = false }
+      withAnimation(.easeIn(duration: 0.06).delay(reduceMotion ? 0 : 0.2)) {
+        glassOpacity = 0
       }
     }
   }
