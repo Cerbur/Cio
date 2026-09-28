@@ -23,6 +23,7 @@
 //
 
 import AppKit
+import QuartzCore
 import SwiftUI
 
 struct AddressField: NSViewRepresentable {
@@ -42,8 +43,9 @@ struct AddressField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> NativeBrowserAddressField {
     let field = NativeBrowserAddressField()
+    field.wantsLayer = true
     field.placeholderString = AddressFieldModel.placeholder
-    field.stringValue = model.editText
+    field.stringValue = model.compactDisplayText(for: model.committedURL)
     field.delegate = context.coordinator
     field.target = context.coordinator
     field.action = #selector(Coordinator.submitAction(_:))
@@ -87,9 +89,9 @@ struct AddressField: NSViewRepresentable {
     // Assigning -stringValue while the field editor is active would reset the
     // user's selection and disturb an in-flight IME composition, so the text is
     // only written when it genuinely differs.
-    if field.stringValue != model.editText {
-      field.stringValue = model.editText
-    }
+    let displayedText = context.coordinator.isFocused
+      ? model.editText : model.compactDisplayText(for: model.committedURL)
+    field.setDisplayText(displayedText, animated: false)
   }
 
   func makeCoordinator() -> Coordinator {
@@ -107,6 +109,8 @@ struct AddressField: NSViewRepresentable {
     /// The model the current observation is registered for. A focus request is
     /// only honoured for the session's own address field.
     private var observedModel: AddressFieldModel?
+    private(set) var isFocused = false
+    private weak var addressField: NativeBrowserAddressField?
     private let log = AppLog.navigation
 
     init(parent: AddressField) {
@@ -132,6 +136,7 @@ struct AddressField: NSViewRepresentable {
     /// model only (Milestone 3 section 15). A field can therefore never react to
     /// another tab's ⌘L.
     func observeFocusRequests(for field: NativeBrowserAddressField, model: AddressFieldModel) {
+      addressField = field
       if observedModel === model, focusObserver != nil { return }
       stopObservingFocusRequests()
       observedModel = model
@@ -185,6 +190,13 @@ struct AddressField: NSViewRepresentable {
     }
 
     func reportFocusChange(_ focused: Bool) {
+      guard isFocused != focused else { return }
+      isFocused = focused
+      if let addressField {
+        let text = focused ? parent.model.editText
+          : parent.model.compactDisplayText(for: parent.model.committedURL)
+        addressField.setDisplayText(text, animated: true)
+      }
       let state = focused ? "gained" : "lost"
       log.debug("address field focus \(state, privacy: .public)")
       parent.onFocusChange(focused)
@@ -198,6 +210,20 @@ struct AddressField: NSViewRepresentable {
 final class NativeBrowserAddressField: NSTextField {
   /// Called on the main thread when this field takes or gives up the keyboard.
   var onFocusChange: (@MainActor (Bool) -> Void)?
+
+  /// Crossfades only focus-driven compact/full swaps. Browser URL updates and
+  /// keystrokes stay immediate, so typing and IME composition are unaffected.
+  func setDisplayText(_ text: String, animated: Bool) {
+    guard stringValue != text else { return }
+    if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+      let transition = CATransition()
+      transition.type = .fade
+      transition.duration = 0.16
+      transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+      layer?.add(transition, forKey: "addressTextCrossfade")
+    }
+    stringValue = text
+  }
 
   override func becomeFirstResponder() -> Bool {
     let accepted = super.becomeFirstResponder()

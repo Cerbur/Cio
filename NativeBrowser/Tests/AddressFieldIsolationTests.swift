@@ -94,4 +94,36 @@ final class AddressFieldIsolationTests: XCTestCase {
     XCTAssertTrue(model.userChangedText("one"))
     XCTAssertFalse(model.userChangedText("one"))
   }
+
+  func testUnfocusedWebAddressKeepsHostAndPathWithoutURLDecorations() {
+    let model = AddressFieldModel()
+    let examples: [(String, String)] = [
+      ("https://www.bilibili.com/", "bilibili.com"),
+      ("https://bilibili.com/", "bilibili.com"),
+      ("https://search.bilibili.com/", "search.bilibili.com"),
+      ("https://search.bilibili.com/all/", "search.bilibili.com/all"),
+      ("https://bilibili.com/all/", "bilibili.com/all"),
+      ("https://search.bilibili.com/?vt=14396182", "search.bilibili.com"),
+      ("http://www.example.com:8080/a%20b/?q=secret#part", "example.com:8080/a%20b")
+    ]
+
+    for (full, compact) in examples {
+      let address = url(full)
+      model.applyBrowserURL(address)
+      XCTAssertEqual(model.editText, full, "focused text must remain the full URL")
+      XCTAssertEqual(model.compactDisplayText(for: address), compact)
+    }
+  }
+
+  func testUnsubmittedTextIsDiscardedWhenFocusEnds() {
+    let model = AddressFieldModel()
+    model.applyBrowserURL(url("https://example.com/path?token=secret"))
+    model.userChangedText("unfinished input")
+
+    model.endEditing()
+
+    XCTAssertFalse(model.isEditing)
+    XCTAssertEqual(model.editText, "https://example.com/path?token=secret")
+    XCTAssertEqual(model.compactDisplayText(for: model.committedURL), "example.com/path")
+  }
 }

@@ -27,7 +27,7 @@ final class AddressFieldModel: ObservableObject {
 
   /// The main-frame URL Chromium last reported.
   @Published private(set) var committedURL: URL?
-  /// The text the address field should display.
+  /// The full address (or the user's unsubmitted text) used while focused.
   @Published private(set) var editText = ""
   /// True between the first keystroke and submit/cancel.
   @Published private(set) var isEditing = false
@@ -50,6 +50,9 @@ final class AddressFieldModel: ObservableObject {
 
   /// Ends editing: the next Chromium URL update is mirrored again.
   func endEditing() {
+    if isEditing {
+      editText = displayText(for: committedURL)
+    }
     isEditing = false
   }
 
@@ -79,5 +82,28 @@ final class AddressFieldModel: ObservableObject {
   /// field rather than the placeholder, so the placeholder is visible.
   func displayText(for url: URL?) -> String {
     url?.absoluteString ?? ""
+  }
+
+  /// The address shown when the field does not have keyboard focus. Web URLs
+  /// keep their host, optional port and full path, but omit the scheme, a
+  /// leading www., the final slash, query and fragment. Other schemes retain
+  /// their full form so a local or browser-internal URL stays identifiable.
+  func compactDisplayText(for url: URL?) -> String {
+    guard let url else { return "" }
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let scheme = components.scheme?.lowercased(),
+          (scheme == "http" || scheme == "https"),
+          let host = components.host else {
+      return url.absoluteString
+    }
+
+    let visibleHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    let formattedHost = visibleHost.contains(":") ? "[\(visibleHost)]" : visibleHost
+    let port = components.port.map { ":\($0)" } ?? ""
+    var path = components.percentEncodedPath
+    if path.hasSuffix("/") {
+      path.removeLast()
+    }
+    return formattedHost + port + path
   }
 }

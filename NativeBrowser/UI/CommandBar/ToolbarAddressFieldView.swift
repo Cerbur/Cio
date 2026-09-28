@@ -39,6 +39,7 @@ enum AddressCapsuleLayout {
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @StateObject private var interaction = BrowserInteractionState()
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     Group {
@@ -92,6 +93,8 @@ struct ToolbarAddressFieldView: View {
           .allowsHitTesting(false)
       }
     }
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.16),
+               value: interaction.isFocused)
     .onReceive(NotificationCenter.default.publisher(for: .browserFocusAddressField)) {
       notification in
       guard (notification.object as? BrowserSession) === session else { return }
