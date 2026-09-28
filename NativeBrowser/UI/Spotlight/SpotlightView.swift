@@ -59,8 +59,9 @@ struct SpotlightView: View {
             .frame(width: panelWidth, height: glassSourceHeight)
             .background {
               RoundedRectangle(cornerRadius: 33, style: .continuous)
-                .fill(.regularMaterial).opacity(0.5)
+                .fill(.thinMaterial).opacity(0.1)
             }
+            // Clear glass keeps native refraction; only the backing material is softened.
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 33, style: .continuous))
             // Flatten the native glass before masking; otherwise its backdrop
             // can still draw outside the capsule on top of the browser page.
@@ -70,13 +71,14 @@ struct SpotlightView: View {
                 .frame(width: glassWidth, height: glassHeight)
                 .offset(y: glassOffset)
             }
+            .opacity(glassOpacity)
+            .shadow(color: .black.opacity(0.38 * glassOpacity), radius: 16, y: 8)
             .overlay(alignment: .top) {
-              panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
+              panelShape.strokeBorder(.white.opacity(0.2 * glassOpacity), lineWidth: 1)
                 .frame(width: glassWidth, height: glassHeight)
                 .offset(y: glassOffset)
                 .allowsHitTesting(false)
             }
-            .opacity(glassOpacity)
             .allowsHitTesting(false)
 
           panelContents
@@ -90,8 +92,8 @@ struct SpotlightView: View {
             .allowsHitTesting(isContentVisible)
         }
         .frame(width: panelWidth)
-        // Suggestions grow downward from the capsule's top edge. Presentation
-        // alone moves the smaller glass toward the panel's center.
+        // Suggestions grow downward from the capsule's top edge; closing
+        // always returns the glass to the original capsule center.
         .padding(.top, panelTop)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -187,13 +189,13 @@ struct SpotlightView: View {
       }
       focusGeneration += 1
     } else {
-      withAnimation(.easeIn(duration: 0.05)) { isContentVisible = false }
+      withAnimation(.easeIn(duration: 0.025)) { isContentVisible = false }
       if reduceMotion {
         glassProgress = 0
       } else {
-        withAnimation(.easeInOut(duration: 0.26)) { glassProgress = 0 }
+        withAnimation(.easeInOut(duration: 0.13)) { glassProgress = 0 }
       }
-      withAnimation(.easeIn(duration: 0.06).delay(reduceMotion ? 0 : 0.2)) {
+      withAnimation(.easeIn(duration: 0.03).delay(reduceMotion ? 0 : 0.1)) {
         glassOpacity = 0
       }
     }
