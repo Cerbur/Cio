@@ -189,12 +189,12 @@ final class BrowserWorkspaceStore: ObservableObject {
     return changed
   }
 
-  /// Switches Space through the same focus transition as a tab switch.
+  /// Keep Spotlight open while changing Space so submission targets the new Space.
   func selectSpace(id: UUID) {
     guard workspace.space(withID: id) != nil,
       workspace.selectedSpaceID != id
     else { return }
-    withSelectionTransition {
+    withSelectionTransition(preserveSpotlight: true) {
       workspace.selectSpace(id: id)
       if let selectedTab = workspace.selectedTab {
         _ = ensureSession(for: selectedTab)
@@ -254,14 +254,18 @@ final class BrowserWorkspaceStore: ObservableObject {
     if focusPage { selectedSession?.focusPage() }
   }
 
-  func submitSpotlight(_ mode: SpotlightMode) {
+  func submitSpotlight(opening url: URL) {
     guard isSpotlightPresented else { return }
     isSpotlightPresented = false
-    guard createTab(url: mode.destinationURL) != nil else { return }
+    guard createTab(url: url) != nil else { return }
     selectedSession?.focusPage()
   }
 
   func selectTab(id: UUID) {
+    if workspace.selectedTabID == id, isSpotlightPresented {
+      dismissSpotlight()
+      return
+    }
     guard (workspace.globalPinnedTabIDs.contains(id)
       || workspace.spaceID(containing: id) == workspace.selectedSpaceID),
       workspace.selectedTabID != id
@@ -394,11 +398,12 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// reopening, closing and Space switching.
   @discardableResult
   private func withSelectionTransition<T>(_ change: () -> T) -> T {
-    withSelectionTransition(pageHeldKeyboardOverride: nil, change)
+    withSelectionTransition(pageHeldKeyboardOverride: nil, preserveSpotlight: false, change)
   }
 
   private func withSelectionTransition<T>(
     pageHeldKeyboardOverride: Bool? = nil,
+    preserveSpotlight: Bool = false,
     _ change: () -> T
   ) -> T {
     let outgoing = selectedSession
@@ -410,7 +415,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     let result = change()
     persistIfNeeded(comparedTo: beforeSnapshot)
 
-    if isSpotlightPresented,
+    if isSpotlightPresented, !preserveSpotlight,
        (workspace.selectedTabID != previousSelection || workspace.selectedSpaceID != previousSpace) {
       isSpotlightPresented = false
     }

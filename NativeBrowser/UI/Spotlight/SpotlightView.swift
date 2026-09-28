@@ -28,14 +28,19 @@ struct SpotlightView: View {
   @State private var panelHeight: CGFloat = 66
   @State private var focusGeneration = 0
 
+  private let expandedCornerRadius: CGFloat = 33
+  private let suggestionInset: CGFloat = 8
+
   private var suggestions: [SpotlightMode] {
     SpotlightMode.suggestions(for: text)
   }
 
   private var isExpanded: Bool { !suggestions.isEmpty }
 
+  private var suggestionCornerRadius: CGFloat { expandedCornerRadius - suggestionInset }
+
   private var panelShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 17 + 16 * glassProgress, style: .continuous)
+    RoundedRectangle(cornerRadius: 17 + (expandedCornerRadius - 17) * glassProgress, style: .continuous)
   }
 
   var body: some View {
@@ -58,11 +63,11 @@ struct SpotlightView: View {
           Color.clear
             .frame(width: panelWidth, height: glassSourceHeight)
             .background {
-              RoundedRectangle(cornerRadius: 33, style: .continuous)
+              RoundedRectangle(cornerRadius: expandedCornerRadius, style: .continuous)
                 .fill(.thinMaterial).opacity(0.1)
             }
             // Keep this backdrop fixed so its blur stays stable while suggestions grow.
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 33, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: expandedCornerRadius, style: .continuous))
             // Flatten the native glass before masking; otherwise its backdrop
             // can still draw outside the capsule on top of the browser page.
             .compositingGroup()
@@ -95,6 +100,12 @@ struct SpotlightView: View {
               withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                 panelHeight = height
               }
+            }
+            // Reveal text and suggestions only inside the animated glass outline.
+            .mask(alignment: .top) {
+              panelShape
+                .frame(width: glassWidth, height: glassHeight)
+                .offset(y: glassOffset)
             }
             .opacity(isContentVisible ? 1 : 0)
             .allowsHitTesting(isContentVisible)
@@ -161,11 +172,11 @@ struct SpotlightView: View {
               .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
               .background {
                 if index == selectedIndex {
-                  RoundedRectangle(cornerRadius: 12, style: .continuous)
+                  RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous)
                     .fill(Color.accentColor.opacity(0.24))
                 }
               }
-              .contentShape(RoundedRectangle(cornerRadius: 12))
+              .contentShape(RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous))
             }
             .buttonStyle(.plain)
             .onHover { hovering in
@@ -173,7 +184,7 @@ struct SpotlightView: View {
             }
           }
         }
-        .padding(8)
+        .padding(suggestionInset)
         .frame(maxWidth: .infinity)
         .transition(.opacity)
       }

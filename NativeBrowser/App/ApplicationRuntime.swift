@@ -176,6 +176,27 @@ final class ApplicationRuntime: ObservableObject {
     presentedInternalPanel = .downloads
   }
 
+  func toggleSpotlight() {
+    if workspaceStore.isSpotlightPresented {
+      dismissSpotlight()
+    } else {
+      workspaceStore.presentSpotlight()
+    }
+  }
+
+  func dismissSpotlight() {
+    workspaceStore.dismissSpotlight(focusPage: presentedInternalPanel == nil)
+  }
+
+  func performSpotlightAction(_ action: SpotlightAction) {
+    guard workspaceStore.isSpotlightPresented else { return }
+    switch action {
+    case .openTab(let url):
+      presentedInternalPanel = nil
+      workspaceStore.submitSpotlight(opening: url)
+    }
+  }
+
   /// Records a lifecycle milestone. Enabled by the verification modes.
   func beginLifecycleTrace() {
     isTracingEnabled = true

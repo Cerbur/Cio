@@ -146,6 +146,8 @@ struct TabSidebarView: View {
       .background {
         SidebarGlass()
       }
+      // The local scroll monitor receives trackpad swipes before Spotlight's
+      // shell overlay handles pointer clicks.
       .background(SpaceSwipeMonitor { delta in
         pageSwipeState.scroll(delta, selectedIndex: selectedSpaceIndex,
                               count: workspace.spaces.count, width: geometry.size.width)
@@ -206,6 +208,7 @@ struct TabSidebarView: View {
       .compactMap(workspace.tab(withID:))
     let clearableCount = temporaryTabs.filter { $0.id != workspace.selectedTabID }.count
     let pinSlots = slots(pinnedTabs, tier: .space(space.id))
+    let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
@@ -248,8 +251,19 @@ struct TabSidebarView: View {
             .frame(height: 34)
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
+        .background {
+          if spotlightIsActive {
+            Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+          }
+        }
+        .overlay {
+          if spotlightIsActive {
+            SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
+          }
+        }
         .help("Open Spotlight to create a tab")
+        .accessibilityAddTraits(spotlightIsActive ? [.isSelected] : [])
 
         tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
@@ -288,7 +302,8 @@ struct TabSidebarView: View {
           switch slot {
           case .tab(let tab):
             PinnedTile(tab: tab, session: workspace.session(for: tab.id),
-                       selected: workspace.selectedTabID == tab.id, height: topPinHeight,
+                       selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
+                       height: topPinHeight,
                        isTabDragActive: tabDrag.tabID != nil) {
               select(tab.id)
             } onClose: {
@@ -365,7 +380,8 @@ struct TabSidebarView: View {
 
   private func row(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
     SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
-                  selected: workspace.selectedTabID == tab.id, tier: tier,
+                  selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
+                  tier: tier,
                   isTabDragActive: tabDrag.tabID != nil) {
       select(tab.id)
     } onClose: {

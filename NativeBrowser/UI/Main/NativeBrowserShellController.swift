@@ -199,14 +199,11 @@ final class NativeBrowserShellController: NSViewController {
   }
 
   private func makeSpotlightView(presentation: SpotlightPresentationState) -> SpotlightView {
-    let workspace = runtime.workspaceStore
+    let runtime = self.runtime
     return SpotlightView(
       presentation: presentation,
-      onSelect: { [weak self] mode in
-        self?.runtime.presentedInternalPanel = nil
-        workspace.submitSpotlight(mode)
-      },
-      onDismiss: { workspace.dismissSpotlight() })
+      onSelect: { mode in runtime.performSpotlightAction(mode.action) },
+      onDismiss: { runtime.dismissSpotlight() })
   }
 
   private func observePanelSelection() {

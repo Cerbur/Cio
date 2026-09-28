@@ -21,6 +21,7 @@ import SwiftUI
 struct BrowserCommands: Commands {
   /// The workspace/domain owner. Stable for the application's lifetime.
   @ObservedObject var workspace: BrowserWorkspaceStore
+  let runtime: ApplicationRuntime
 
   var body: some Commands {
     CommandGroup(after: .newItem) {
@@ -53,7 +54,7 @@ struct BrowserCommands: Commands {
     // AppDelegate so that Command-W cannot mean "close the window" while tabs
     // exist (section 21).
     CommandMenu("Tabs") {
-      Button("New Tab") { workspace.presentSpotlight() }
+      Button("New Tab") { runtime.toggleSpotlight() }
         .keyboardShortcut("t", modifiers: .command)
 
       Button("Close Tab") { workspace.closeSelectedTab() }

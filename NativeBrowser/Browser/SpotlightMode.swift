@@ -2,21 +2,29 @@
 //  SpotlightMode.swift
 //  NativeBrowser
 //
-//  Each Spotlight capability supplies its own destination. The suggestion
-//  builder chooses which modes apply to the current text; the view only renders
-//  and selects them.
+//  Each Spotlight capability supplies its own action. The suggestion builder
+//  chooses which modes apply to the current text; the view only renders and
+//  selects them.
 //
 
 import Foundation
+
+enum SpotlightAction: Equatable {
+  case openTab(URL)
+
+  // TODO: Add History and Downloads modes with actions that open their own
+  // views. Spotlight presentation must stay in the current view until a mode
+  // is selected; only website and Google Search currently open the Space view.
+}
 
 enum SpotlightMode: Equatable {
   case website(URL)
   case googleSearch(String)
 
-  var destinationURL: URL {
+  var action: SpotlightAction {
     switch self {
-    case .website(let url): url
-    case .googleSearch(let query): GoogleSearchEngine().searchURL(for: query)
+    case .website(let url): .openTab(url)
+    case .googleSearch(let query): .openTab(GoogleSearchEngine().searchURL(for: query))
     }
   }
 

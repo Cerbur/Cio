@@ -36,7 +36,7 @@ struct NativeBrowserApp: App {
       // The workspace store is a stable reference: command actions resolve the
       // selected tab when they run, so they always operate on the current
       // selection rather than on whatever was selected when the menu was built.
-      BrowserCommands(workspace: runtime.workspaceStore)
+      BrowserCommands(workspace: runtime.workspaceStore, runtime: runtime)
     }
   }
 }
