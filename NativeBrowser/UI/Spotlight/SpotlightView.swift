@@ -61,7 +61,7 @@ struct SpotlightView: View {
               RoundedRectangle(cornerRadius: 33, style: .continuous)
                 .fill(.thinMaterial).opacity(0.1)
             }
-            // Clear glass keeps native refraction; only the backing material is softened.
+            // Keep this backdrop fixed so its blur stays stable while suggestions grow.
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 33, style: .continuous))
             // Flatten the native glass before masking; otherwise its backdrop
             // can still draw outside the capsule on top of the browser page.
@@ -79,6 +79,14 @@ struct SpotlightView: View {
                 .offset(y: glassOffset)
                 .allowsHitTesting(false)
             }
+            .allowsHitTesting(false)
+
+          // The native refractive edge follows the same spring as the visible outline.
+          Color.clear
+            .frame(width: glassWidth, height: glassHeight)
+            .glassEffect(.clear, in: panelShape)
+            .offset(y: glassOffset)
+            .opacity(glassOpacity)
             .allowsHitTesting(false)
 
           panelContents
