@@ -225,6 +225,7 @@ final class NativeBrowserShellController: NSViewController {
     let runtime = self.runtime
     return SpotlightView(
       presentation: presentation,
+      autocomplete: SpotlightAutocompleteService(history: runtime.historyService),
       onSelect: { mode in runtime.performSpotlightAction(mode.action) },
       onDismiss: { runtime.dismissSpotlight() })
   }

@@ -16,6 +16,7 @@ final class SpotlightPresentationState: ObservableObject {
 
 struct SpotlightView: View {
   @ObservedObject var presentation: SpotlightPresentationState
+  @ObservedObject var autocomplete: SpotlightAutocompleteService
   let onSelect: (SpotlightMode) -> Void
   let onDismiss: () -> Void
 
@@ -27,15 +28,23 @@ struct SpotlightView: View {
   @State private var isContentVisible = false
   @State private var panelHeight: CGFloat = 66
   @State private var focusGeneration = 0
+  @State private var scrollToSuggestionID: String?
 
   private let expandedCornerRadius: CGFloat = 33
   private let suggestionInset: CGFloat = 8
+  private let suggestionRowHeight: CGFloat = 52
+  private let suggestionSpacing: CGFloat = 4
 
-  private var suggestions: [SpotlightMode] {
-    SpotlightMode.suggestions(for: text)
-  }
+  private var suggestions: [SpotlightSuggestion] { autocomplete.suggestions }
 
   private var isExpanded: Bool { !suggestions.isEmpty }
+
+  private var suggestionListHeight: CGFloat {
+    let visibleRows = min(suggestions.count, 5)
+    return CGFloat(visibleRows) * suggestionRowHeight
+      + CGFloat(max(0, visibleRows - 1)) * suggestionSpacing
+      + 2 * suggestionInset
+  }
 
   private var suggestionCornerRadius: CGFloat { expandedCornerRadius - suggestionInset }
 
@@ -47,8 +56,7 @@ struct SpotlightView: View {
     GeometryReader { geometry in
       let panelWidth = min(geometry.size.width - 48, 720)
       let panelTop = max(16, geometry.size.height / 3 - 33)
-      // Both current suggestion modes fit inside this fixed glass footprint.
-      // Only its visible outline changes, so the blur is stable while typing.
+      // Keep the backdrop stable while the list grows below the input.
       let glassSourceHeight = max(panelHeight, 200)
       let glassWidth = 34 + (panelWidth - 34) * glassProgress
       let glassHeight = 34 + (panelHeight - 34) * glassProgress
@@ -118,7 +126,14 @@ struct SpotlightView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .onAppear { animatePresentation(presentation.isPresented) }
-    .onChange(of: presentation.isPresented) { _, presented in animatePresentation(presented) }
+    .onChange(of: presentation.isPresented) { _, presented in
+      animatePresentation(presented)
+      if presented { autocomplete.update(text) } else { autocomplete.cancel() }
+    }
+    .onDisappear { autocomplete.cancel() }
+    .onChange(of: suggestions.count) { _, count in
+      if selectedIndex >= count { selectedIndex = max(0, count - 1) }
+    }
     .accessibilityIdentifier("spotlight")
   }
 
@@ -134,7 +149,12 @@ struct SpotlightView: View {
         SpotlightInputField(
           text: text,
           focusGeneration: focusGeneration,
-          onChange: { text = $0; selectedIndex = 0 },
+          onChange: { value in
+            text = value
+            selectedIndex = 0
+            scrollToSuggestionID = nil
+            autocomplete.update(value)
+          },
           onSubmit: submitSelected,
           onEscape: onDismiss,
           onMove: moveSelection)
@@ -148,45 +168,64 @@ struct SpotlightView: View {
         Divider()
           .padding(.horizontal, 20)
 
-        VStack(spacing: 4) {
-          ForEach(Array(suggestions.enumerated()), id: \.offset) { index, mode in
-            Button {
-              onSelect(mode)
-            } label: {
-              HStack(spacing: 14) {
-                Image(systemName: mode.symbolName)
-                  .font(.system(size: 18, weight: .medium))
-                  .frame(width: 24)
-                  .foregroundStyle(index == selectedIndex ? .primary : .secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(mode.title)
-                    .lineLimit(1)
-                    .font(.system(size: 15, weight: .medium))
-                  Text(mode.subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+        ScrollViewReader { reader in
+          ScrollView(.vertical) {
+            VStack(spacing: suggestionSpacing) {
+              ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                Button {
+                  onSelect(suggestion.mode)
+                } label: {
+                  HStack(spacing: 14) {
+                    if case .website(let url) = suggestion.mode {
+                      TabFaviconView(pageURL: url, session: nil, size: 18)
+                        .frame(width: 24)
+                    } else {
+                      Image(systemName: suggestion.symbolName)
+                        .font(.system(size: 18, weight: .medium))
+                        .frame(width: 24)
+                        .foregroundStyle(index == selectedIndex ? .primary : .secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                      Text(suggestion.title)
+                        .lineLimit(1)
+                        .font(.system(size: 15, weight: .medium))
+                      if !suggestion.subtitle.isEmpty {
+                        Text(suggestion.subtitle)
+                          .lineLimit(1)
+                          .font(.system(size: 11))
+                          .foregroundStyle(.secondary)
+                      }
+                    }
+                    Spacer(minLength: 0)
+                  }
+                  .padding(.horizontal, 16)
+                  .frame(maxWidth: .infinity, minHeight: suggestionRowHeight, alignment: .leading)
+                  .background {
+                    if index == selectedIndex {
+                      RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.24))
+                    }
+                  }
+                  .contentShape(RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous))
                 }
-                Spacer(minLength: 0)
-              }
-              .padding(.horizontal, 16)
-              .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-              .background {
-                if index == selectedIndex {
-                  RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.24))
+                .buttonStyle(.plain)
+                .id(suggestion.id)
+                .onHover { hovering in
+                  if hovering { selectedIndex = index }
                 }
               }
-              .contentShape(RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous))
             }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-              if hovering { selectedIndex = index }
-            }
+            .padding(suggestionInset)
+            .frame(maxWidth: .infinity)
           }
+          .frame(height: suggestionListHeight)
+          .scrollIndicators(suggestions.count > 5 ? .visible : .hidden)
+          .allowsHitTesting(autocomplete.displayedInput == text.trimmingCharacters(in: .whitespacesAndNewlines))
+          .onChange(of: scrollToSuggestionID) { _, id in
+            if let id { reader.scrollTo(id) }
+          }
+          .transition(.opacity)
         }
-        .padding(suggestionInset)
-        .frame(maxWidth: .infinity)
-        .transition(.opacity)
       }
     }
   }
@@ -221,13 +260,19 @@ struct SpotlightView: View {
   }
 
   private func submitSelected() {
+    if autocomplete.displayedInput != text.trimmingCharacters(in: .whitespacesAndNewlines) {
+      if let mode = SpotlightMode.suggestions(for: text).first { onSelect(mode) }
+      return
+    }
     guard suggestions.indices.contains(selectedIndex) else { return }
-    onSelect(suggestions[selectedIndex])
+    onSelect(suggestions[selectedIndex].mode)
   }
 
   private func moveSelection(_ direction: Int) {
-    guard !suggestions.isEmpty else { return }
+    guard autocomplete.displayedInput == text.trimmingCharacters(in: .whitespacesAndNewlines),
+          !suggestions.isEmpty else { return }
     selectedIndex = (selectedIndex + direction + suggestions.count) % suggestions.count
+    scrollToSuggestionID = suggestions[selectedIndex].id
   }
 }
 
