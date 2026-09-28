@@ -152,6 +152,10 @@ NS_SWIFT_UI_ACTOR
 /// Gives keyboard focus to the page, or releases it.
 - (void)setFocus:(BOOL)focused;
 
+/// Sets the page's prefers-color-scheme media feature without reloading it.
+/// Returns NO if Chromium has not created this browser yet.
+- (BOOL)setDarkAppearance:(BOOL)dark;
+
 /// Tells the browser that its view size changed.
 - (void)resizeToBounds:(NSRect)bounds;
 

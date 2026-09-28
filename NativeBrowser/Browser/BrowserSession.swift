@@ -204,6 +204,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private var lastMainFrameLoadFailed = false
 
   private var bridge: BrowserBridge?
+  private var lastAppliedDarkAppearance: Bool?
   private weak var containerView: ChromiumContainerView?
   private var didStartLoading = false
   private var didReceiveMainFrameURL = false
@@ -266,6 +267,13 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     // Objective-C++ bridge deliberately does not log it at all).
     AppLog.navigation.info("load \(URLLogSanitizer.sanitized(self.initialURL), privacy: .public)")
     bridge.loadURL(initialURL.absoluteString)
+  }
+
+  func setDarkAppearance(_ dark: Bool) {
+    guard lastAppliedDarkAppearance != dark, let bridge,
+      bridge.setDarkAppearance(dark)
+    else { return }
+    lastAppliedDarkAppearance = dark
   }
 
   /// Whether this session's container is the visible selected surface. The focus
@@ -579,6 +587,10 @@ extension BrowserSession: BrowserBridgeDelegate {
     hasBrowser = true
     rendererCrashed = false
     containerView?.setBrowserAttached(true)
+    if let containerView {
+      let dark = containerView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      setDarkAppearance(dark)
+    }
     emit("browser:created(count=\(browserCreationCount))")
     // Clicking and typing must reach the page without an extra click first
     // (ARCHITECTURE.md section 18). CEF takes focus from there on - but CEF

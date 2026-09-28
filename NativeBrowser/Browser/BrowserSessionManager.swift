@@ -232,8 +232,15 @@ final class BrowserSessionManager: ObservableObject {
 
   /// Attaches the one stable AppKit host for the application window.
   func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
+    if surfaceHost !== host {
+      surfaceHost?.onDarkAppearanceChange = nil
+    }
     surfaceHost = host
+    host.onDarkAppearanceChange = { [weak self] dark in
+      self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
+    }
     syncSurface()
+    host.syncChromiumAppearance()
   }
 
   /// Publishes the effective selected tab from the workspace owner. The manager

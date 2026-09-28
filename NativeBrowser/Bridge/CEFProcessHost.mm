@@ -18,6 +18,7 @@
 
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
+#include "include/cef_request_context.h"
 #include "include/cef_version.h"
 #include "include/wrapper/cef_library_loader.h"
 
@@ -205,6 +206,23 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
 }
 
 @implementation CEFProcessHost
+
++ (void)setDarkAppearance:(BOOL)dark {
+  NSAssert(NSThread.isMainThread,
+           @"Chromium color scheme must be set on the CEF UI thread.");
+  if (gState != RuntimeState::kInitialized) {
+    return;
+  }
+  CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+  if (!context) {
+    return;
+  }
+  const cef_color_variant_t mode =
+      dark ? CEF_COLOR_VARIANT_DARK : CEF_COLOR_VARIANT_LIGHT;
+  if (context->GetChromeColorSchemeMode() != mode) {
+    context->SetChromeColorScheme(mode, 0);
+  }
+}
 
 + (int)executeSubprocess {
   NSError *error = nil;

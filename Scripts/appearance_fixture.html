@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<style>
+  body { font: 24px system-ui; }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: white; } }
+</style>
+<body>Chromium color scheme probe</body>
+<script>
+  const dark = matchMedia('(prefers-color-scheme: dark)');
+  function reportAppearance() {
+    document.title = `appearance:${dark.matches ? 'dark' : 'light'}`;
+  }
+  dark.addEventListener('change', reportAppearance);
+  reportAppearance();
+</script>
+</html>

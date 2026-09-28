@@ -15,6 +15,7 @@
 
 #include "include/cef_browser.h"
 #include "include/cef_frame.h"
+#include "include/cef_values.h"
 #include "include/internal/cef_mac.h"
 
 namespace {
@@ -185,6 +186,29 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
       [browserView.window makeFirstResponder:nil];
     }
   }
+}
+
+- (BOOL)setDarkAppearance:(BOOL)dark {
+  if (_closed) {
+    return NO;
+  }
+  CefRefPtr<CefBrowser> browser = _client->browser();
+  if (!browser) {
+    return NO;
+  }
+
+  // The request-context color variant changes Chromium's own theme, but in
+  // Alloy it does not update a page's prefers-color-scheme media query. Set
+  // that media feature through Chromium's supported DevTools protocol instead.
+  CefRefPtr<CefDictionaryValue> feature = CefDictionaryValue::Create();
+  feature->SetString("name", "prefers-color-scheme");
+  feature->SetString("value", dark ? "dark" : "light");
+  CefRefPtr<CefListValue> features = CefListValue::Create();
+  features->SetDictionary(0, feature);
+  CefRefPtr<CefDictionaryValue> params = CefDictionaryValue::Create();
+  params->SetList("features", features);
+  return browser->GetHost()->ExecuteDevToolsMethod(
+             0, "Emulation.setEmulatedMedia", params) != 0;
 }
 
 - (void)resizeToBounds:(NSRect)bounds {

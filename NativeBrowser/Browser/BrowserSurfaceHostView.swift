@@ -27,6 +27,25 @@
 import AppKit
 
 final class BrowserSurfaceHostView: NSView {
+  var onDarkAppearanceChange: ((Bool) -> Void)?
+
+  func syncChromiumAppearance() {
+    guard window != nil else { return }
+    let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    CEFProcessHost.setDarkAppearance(dark)
+    onDarkAppearanceChange?(dark)
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    syncChromiumAppearance()
+  }
+
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    syncChromiumAppearance()
+  }
+
   /// Lays out exactly `containers` and makes the selected one visible.
   ///
   /// Containers that are no longer in the set are removed from the hierarchy;

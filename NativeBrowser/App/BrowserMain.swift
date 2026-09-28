@@ -140,12 +140,22 @@ enum BrowserMain {
     // window does not receive the same AppKit teardown callbacks as the
     // product's stable surface host.
     runtime.onMainWindowAppeared = {
-      Self.performBrowserSelfTest(runtime: runtime)
+      if CommandLine.arguments.contains("--appearance-self-test") {
+        // Let SwiftUI finish mounting the representable before the test starts
+        // its nested run-loop waits. Otherwise the Chromium container can stay
+        // unattached to the window for the entire load deadline.
+        DispatchQueue.main.async { Self.performBrowserSelfTest(runtime: runtime) }
+      } else {
+        Self.performBrowserSelfTest(runtime: runtime)
+      }
     }
     return true
   }
 
-  private static func performBrowserSelfTest(runtime: ApplicationRuntime) -> Never {
+  private static func performBrowserSelfTest(runtime: ApplicationRuntime) {
+    if CommandLine.arguments.contains("--appearance-self-test") {
+      NSApp.appearance = NSAppearance(named: .aqua)
+    }
     // AppKit's applicationDidFinishLaunching starts the normal message pump,
     // but SwiftUI can report the window first. The self-test must pump CEF
     // before waiting for OnAfterCreated/OnLoadEnd; otherwise it can tear down
@@ -169,6 +179,23 @@ enum BrowserMain {
     )
     runtime.record("selftest:loaded=\(loaded)")
 
+    var appearancePassed = true
+    if CommandLine.arguments.contains("--appearance-self-test") {
+      func checkAppearance(_ name: String, _ appearance: NSAppearance.Name, _ expected: String) {
+        NSApp.appearance = NSAppearance(named: appearance)
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, session.title != expected {
+          RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        let passed = session.title == expected
+        appearancePassed = appearancePassed && passed
+        print("appearance-self-test: \(name)=\(passed) title=\(session.title)")
+      }
+      checkAppearance("light", .aqua, "appearance:light")
+      checkAppearance("dark", .darkAqua, "appearance:dark")
+      checkAppearance("light-again", .aqua, "appearance:light")
+    }
+
     // Resize check: the window, the AppKit surface host, the container and the
     // Chromium view must all track each other (ARCHITECTURE.md section 9).
     let resizedSize = NSSize(width: 900, height: 620)
@@ -191,12 +218,36 @@ enum BrowserMain {
     // callbacks, shuts CEF down once, and asks AppKit to terminate again.
     let closeStart = Date()
     runtime.onMainWindowAppeared = nil
-    // `noteMainWindowAppeared()` invokes this self-test from SwiftUI's
-    // `.onAppear` callback. Defer the first termination request until that
-    // callback has unwound so AppKit can deliver the close through its normal
-    // application delegate path.
-    DispatchQueue.main.async {
+    // The ordinary self-test runs inside SwiftUI's `.onAppear` callback and
+    // defers termination until that callback unwinds. The appearance test was
+    // already deferred at entry and can request termination directly.
+    if CommandLine.arguments.contains("--appearance-self-test") {
       NSApplication.shared.terminate(nil)
+      // Let the normal application run loop unwind the close request and pump
+      // CEF. A nested RunLoop.run here prevents OnBeforeClose from arriving.
+      let closeDeadline = Date().addingTimeInterval(30)
+      Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
+        let finished = MainActor.assumeIsolated {
+          runtime.hasShutDownCEF || Date() >= closeDeadline
+        }
+        guard finished else { return }
+        timer.invalidate()
+        MainActor.assumeIsolated {
+          let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownCEF
+          let closeDuration = Date().timeIntervalSince(closeStart)
+          print(
+            "browser-self-test: browser-closed=\(closed) close-seconds=\(String(format: "%.2f", closeDuration))"
+          )
+          runtime.record("selftest:closed=\(closed)")
+          runtime.emitLifecycleTrace()
+          exit(loaded && closed && appearancePassed ? 0 : 2)
+        }
+      }
+      return
+    } else {
+      DispatchQueue.main.async {
+        NSApplication.shared.terminate(nil)
+      }
     }
     let closeDeadline = Date().addingTimeInterval(30)
     while Date() < closeDeadline, !runtime.hasShutDownCEF {
@@ -209,7 +260,7 @@ enum BrowserMain {
     )
     runtime.record("selftest:closed=\(closed)")
     runtime.emitLifecycleTrace()
-    exit(loaded && closed ? 0 : 2)
+    exit(loaded && closed && appearancePassed ? 0 : 2)
   }
 
   /// Requests force-close semantics only as part of application termination,

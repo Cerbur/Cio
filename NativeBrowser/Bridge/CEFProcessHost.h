@@ -45,6 +45,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// instances have been closed and before the process exits. Idempotent.
 + (void)shutdown;
 
+/// Keeps Chromium's own theme in sync with the host window's effective AppKit
+/// appearance. Page media queries are updated separately per browser.
++ (void)setDarkAppearance:(BOOL)dark;
+
 /// Whether CefInitialize() has completed successfully.
 @property(class, nonatomic, readonly) BOOL isInitialized;
 
