@@ -47,7 +47,8 @@ struct SpotlightView: View {
       let glassSourceHeight = max(panelHeight, 200)
       let glassWidth = 34 + (panelWidth - 34) * glassProgress
       let glassHeight = 34 + (panelHeight - 34) * glassProgress
-      let glassOffset = (panelHeight - glassHeight) / 2
+      // Close toward the original capsule center, even after suggestions expand the panel.
+      let glassOffset: CGFloat = 16 * (1 - glassProgress)
       ZStack(alignment: .top) {
         Color.clear
           .contentShape(Rectangle())
