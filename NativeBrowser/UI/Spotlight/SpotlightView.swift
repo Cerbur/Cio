@@ -29,6 +29,7 @@ struct SpotlightView: View {
   @State private var panelHeight: CGFloat = 66
   @State private var focusGeneration = 0
   @State private var scrollToSuggestionID: String?
+  @State private var hoverGate = SpotlightHoverGate()
 
   private let expandedCornerRadius: CGFloat = 33
   private let suggestionInset: CGFloat = 8
@@ -46,6 +47,14 @@ struct SpotlightView: View {
       + 2 * suggestionInset
   }
 
+  private var targetPanelHeight: CGFloat {
+    66 + (isExpanded ? 1 + suggestionListHeight : 0)
+  }
+
+  private var glassSourceHeight: CGFloat {
+    66 + 1 + 5 * suggestionRowHeight + 4 * suggestionSpacing + 2 * suggestionInset
+  }
+
   private var suggestionCornerRadius: CGFloat { expandedCornerRadius - suggestionInset }
 
   private var panelShape: RoundedRectangle {
@@ -56,8 +65,6 @@ struct SpotlightView: View {
     GeometryReader { geometry in
       let panelWidth = min(geometry.size.width - 48, 720)
       let panelTop = max(16, geometry.size.height / 3 - 33)
-      // Keep the backdrop stable while the list grows below the input.
-      let glassSourceHeight = max(panelHeight, 200)
       let glassWidth = 34 + (panelWidth - 34) * glassProgress
       let glassHeight = 34 + (panelHeight - 34) * glassProgress
       // Close toward the original capsule center, even after suggestions expand the panel.
@@ -104,11 +111,6 @@ struct SpotlightView: View {
 
           panelContents
             .frame(width: panelWidth)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-              withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                panelHeight = height
-              }
-            }
             // Reveal text and suggestions only inside the animated glass outline.
             .mask(alignment: .top) {
               panelShape
@@ -125,7 +127,11 @@ struct SpotlightView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .onAppear { animatePresentation(presentation.isPresented) }
+    .onAppear {
+      hoverGate.reset(to: NSEvent.mouseLocation)
+      panelHeight = targetPanelHeight
+      animatePresentation(presentation.isPresented)
+    }
     .onChange(of: presentation.isPresented) { _, presented in
       animatePresentation(presented)
       if presented { autocomplete.update(text) } else { autocomplete.cancel() }
@@ -133,6 +139,18 @@ struct SpotlightView: View {
     .onDisappear { autocomplete.cancel() }
     .onChange(of: suggestions.count) { _, count in
       if selectedIndex >= count { selectedIndex = max(0, count - 1) }
+    }
+    .onChange(of: targetPanelHeight) { _, height in
+      if reduceMotion {
+        panelHeight = height
+      } else {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+          panelHeight = height
+        }
+      }
+    }
+    .onChange(of: suggestions.map(\.id)) { _, _ in
+      hoverGate.reset(to: NSEvent.mouseLocation)
     }
     .accessibilityIdentifier("spotlight")
   }
@@ -153,6 +171,7 @@ struct SpotlightView: View {
             text = value
             selectedIndex = 0
             scrollToSuggestionID = nil
+            hoverGate.reset(to: NSEvent.mouseLocation)
             autocomplete.update(value)
           },
           onSubmit: submitSelected,
@@ -210,8 +229,9 @@ struct SpotlightView: View {
                 }
                 .buttonStyle(.plain)
                 .id(suggestion.id)
-                .onHover { hovering in
-                  if hovering { selectedIndex = index }
+                .onContinuousHover { phase in
+                  guard case .active = phase else { return }
+                  if hoverGate.moved(to: NSEvent.mouseLocation) { selectedIndex = index }
                 }
               }
             }
