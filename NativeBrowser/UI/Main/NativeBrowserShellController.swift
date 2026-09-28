@@ -33,6 +33,23 @@ private final class ShellSplitController: NSSplitViewController {
   }
 }
 
+/// Spotlight keeps the sidebar covered except for visible tab selection buttons.
+private final class SpotlightHostingView: NSHostingView<SpotlightView> {
+  weak var sidebarView: NSView?
+  var tabSelectionAtSidebarPoint: ((CGPoint) -> UUID?)?
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    if let sidebarView, sidebarView.window === window {
+      let sidebarPoint = sidebarView.convert(point, from: superview)
+      if sidebarView.bounds.contains(sidebarPoint),
+         tabSelectionAtSidebarPoint?(sidebarPoint) != nil {
+        return nil
+      }
+    }
+    return super.hitTest(point)
+  }
+}
+
 @MainActor
 final class NativeBrowserShellController: NSViewController {
   private let runtime: ApplicationRuntime
@@ -50,7 +67,7 @@ final class NativeBrowserShellController: NSViewController {
 
   private var panelObservation: AnyCancellable?
   private var spotlightObservation: AnyCancellable?
-  private var spotlightHostingView: NSHostingView<SpotlightView>?
+  private var spotlightHostingView: SpotlightHostingView?
   private var spotlightPresentationState: SpotlightPresentationState?
   private var spotlightRemovalTask: Task<Void, Never>?
   private var sidebarWasCollapsedBeforeLibrary = false
@@ -185,7 +202,13 @@ final class NativeBrowserShellController: NSViewController {
     guard isPresented else { return }
 
     let presentation = SpotlightPresentationState()
-    let hostingView = NSHostingView(rootView: makeSpotlightView(presentation: presentation))
+    let hostingView = SpotlightHostingView(rootView: makeSpotlightView(presentation: presentation))
+    hostingView.sidebarView = sidebarItem.viewController.view
+    hostingView.tabSelectionAtSidebarPoint = { [weak self] point in
+      guard let self else { return nil }
+      return self.sidebarChromeLayout.tabDrag?.tabSelection(
+        at: point, in: self.runtime.workspaceStore.selectedSpaceID)
+    }
     hostingView.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(hostingView, positioned: .above, relativeTo: shellSplitController.view)
     NSLayoutConstraint.activate([

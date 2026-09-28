@@ -18,6 +18,7 @@ enum SidebarTabAppearance {
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
   weak var splitView: NSSplitView?
+  weak var tabDrag: SidebarTabDrag?
 
   func update(topInset: CGFloat) {
     guard abs(self.topInset - topInset) > 0.5 else { return }
@@ -175,6 +176,7 @@ struct TabSidebarView: View {
       .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
+      .onAppear { chromeLayout.tabDrag = tabDrag }
       .onChange(of: isTabDragGestureActive) { _, isActive in
         guard !isActive else { return }
         // Runs after `onEnded`, so only a cancelled gesture is still dragging.

@@ -271,12 +271,14 @@ final class BrowserWorkspaceStore: ObservableObject {
       workspace.selectedTabID != id
     else { return }
 
+    let wasSpotlightPresented = isSpotlightPresented
     withSelectionTransition {
       workspace.selectTab(id: id)
       if let selectedTab = workspace.tab(withID: id) {
         _ = ensureSession(for: selectedTab)
       }
     }
+    if wasSpotlightPresented { selectedSession?.focusPage() }
     emit("tab:selected")
     AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
   }

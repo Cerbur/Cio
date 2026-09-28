@@ -143,6 +143,23 @@ final class SidebarTabDrag {
     items[ItemKey(id: id, tier: tier)]?.frame
   }
 
+  /// Only tab selection targets may receive clicks through Spotlight's shell overlay.
+  func tabSelection(at point: CGPoint, in selectedSpaceID: UUID) -> UUID? {
+    if topPinFrame.contains(point),
+       let item = items.first(where: { key, item in
+         key.tier == .global && item.frame.contains(point)
+       }) {
+      return item.key.id
+    }
+    guard visibleSpaceFrame.contains(point) else { return nil }
+    return items.first(where: { key, item in
+      (key.tier == .space(selectedSpaceID) || key.tier == .temporary(selectedSpaceID))
+        && item.frame.contains(point)
+        // The trailing close control is not part of the tab selection button.
+        && point.x < item.frame.maxX - 32
+    })?.key.id
+  }
+
   /// The landing tab stays hidden until the glass block reaches it.
   func sourceOpacity(of id: UUID) -> Double {
     tabID == id ? 0 : 1
