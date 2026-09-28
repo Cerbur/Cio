@@ -406,7 +406,19 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
                                 static_cast<int>(NSHeight(bounds))));
 
   CefBrowserSettings settings;
-  settings.background_color = CefColorSetARGB(255, 255, 255, 255);
+  // Match the AppKit container while Chromium has no document pixels yet.
+  // A fixed white base causes a bright frame when opening a tab in dark mode.
+  __block NSColor *background = nil;
+  [parent.effectiveAppearance performAsCurrentDrawingAppearance:^{
+    background = [[NSColor underPageBackgroundColor]
+        colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
+  }];
+  CGFloat red = 1, green = 1, blue = 1, alpha = 1;
+  [background getRed:&red green:&green blue:&blue alpha:&alpha];
+  settings.background_color = CefColorSetARGB(
+      255, static_cast<int>(red * 255 + 0.5),
+      static_cast<int>(green * 255 + 0.5),
+      static_cast<int>(blue * 255 + 0.5));
 
   // Chromium receives the original, complete URL.
   CefBrowserHost::CreateBrowser(windowInfo, _client, std::string(url.UTF8String),

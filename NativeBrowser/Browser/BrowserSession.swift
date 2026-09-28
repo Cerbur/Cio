@@ -586,7 +586,6 @@ extension BrowserSession: BrowserBridgeDelegate {
     browserCreationCount += 1
     hasBrowser = true
     rendererCrashed = false
-    containerView?.setBrowserAttached(true)
     if let containerView {
       let dark = containerView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
       setDarkAppearance(dark)

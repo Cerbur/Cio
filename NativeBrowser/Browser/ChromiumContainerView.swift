@@ -32,24 +32,10 @@ final class ChromiumContainerView: NSView {
   /// keep their browser alive; they simply do not draw.
   private(set) var isSurfaceVisible = true
 
-  private let placeholderLabel: NSTextField = {
-    let label = NSTextField(labelWithString: "Chromium browser view")
-    label.translatesAutoresizingMaskIntoConstraints = false
-    label.alignment = .center
-    label.textColor = .tertiaryLabelColor
-    label.font = .systemFont(ofSize: 13)
-    return label
-  }()
-
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
-    addSubview(placeholderLabel)
-    NSLayoutConstraint.activate([
-      placeholderLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-      placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-    ])
+    updateBackgroundColor()
     ApplicationRuntime.shared.record("appkit:chromium-container-created")
     AppLog.browser.debug("ChromiumContainerView created")
   }
@@ -59,9 +45,15 @@ final class ChromiumContainerView: NSView {
     fatalError("init(coder:) is not supported")
   }
 
-  /// Hides the placeholder once Chromium has attached its own view.
-  func setBrowserAttached(_ attached: Bool) {
-    placeholderLabel.isHidden = attached
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    updateBackgroundColor()
+  }
+
+  private func updateBackgroundColor() {
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
+    }
   }
 
   /// Shows or hides this container as the selected tab surface.
