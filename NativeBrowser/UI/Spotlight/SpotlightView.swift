@@ -42,7 +42,12 @@ struct SpotlightView: View {
     GeometryReader { geometry in
       let panelWidth = min(geometry.size.width - 48, 720)
       let panelTop = max(16, geometry.size.height / 3 - 33)
+      // Both current suggestion modes fit inside this fixed glass footprint.
+      // Only its visible outline changes, so the blur is stable while typing.
+      let glassSourceHeight = max(panelHeight, 200)
+      let glassWidth = 34 + (panelWidth - 34) * glassProgress
       let glassHeight = 34 + (panelHeight - 34) * glassProgress
+      let glassOffset = (panelHeight - glassHeight) / 2
       ZStack(alignment: .top) {
         Color.clear
           .contentShape(Rectangle())
@@ -50,19 +55,28 @@ struct SpotlightView: View {
 
         ZStack(alignment: .top) {
           Color.clear
-            .frame(
-              width: 34 + (panelWidth - 34) * glassProgress,
-              height: glassHeight)
+            .frame(width: panelWidth, height: glassSourceHeight)
             .background {
-              panelShape.fill(.regularMaterial).opacity(0.5)
+              RoundedRectangle(cornerRadius: 33, style: .continuous)
+                .fill(.regularMaterial).opacity(0.5)
             }
-            .glassEffect(.regular, in: panelShape)
-            .overlay {
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 33, style: .continuous))
+            // Flatten the native glass before masking; otherwise its backdrop
+            // can still draw outside the capsule on top of the browser page.
+            .compositingGroup()
+            .mask(alignment: .top) {
+              panelShape
+                .frame(width: glassWidth, height: glassHeight)
+                .offset(y: glassOffset)
+            }
+            .overlay(alignment: .top) {
               panelShape.strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                .frame(width: glassWidth, height: glassHeight)
+                .offset(y: glassOffset)
                 .allowsHitTesting(false)
             }
             .opacity(glassOpacity)
-            .offset(y: (panelHeight - glassHeight) / 2)
+            .allowsHitTesting(false)
 
           panelContents
             .frame(width: panelWidth)
