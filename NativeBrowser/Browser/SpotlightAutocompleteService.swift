@@ -120,9 +120,10 @@ final class SearchSuggestionCache {
 
   private var entries: [String: Entry] = [:]
   private var retryAfter: Date?
+  private var consecutiveFailures = 0
   private let capacity = 64
   private let lifetime: TimeInterval = 90
-  private let failureCooldown: TimeInterval = 15
+  private let failureCooldown: TimeInterval = 5
 
   func suggestions(for input: String, now: Date = Date()) -> [SpotlightSuggestion]? {
     guard let entry = entries[input] else { return nil }
@@ -135,6 +136,7 @@ final class SearchSuggestionCache {
 
   func store(_ suggestions: [SpotlightSuggestion], for input: String, now: Date = Date()) {
     retryAfter = nil
+    consecutiveFailures = 0
     entries[input] = Entry(
       suggestions: suggestions, expiresAt: now.addingTimeInterval(lifetime), storedAt: now)
     if entries.count > capacity,
@@ -145,11 +147,19 @@ final class SearchSuggestionCache {
 
   func canRequest(now: Date = Date()) -> Bool {
     guard let retryAfter else { return true }
-    return now >= retryAfter
+    if now >= retryAfter {
+      self.retryAfter = nil
+      consecutiveFailures = 0
+      return true
+    }
+    return false
   }
 
   func recordFailure(now: Date = Date()) {
-    retryAfter = now.addingTimeInterval(failureCooldown)
+    consecutiveFailures += 1
+    if consecutiveFailures >= 2 {
+      retryAfter = now.addingTimeInterval(failureCooldown)
+    }
   }
 }
 
@@ -183,7 +193,7 @@ struct SearchSuggestionProvider {
       URLQueryItem(name: "q", value: input),
     ]
     var request = URLRequest(url: components.url!)
-    request.timeoutInterval = 1.5
+    request.timeoutInterval = 3
     do {
       let (data, response) = try await fetch(request)
       try Task.checkCancellation()

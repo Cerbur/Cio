@@ -141,6 +141,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
 
   func testSearchProviderParsesGoogleResponseAndEncodesQuery() async throws {
     let provider = SearchSuggestionProvider { request in
+      XCTAssertGreaterThanOrEqual(request.timeoutInterval, 3)
       let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
       XCTAssertEqual(components.queryItems?.first(where: { $0.name == "q" })?.value, "swift async")
       let data = Data(#"["swift async",["swift async await","swift async let"]]"#.utf8)
@@ -172,7 +173,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
     XCTAssertTrue(service.suggestions.contains { $0.mode == .googleSearch("swift result") })
   }
 
-  func testRemoteFailureKeepsLocalSuggestionsAndAvoidsRepeatedRequests() async throws {
+  func testRepeatedRemoteFailureKeepsLocalSuggestionsAndTemporarilyStopsRequests() async throws {
     let history = try makeHistory()
     let page = URL(string: "https://swift.org/guide")!
     history.recordVisit(url: page, title: "Swift Guide", at: Date())
@@ -189,9 +190,11 @@ final class SpotlightAutocompleteTests: XCTestCase {
     XCTAssertTrue(service.suggestions.contains { $0.mode == .website(page) })
     service.update("swift guide")
     try await Task.sleep(for: .milliseconds(70))
+    service.update("swift guide examples")
+    try await Task.sleep(for: .milliseconds(70))
     let requests = await log.requests
-    XCTAssertEqual(requests.map(\.query), ["swift"])
-    XCTAssertEqual(service.suggestions.first?.mode, .googleSearch("swift guide"))
+    XCTAssertEqual(requests.map(\.query), ["swift", "swift guide"])
+    XCTAssertEqual(service.suggestions.first?.mode, .googleSearch("swift guide examples"))
   }
 
   func testMatchingOnlineSuggestionsSurviveFailureCooldown() async throws {
@@ -207,19 +210,25 @@ final class SpotlightAutocompleteTests: XCTestCase {
     let service = SpotlightAutocompleteService(history: try makeHistory(), searchProvider: provider)
     service.update("swift")
     try await Task.sleep(for: .milliseconds(50))
+    service.update("swift a")
+    try await Task.sleep(for: .milliseconds(50))
+    service.update("swift ap")
+    try await Task.sleep(for: .milliseconds(50))
     service.update("swift app")
     try await Task.sleep(for: .milliseconds(50))
-    service.update("swift appl")
-    try await Task.sleep(for: .milliseconds(50))
-    XCTAssertTrue(service.suggestions.contains { $0.mode == .googleSearch("swift apple") })
+    XCTAssertTrue(service.suggestions.contains {
+      $0.kind == .onlineSearch && $0.mode == .googleSearch("swift apple")
+    })
   }
 
   func testFailureCooldownExpires() {
     let cache = SearchSuggestionCache()
     let now = Date()
     cache.recordFailure(now: now)
-    XCTAssertFalse(cache.canRequest(now: now.addingTimeInterval(14)))
-    XCTAssertTrue(cache.canRequest(now: now.addingTimeInterval(15)))
+    XCTAssertTrue(cache.canRequest(now: now))
+    cache.recordFailure(now: now)
+    XCTAssertFalse(cache.canRequest(now: now.addingTimeInterval(4)))
+    XCTAssertTrue(cache.canRequest(now: now.addingTimeInterval(5)))
   }
 
   func testFirstRequestIsImmediateAndLaterRequestsAreSpacedAndCoalesced() async throws {
