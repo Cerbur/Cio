@@ -339,7 +339,9 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     action: Selector
   ) -> NSButton {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-    button.isBordered = false
+    button.bezelStyle = .toolbar
+    button.isBordered = true
+    button.showsBorderOnlyWhileMouseInside = true
     button.title = ""
     button.image = toolbarImage(named: symbol, description: label)
     button.imagePosition = .imageOnly
