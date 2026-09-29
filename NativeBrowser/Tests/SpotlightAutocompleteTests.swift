@@ -38,7 +38,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
     XCTAssertEqual(provider.suggestions(for: "example.com", now: now).first?.mode, .website(titled))
   }
 
-  func testMergeKeepsFourSectionsOrderedWithTwoPerProvider() {
+  func testMergeFillsAvailableRowsWithBothProviders() {
     let root = URL(string: "https://example.com/")!
     let domain = SpotlightSuggestion(
       title: "example.com", subtitle: "", mode: .website(root), kind: .domainMatch, score: 90)
@@ -62,18 +62,25 @@ final class SpotlightAutocompleteTests: XCTestCase {
       domain: domain, input: input, history: [duplicate] + history, online: online)
     XCTAssertEqual(merged.first?.kind, .domainMatch)
     XCTAssertEqual(merged.dropFirst().first?.kind, .input)
-    XCTAssertEqual(merged.count, 6)
+    XCTAssertEqual(merged.count, 10)
     XCTAssertEqual(Set(merged.map(\.id)).count, merged.count)
-    XCTAssertEqual(merged.filter { $0.kind == .historyAddress }.count, 2)
-    XCTAssertEqual(merged.filter { $0.kind == .onlineSearch }.count, 2)
+    XCTAssertEqual(merged.filter { $0.kind == .historyAddress }.count, 4)
+    XCTAssertEqual(merged.filter { $0.kind == .onlineSearch }.count, 4)
     let firstOnline = merged.firstIndex { $0.kind == .onlineSearch }!
     XCTAssertTrue(merged[2..<firstOnline].allSatisfy { $0.kind == .historyAddress })
+    XCTAssertLessThan(firstOnline, 5)
     XCTAssertEqual(
       SpotlightAutocompleteService.merge(domain: nil, input: input, history: history, online: online).first?.kind,
       .input)
+    XCTAssertEqual(
+      SpotlightAutocompleteService.merge(domain: domain, input: input, history: history, online: []).count,
+      10)
+    XCTAssertEqual(
+      SpotlightAutocompleteService.merge(domain: domain, input: input, history: [], online: online).count,
+      10)
   }
 
-  func testImmediateTopRowsThenHistoryAt20msThenOnline() async throws {
+  func testImmediateTopRowsThenHistoryThenOnline() async throws {
     let history = try makeHistory()
     let page = URL(string: "https://swift.org/guide")!
     history.recordVisit(url: page, title: "Swift Guide", at: Date())
@@ -101,7 +108,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
     XCTAssertEqual(snapshots[2].last?.mode, .googleSearch("swift concurrency"))
   }
 
-  func testFastOnlineResultMergesWithHistoryInOneLowerSectionUpdate() async throws {
+  func testFastOnlineResultAndHistoryBothPublish() async throws {
     let history = try makeHistory()
     let page = URL(string: "https://swift.org/guide")!
     history.recordVisit(url: page, title: "Swift Guide", at: Date())
@@ -116,10 +123,10 @@ final class SpotlightAutocompleteTests: XCTestCase {
 
     service.update("swift")
     try await Task.sleep(for: .milliseconds(50))
-    XCTAssertEqual(snapshots.count, 2)
+    XCTAssertGreaterThanOrEqual(snapshots.count, 2)
     XCTAssertEqual(snapshots[0].map(\.kind), [.domainMatch, .input])
-    XCTAssertTrue(snapshots[1].contains { $0.mode == .website(page) })
-    XCTAssertTrue(snapshots[1].contains { $0.mode == .googleSearch("swift concurrency") })
+    XCTAssertTrue(snapshots.last?.contains { $0.mode == .website(page) } == true)
+    XCTAssertTrue(snapshots.last?.contains { $0.mode == .googleSearch("swift concurrency") } == true)
   }
 
   func testPrivateAndLocalInputsNeverReachSuggest() {
@@ -135,6 +142,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
 
   func testSearchProviderParsesGoogleResponseAndEncodesQuery() async throws {
     let provider = SearchSuggestionProvider { request in
+      XCTAssertGreaterThanOrEqual(request.timeoutInterval, 5)
       let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
       XCTAssertEqual(components.queryItems?.first(where: { $0.name == "q" })?.value, "swift async")
       let data = Data(#"["swift async",["swift async await","swift async let"]]"#.utf8)
@@ -142,6 +150,86 @@ final class SpotlightAutocompleteTests: XCTestCase {
     }
     let result = try await provider.suggestions(for: "swift async")
     XCTAssertEqual(result.map(\.mode), [.googleSearch("swift async await"), .googleSearch("swift async let")])
+  }
+
+  func testReturningToQueryUsesCachedRemoteResults() async throws {
+    let log = SuggestRequestLog()
+    let provider = SearchSuggestionProvider { request in
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+        .queryItems!.first(where: { $0.name == "q" })!.value!
+      await log.append(query)
+      let data = Data("[\"\(query)\",[\"\(query) result\"]]".utf8)
+      return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+    let service = SpotlightAutocompleteService(history: try makeHistory(), searchProvider: provider)
+    service.update("swift")
+    try await Task.sleep(for: .milliseconds(60))
+    service.update("other")
+    try await Task.sleep(for: .milliseconds(60))
+    service.update("swift")
+    XCTAssertTrue(service.suggestions.contains { $0.mode == .googleSearch("swift result") })
+    try await Task.sleep(for: .milliseconds(60))
+    let requests = await log.requests
+    XCTAssertEqual(requests.map(\.query), ["swift", "other"])
+    XCTAssertTrue(service.suggestions.contains { $0.mode == .googleSearch("swift result") })
+  }
+
+  func testRepeatedRemoteFailureKeepsLocalSuggestionsAndTemporarilyStopsRequests() async throws {
+    let history = try makeHistory()
+    let page = URL(string: "https://swift.org/guide")!
+    history.recordVisit(url: page, title: "Swift Guide", at: Date())
+    let log = SuggestRequestLog()
+    let provider = SearchSuggestionProvider { request in
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+        .queryItems!.first(where: { $0.name == "q" })!.value!
+      await log.append(query)
+      throw URLError(.timedOut)
+    }
+    let service = SpotlightAutocompleteService(history: history, searchProvider: provider)
+    service.update("swift")
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(service.suggestions.contains { $0.mode == .website(page) })
+    service.update("swift guide")
+    try await Task.sleep(for: .milliseconds(70))
+    service.update("swift guide examples")
+    try await Task.sleep(for: .milliseconds(70))
+    let requests = await log.requests
+    XCTAssertEqual(requests.map(\.query), ["swift", "swift guide"])
+    XCTAssertEqual(service.suggestions.first?.mode, .googleSearch("swift guide examples"))
+  }
+
+  func testMatchingOnlineSuggestionsSurviveFailureCooldown() async throws {
+    let provider = SearchSuggestionProvider { request in
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+        .queryItems!.first(where: { $0.name == "q" })!.value!
+      if query == "swift" {
+        let data = Data(#"["swift",["swift apple"]]"#.utf8)
+        return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+      }
+      throw URLError(.timedOut)
+    }
+    let service = SpotlightAutocompleteService(history: try makeHistory(), searchProvider: provider)
+    service.update("swift")
+    try await Task.sleep(for: .milliseconds(50))
+    service.update("swift a")
+    try await Task.sleep(for: .milliseconds(50))
+    service.update("swift ap")
+    try await Task.sleep(for: .milliseconds(50))
+    service.update("swift app")
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertTrue(service.suggestions.contains {
+      $0.kind == .onlineSearch && $0.mode == .googleSearch("swift apple")
+    })
+  }
+
+  func testFailureCooldownExpires() {
+    let cache = SearchSuggestionCache()
+    let now = Date()
+    cache.recordFailure(now: now)
+    XCTAssertTrue(cache.canRequest(now: now))
+    cache.recordFailure(now: now)
+    XCTAssertFalse(cache.canRequest(now: now.addingTimeInterval(4)))
+    XCTAssertTrue(cache.canRequest(now: now.addingTimeInterval(5)))
   }
 
   func testFirstRequestIsImmediateAndLaterRequestsAreSpacedAndCoalesced() async throws {
