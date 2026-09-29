@@ -103,18 +103,16 @@ private final class ToolbarChromeView: NSView {
 
   func applyLayout(
     browserRect: NSRect,
-    trafficLightsRight: CGFloat,
-    focused: Bool
+    trafficLightsRight: CGFloat
   ) {
     guard browserRect.width > 0 else { return }
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
     let sidebarLeft = max(trafficLightsRight + 10, browserRect.minX - height - 10)
     let navigationLeft = max(browserRect.minX + 7, sidebarLeft + height + 10)
-    let ratio = focused
-      ? AddressCapsuleLayout.focusedWidthRatio
-      : AddressCapsuleLayout.unfocusedWidthRatio
-    let addressWidth = browserRect.width * ratio
+    // Keep the host at its maximum width. SwiftUI animates the capsule inside
+    // it so the native glass is never clipped by the host's rectangular bounds.
+    let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
     let addressLeft = browserRect.midX - addressWidth / 2
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
@@ -140,7 +138,6 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private enum ToolbarEvent {
     case geometryChanged
     case sidebarChanged
-    case focusChanged
     case sessionChanged
   }
 
@@ -234,7 +231,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
       bindSelectedSession(workspace.selectedSession)
-    case .geometryChanged, .focusChanged:
+    case .geometryChanged:
       break
     }
     applyCurrentLayout()
@@ -253,8 +250,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       NSPoint(x: zoomButton.bounds.maxX, y: 0), to: chromeView).x
     chromeView.applyLayout(
       browserRect: browserRect,
-      trafficLightsRight: trafficLightsRight,
-      focused: workspace.selectedSession?.isEditingAddressField == true)
+      trafficLightsRight: trafficLightsRight)
   }
 
   private func observeWorkspace() {
@@ -368,8 +364,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     let reloadButton = makeButton(
       label: "Reload", symbol: "arrow.clockwise", action: #selector(reloadOrStop(_:)))
     let addressView = NSHostingView(rootView: ToolbarAddressFieldView(
-      workspace: workspace,
-      onFocusChange: { [weak self] in self?.handle(.focusChanged) }))
+      workspace: workspace))
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,

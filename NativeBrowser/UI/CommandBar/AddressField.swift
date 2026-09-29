@@ -23,7 +23,6 @@
 //
 
 import AppKit
-import QuartzCore
 import SwiftUI
 
 struct AddressField: NSViewRepresentable {
@@ -43,7 +42,6 @@ struct AddressField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> NativeBrowserAddressField {
     let field = NativeBrowserAddressField()
-    field.wantsLayer = true
     field.placeholderString = AddressFieldModel.placeholder
     field.stringValue = model.compactDisplayText(for: model.committedURL)
     field.delegate = context.coordinator
@@ -56,9 +54,8 @@ struct AddressField: NSViewRepresentable {
     field.isEditable = true
     field.isSelectable = true
     field.isEnabled = true
-    // The default AppKit ring is oversized for this compact control. Focus
-    // ownership remains entirely native; the toolbar surface supplies the
-    // restrained one-pixel focus treatment without changing field geometry.
+    // The capsule draws one native AppKit focus ring around the whole control,
+    // so the text field must not add a second ring around its own bounds.
     field.focusRingType = .none
     field.lineBreakMode = .byTruncatingTail
     field.usesSingleLineMode = true
@@ -92,7 +89,7 @@ struct AddressField: NSViewRepresentable {
     // only written when it genuinely differs.
     let displayedText = context.coordinator.isFocused
       ? model.editText : model.compactDisplayText(for: model.committedURL)
-    field.setDisplayText(displayedText, animated: false)
+    field.setDisplayText(displayedText)
   }
 
   func makeCoordinator() -> Coordinator {
@@ -234,7 +231,7 @@ struct AddressField: NSViewRepresentable {
       if let addressField {
         let text = focused ? parent.model.editText
           : parent.model.compactDisplayText(for: parent.model.committedURL)
-        addressField.setDisplayText(text, animated: true)
+        addressField.setDisplayText(text)
       }
       if focused {
         // NSTextField may place the caret later in this same mouse event.
@@ -258,17 +255,10 @@ final class NativeBrowserAddressField: NSTextField {
   /// Called on the main thread when this field takes or gives up the keyboard.
   var onFocusChange: (@MainActor (Bool) -> Void)?
 
-  /// Crossfades only focus-driven compact/full swaps. Browser URL updates and
-  /// keystrokes stay immediate, so typing and IME composition are unaffected.
-  func setDisplayText(_ text: String, animated: Bool) {
+  /// Keep the native field editor's text in sync without crossfading an old
+  /// URL over the new one during the capsule's width animation.
+  func setDisplayText(_ text: String) {
     guard stringValue != text else { return }
-    if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-      let transition = CATransition()
-      transition.type = .fade
-      transition.duration = 0.16
-      transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-      layer?.add(transition, forKey: "addressTextCrossfade")
-    }
     stringValue = text
   }
 

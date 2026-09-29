@@ -35,20 +35,27 @@ enum AddressCapsuleLayout {
 
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
-  var onFocusChange: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    Group {
-      if let session = workspace.selectedSession {
-        addressField(for: session)
-      } else {
-        Color.clear
-          .accessibilityHidden(true)
+    GeometryReader { geometry in
+      let isFocused = interaction.isFocused
+        && workspace.selectedSession?.isEditingAddressField == true
+      let widthRatio = isFocused
+        ? 1 : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio
+      Group {
+        if let session = workspace.selectedSession {
+          addressField(for: session)
+        } else {
+          Color.clear
+            .accessibilityHidden(true)
+        }
       }
+      .frame(width: geometry.size.width * widthRatio,
+             height: AddressCapsuleLayout.height)
+      .frame(width: geometry.size.width, height: AddressCapsuleLayout.height)
     }
-    .frame(maxWidth: .infinity)
     .frame(height: AddressCapsuleLayout.height)
   }
 
@@ -67,9 +74,14 @@ struct ToolbarAddressFieldView: View {
         onSubmit: { session.submitAddressField() },
         onEscape: { session.cancelAddressEditing() },
         onFocusChange: { focused in
-          interaction.isFocused = focused
+          if reduceMotion {
+            interaction.isFocused = focused
+          } else {
+            withAnimation(.spring(response: 0.31, dampingFraction: 0.68)) {
+              interaction.isFocused = focused
+            }
+          }
           session.addressFieldFocusChanged(focused)
-          onFocusChange()
         }
       )
       .frame(maxWidth: .infinity,
@@ -83,6 +95,12 @@ struct ToolbarAddressFieldView: View {
     .padding(.trailing, AddressCapsuleLayout.trailingInset)
     .frame(maxWidth: .infinity)
     .frame(height: AddressCapsuleLayout.height)
+    // Reveal only the contents inside the animating capsule. The glass is a
+    // separate background and keeps its own native rounded edge.
+    .mask {
+      RoundedRectangle(cornerRadius: AddressCapsuleLayout.cornerRadius,
+                       style: .continuous)
+    }
     .browserAddressFieldSurface(cornerRadius: AddressCapsuleLayout.cornerRadius)
     .contentShape(Capsule())
     .simultaneousGesture(TapGesture().onEnded {
@@ -91,15 +109,15 @@ struct ToolbarAddressFieldView: View {
       }
     })
     .overlay {
-      if interaction.isFocused || session.addressField.isEditing {
-        RoundedRectangle(cornerRadius: AddressCapsuleLayout.cornerRadius,
-                         style: .continuous)
-          .strokeBorder(Color.accentColor.opacity(0.38), lineWidth: 1)
-          .allowsHitTesting(false)
+      GeometryReader { geometry in
+        NativeAddressFocusRing(isFocused: interaction.isFocused
+                               && session.isEditingAddressField)
+          .frame(width: geometry.size.width + NativeAddressFocusRing.inset * 2,
+                 height: AddressCapsuleLayout.height + NativeAddressFocusRing.inset * 2)
+          .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
       }
+      .allowsHitTesting(false)
     }
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.16),
-               value: interaction.isFocused)
     .onReceive(NotificationCenter.default.publisher(for: .browserFocusAddressField)) {
       notification in
       guard (notification.object as? BrowserSession) === session else { return }
@@ -107,5 +125,52 @@ struct ToolbarAddressFieldView: View {
         name: .browserAddressFieldShouldFocus,
         object: session.addressField)
     }
+  }
+}
+
+/// AppKit draws the system focus halo around the same capsule that SwiftUI
+/// resizes. Keeping the view mounted lets its bounds follow every spring frame.
+private struct NativeAddressFocusRing: NSViewRepresentable {
+  static let inset: CGFloat = 6
+
+  let isFocused: Bool
+
+  func makeNSView(context: Context) -> FocusRingView {
+    let view = FocusRingView()
+    view.isFocused = isFocused
+    return view
+  }
+
+  func updateNSView(_ view: FocusRingView, context: Context) {
+    view.isFocused = isFocused
+  }
+
+  final class FocusRingView: NSView {
+    var isFocused = false {
+      didSet {
+        if oldValue != isFocused { needsDisplay = true }
+      }
+    }
+
+    override var isOpaque: Bool { false }
+
+    override func setFrameSize(_ newSize: NSSize) {
+      super.setFrameSize(newSize)
+      needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+      guard isFocused else { return }
+      NSGraphicsContext.saveGraphicsState()
+      NSFocusRingPlacement.only.set()
+      let capsule = bounds.insetBy(dx: NativeAddressFocusRing.inset,
+                                   dy: NativeAddressFocusRing.inset)
+      NSBezierPath(roundedRect: capsule,
+                   xRadius: AddressCapsuleLayout.cornerRadius,
+                   yRadius: AddressCapsuleLayout.cornerRadius).fill()
+      NSGraphicsContext.restoreGraphicsState()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
   }
 }
