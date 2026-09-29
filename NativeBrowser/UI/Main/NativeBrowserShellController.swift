@@ -163,7 +163,7 @@ final class NativeBrowserShellController: NSViewController {
   override func viewDidLayout() {
     super.viewDidLayout()
     updateSidebarChromeLayout()
-    browserToolbar.updateSidebarButtonPosition()
+    browserToolbar.browserGeometryDidChange()
   }
 
   private func updateSidebarChromeLayout() {
@@ -282,7 +282,6 @@ final class NativeBrowserShellController: NSViewController {
     if sidebarItem.isCollapsed {
       NSAnimationContext.runAnimationGroup { context in
         context.duration = 0.28
-        browserToolbar.insertLeadingSpacer()
         sidebarItem.animator().isCollapsed = false
       }
       let width = expandedSidebarWidth
@@ -295,12 +294,6 @@ final class NativeBrowserShellController: NSViewController {
       NSAnimationContext.runAnimationGroup { context in
         context.duration = 0.28
         sidebarItem.animator().isCollapsed = true
-      } completionHandler: { [weak self] in
-        guard let self, self.sidebarItem.isCollapsed else { return }
-        NSAnimationContext.runAnimationGroup { context in
-          context.duration = 0.16
-          self.browserToolbar.removeLeadingSpacer()
-        }
       }
     }
   }

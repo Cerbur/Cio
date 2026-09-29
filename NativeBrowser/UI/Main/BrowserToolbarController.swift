@@ -2,8 +2,9 @@
 //  BrowserToolbarController.swift
 //  NativeBrowser
 //
-//  Native Space toolbar and page controls. The shell supplies layout and
-//  sidebar actions without owning individual toolbar items.
+//  One stable native toolbar item hosts all page controls. Browser, window,
+//  sidebar and focus events each trigger a layout from the current geometry;
+//  none of those events changes the toolbar item's own width or position.
 //
 
 import AppKit
@@ -11,15 +12,119 @@ import Combine
 import SwiftUI
 
 @MainActor
+private final class ToolbarChromeView: NSView {
+  private let sidebarButton: NSButton
+  private let navigationGroup = NSVisualEffectView()
+  private let backButton: NSButton
+  private let forwardButton: NSButton
+  private let reloadButton: NSButton
+  private let addressView: NSHostingView<ToolbarAddressFieldView>
+
+  init(
+    sidebarButton: NSButton,
+    backButton: NSButton,
+    forwardButton: NSButton,
+    reloadButton: NSButton,
+    addressView: NSHostingView<ToolbarAddressFieldView>
+  ) {
+    self.sidebarButton = sidebarButton
+    self.backButton = backButton
+    self.forwardButton = forwardButton
+    self.reloadButton = reloadButton
+    self.addressView = addressView
+    super.init(frame: NSRect(x: 0, y: 0, width: 1, height: AddressCapsuleLayout.height))
+
+    navigationGroup.material = .titlebar
+    navigationGroup.blendingMode = .withinWindow
+    navigationGroup.state = .active
+    navigationGroup.wantsLayer = true
+    navigationGroup.layer?.cornerRadius = AddressCapsuleLayout.cornerRadius
+    navigationGroup.layer?.masksToBounds = true
+
+    addSubview(sidebarButton)
+    addSubview(navigationGroup)
+    navigationGroup.addSubview(backButton)
+    navigationGroup.addSubview(forwardButton)
+    navigationGroup.addSubview(reloadButton)
+    addSubview(addressView)
+
+    let height = AddressCapsuleLayout.height
+    backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
+    forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
+    reloadButton.frame = NSRect(x: 1 + 2 * height, y: 0, width: height, height: height)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) is not supported")
+  }
+
+  override var intrinsicContentSize: NSSize {
+    NSSize(width: NSView.noIntrinsicMetric, height: AddressCapsuleLayout.height)
+  }
+
+  func setSidebarCollapsed(_ collapsed: Bool) {
+    let title = collapsed ? "Show Sidebar" : "Hide Sidebar"
+    sidebarButton.toolTip = title
+    sidebarButton.setAccessibilityLabel(title)
+  }
+
+  func setNavigationState(
+    canGoBack: Bool,
+    canGoForward: Bool,
+    isLoading: Bool,
+    hasSession: Bool,
+    reloadImage: NSImage?
+  ) {
+    backButton.isEnabled = hasSession && canGoBack
+    forwardButton.isEnabled = hasSession && canGoForward
+    reloadButton.image = reloadImage
+    reloadButton.toolTip = isLoading ? "Stop" : "Reload"
+    reloadButton.setAccessibilityLabel(isLoading ? "Stop" : "Reload")
+    reloadButton.isEnabled = hasSession
+  }
+
+  func applyLayout(
+    browserRect: NSRect,
+    trafficLightsRight: CGFloat,
+    focused: Bool
+  ) {
+    guard browserRect.width > 0 else { return }
+    let height = AddressCapsuleLayout.height
+    let y = (bounds.height - height) / 2
+    let sidebarLeft = max(trafficLightsRight + 10, browserRect.minX - height - 10)
+    let navigationLeft = max(browserRect.minX + 7, sidebarLeft + height + 10)
+    let ratio = focused
+      ? AddressCapsuleLayout.focusedWidthRatio
+      : AddressCapsuleLayout.unfocusedWidthRatio
+    let addressWidth = browserRect.width * ratio
+    let addressLeft = browserRect.midX - addressWidth / 2
+
+    setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
+             on: sidebarButton)
+    setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 3 * height, height: height),
+             on: navigationGroup)
+    setFrame(NSRect(x: addressLeft, y: y, width: addressWidth, height: height),
+             on: addressView)
+  }
+
+  private func setFrame(_ frame: NSRect, on view: NSView) {
+    if view.frame != frame { view.frame = frame }
+  }
+}
+
+@MainActor
 final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private enum ToolbarID {
-    static let showSidebar = NSToolbarItem.Identifier("cio.show-sidebar")
-    static let back = NSToolbarItem.Identifier("cio.back")
-    static let forward = NSToolbarItem.Identifier("cio.forward")
-    static let reload = NSToolbarItem.Identifier("cio.reload")
-    static let address = NSToolbarItem.Identifier("cio.address")
-    static let leadingSpacer = NSToolbarItem.Identifier("cio.sidebar-leading-spacer")
+    static let chrome = NSToolbarItem.Identifier("cio.page-controls")
     static let sectionPlaceholder = NSToolbarItem.Identifier("cio.section-toolbar-placeholder")
+  }
+
+  private enum ToolbarEvent {
+    case geometryChanged
+    case sidebarChanged
+    case focusChanged
+    case sessionChanged
   }
 
   private let workspace: BrowserWorkspaceStore
@@ -28,15 +133,10 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private let onSidebarToggle: () -> Void
   private weak var window: NSWindow?
   private var toolbar: NSToolbar?
-  private var showsSpaceControls = true
-  private weak var showSidebarToolbarItem: NSToolbarItem?
-  private var sidebarButton: NSButton?
-  private var leadingSpacerToolbarItem: NSToolbarItem?
-  private var leadingSpacerWidth: CGFloat = 0
+  private var chromeView: ToolbarChromeView?
   private var browserFrameObservation: AnyCancellable?
-  private weak var backToolbarItem: NSToolbarItem?
-  private weak var forwardToolbarItem: NSToolbarItem?
-  private weak var reloadToolbarItem: NSToolbarItem?
+  private var chromeFrameObservation: AnyCancellable?
+  private var windowResizeObservation: AnyCancellable?
   private var workspaceObservation: AnyCancellable?
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
@@ -57,24 +157,10 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       for: NSView.frameDidChangeNotification,
       object: browserView
     ).sink { [weak self] _ in
-      MainActor.assumeIsolated { self?.updateSidebarButtonPosition() }
+      MainActor.assumeIsolated { self?.handle(.geometryChanged) }
     }
     observeWorkspace()
     bindSelectedSession(workspace.selectedSession)
-  }
-
-  func setSpaceControlsVisible(_ visible: Bool) {
-    showsSpaceControls = visible
-    updateSectionItems()
-  }
-
-  private func updateSectionItems() {
-    // Keep the native toolbar installed and visible so its titlebar height and
-    // traffic-light placement are the same in every section.
-    toolbar?.items.forEach { item in
-      item.isHidden = item.itemIdentifier == ToolbarID.sectionPlaceholder
-        ? showsSpaceControls : !showsSpaceControls
-    }
   }
 
   func install(in window: NSWindow, showsSpaceToolbar: Bool) {
@@ -95,32 +181,77 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     window.backgroundColor = .clear
     window.titlebarAppearsTransparent = true
     window.toolbarStyle = .unified
-    if window.toolbar !== toolbar {
-      window.toolbar = toolbar
-    }
+    if window.toolbar !== toolbar { window.toolbar = toolbar }
     toolbar?.isVisible = true
+
+    windowResizeObservation = NotificationCenter.default.publisher(
+      for: NSWindow.didResizeNotification,
+      object: window
+    ).sink { [weak self] _ in
+      MainActor.assumeIsolated { self?.handle(.geometryChanged) }
+    }
     setSpaceControlsVisible(showsSpaceToolbar)
-    captureToolbarPresentationItems()
     bindSelectedSession(workspace.selectedSession)
     updateSidebarState()
-    DispatchQueue.main.async { [weak self] in self?.updateSidebarButtonPosition() }
+  }
+
+  func setSpaceControlsVisible(_ visible: Bool) {
+    toolbar?.items.forEach { item in
+      item.isHidden = item.itemIdentifier == ToolbarID.sectionPlaceholder
+        ? visible : !visible
+    }
+    handle(.geometryChanged)
+  }
+
+  func updateSidebarState() {
+    handle(.sidebarChanged)
+  }
+
+  func browserGeometryDidChange() {
+    handle(.geometryChanged)
+  }
+
+  private func handle(_ event: ToolbarEvent) {
+    switch event {
+    case .sidebarChanged:
+      chromeView?.setSidebarCollapsed(isSidebarCollapsed())
+    case .sessionChanged:
+      bindSelectedSession(workspace.selectedSession)
+    case .geometryChanged, .focusChanged:
+      break
+    }
+    applyCurrentLayout()
+  }
+
+  private func applyCurrentLayout() {
+    guard let window,
+          let chromeView,
+          chromeView.window === window,
+          browserView.window === window,
+          let zoomButton = window.standardWindowButton(.zoomButton)
+    else { return }
+
+    let browserRect = browserView.convert(browserView.bounds, to: chromeView)
+    let trafficLightsRight = zoomButton.convert(
+      NSPoint(x: zoomButton.bounds.maxX, y: 0), to: chromeView).x
+    chromeView.applyLayout(
+      browserRect: browserRect,
+      trafficLightsRight: trafficLightsRight,
+      focused: workspace.selectedSession?.isEditingAddressField == true)
   }
 
   private func observeWorkspace() {
     workspaceObservation = workspace.objectWillChange
       .sink { [weak self] _ in
-        // objectWillChange is pre-mutation for ObservableObject. Defer one
-        // main-loop turn so selectedSession is read after the workspace change.
+        // objectWillChange is sent before selectedSession changes.
         DispatchQueue.main.async { [weak self] in
-          MainActor.assumeIsolated {
-            self?.refreshSelectedSessionObservation()
-          }
+          MainActor.assumeIsolated { self?.refreshSelectedSessionObservation() }
         }
       }
   }
 
   private func refreshSelectedSessionObservation() {
-    bindSelectedSession(workspace.selectedSession)
+    handle(.sessionChanged)
   }
 
   private func bindSelectedSession(_ session: BrowserSession?) {
@@ -128,17 +259,13 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       selectedSessionObservations.removeAll()
       observedSession = nil
       applyNavigationToolbarState(
-        canGoBack: false,
-        canGoForward: false,
-        isLoading: false,
-        hasSession: false)
+        canGoBack: false, canGoForward: false, isLoading: false, hasSession: false)
       return
     }
 
     if observedSession !== session {
       selectedSessionObservations.removeAll()
       observedSession = session
-
       Publishers.CombineLatest3(
         session.$canGoBack,
         session.$canGoForward,
@@ -158,8 +285,6 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       .store(in: &selectedSessionObservations)
     }
 
-    // Apply current values immediately when selected, without waiting for a
-    // subsequent publisher event to correct the previous tab's toolbar state.
     applyNavigationToolbarState(
       canGoBack: session.canGoBack,
       canGoForward: session.canGoForward,
@@ -173,99 +298,14 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     isLoading: Bool,
     hasSession: Bool
   ) {
-    backToolbarItem?.isEnabled = hasSession && canGoBack
-    forwardToolbarItem?.isEnabled = hasSession && canGoForward
-    reloadToolbarItem?.image = toolbarImage(
-      named: isLoading ? "xmark" : "arrow.clockwise",
-      description: isLoading ? "Stop" : "Reload")
-    // Keep the item's measured width stable while a newly selected tab loads.
-    // Only its icon and help text need to change between Reload and Stop.
-    reloadToolbarItem?.label = "Reload"
-    reloadToolbarItem?.paletteLabel = "Reload"
-    reloadToolbarItem?.toolTip = isLoading ? "Stop" : "Reload"
-    reloadToolbarItem?.isEnabled = hasSession
-  }
-
-  private func captureToolbarPresentationItems() {
-    guard let toolbar else { return }
-    let items = toolbar.items
-    showSidebarToolbarItem = items.first { $0.itemIdentifier == ToolbarID.showSidebar }
-    leadingSpacerToolbarItem = items.first { $0.itemIdentifier == ToolbarID.leadingSpacer }
-    backToolbarItem = items.first { $0.itemIdentifier == ToolbarID.back }
-    forwardToolbarItem = items.first { $0.itemIdentifier == ToolbarID.forward }
-    reloadToolbarItem = items.first { $0.itemIdentifier == ToolbarID.reload }
-  }
-
-  func updateSidebarState() {
-    let isCollapsed = isSidebarCollapsed()
-    captureToolbarPresentationItems()
-    let title = isCollapsed ? "Show Sidebar" : "Hide Sidebar"
-    showSidebarToolbarItem?.label = title
-    showSidebarToolbarItem?.paletteLabel = title
-    showSidebarToolbarItem?.toolTip = title
-    sidebarButton?.toolTip = title
-    sidebarButton?.setAccessibilityLabel(title)
-  }
-
-  func insertLeadingSpacer() {
-    guard let toolbar,
-          !toolbar.items.contains(where: { $0.itemIdentifier == ToolbarID.leadingSpacer })
-    else { return }
-    toolbar.insertItem(withItemIdentifier: ToolbarID.leadingSpacer, at: 0)
-    updateSectionItems()
-    captureToolbarPresentationItems()
-    updateSidebarButtonPosition()
-  }
-
-  func removeLeadingSpacer() {
-    guard let toolbar,
-          let index = toolbar.items.firstIndex(where: {
-            $0.itemIdentifier == ToolbarID.leadingSpacer
-          })
-    else { return }
-    toolbar.removeItem(at: index)
-    leadingSpacerWidth = 0
-    leadingSpacerToolbarItem = nil
-  }
-
-  func updateSidebarButtonPosition() {
-    guard let window,
-          let button = sidebarButton,
-          let spacer = leadingSpacerToolbarItem,
-          let zoomButton = window.standardWindowButton(.zoomButton)
-    else { return }
-
-    let browserLeft = browserView.convert(.zero, to: nil).x
-    let trafficLightsRight = zoomButton.convert(
-      NSPoint(x: zoomButton.bounds.maxX, y: 0), to: nil).x
-    let buttonLeft = button.convert(.zero, to: nil).x
-    let targetLeft = max(trafficLightsRight + 10,
-                         browserLeft - button.bounds.width - 10)
-    let nextWidth = max(0, leadingSpacerWidth + targetLeft - buttonLeft)
-    guard abs(nextWidth - leadingSpacerWidth) > 0.5 else { return }
-    leadingSpacerWidth = nextWidth
-    spacer.minSize = NSSize(width: nextWidth, height: 1)
-    spacer.maxSize = NSSize(width: nextWidth, height: 1)
-    spacer.view?.setFrameSize(NSSize(width: nextWidth, height: 1))
-  }
-
-  private func makeButtonItem(
-    identifier: NSToolbarItem.Identifier,
-    label: String,
-    symbol: String,
-    action: Selector,
-    autovalidates: Bool = true
-  ) -> NSToolbarItem {
-    let item = NSToolbarItem(itemIdentifier: identifier)
-    item.label = label
-    item.paletteLabel = label
-    item.toolTip = label
-    item.image = toolbarImage(named: symbol, description: label)
-    item.isBordered = true
-    item.target = self
-    item.action = action
-    item.autovalidates = autovalidates
-    return item
+    chromeView?.setNavigationState(
+      canGoBack: canGoBack,
+      canGoForward: canGoForward,
+      isLoading: isLoading,
+      hasSession: hasSession,
+      reloadImage: toolbarImage(
+        named: isLoading ? "xmark" : "arrow.clockwise",
+        description: isLoading ? "Stop" : "Reload"))
   }
 
   private func toolbarImage(named symbol: String, description: String) -> NSImage? {
@@ -276,46 +316,79 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     )?.withSymbolConfiguration(configuration)
   }
 
-  private func makeAddressItem() -> NSToolbarItem {
-    let item = NSToolbarItem(itemIdentifier: ToolbarID.address)
-    item.label = "Address"
-    item.paletteLabel = "Address"
+  private func makeButton(
+    label: String,
+    symbol: String,
+    action: Selector,
+    glass: Bool = false
+  ) -> NSButton {
+    let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+    button.bezelStyle = .glass
+    button.isBordered = glass
+    if glass {
+      button.wantsLayer = true
+      button.layer?.cornerRadius = AddressCapsuleLayout.cornerRadius
+      button.layer?.masksToBounds = true
+    }
+    button.title = ""
+    button.image = toolbarImage(named: symbol, description: label)
+    button.imagePosition = .imageOnly
+    button.toolTip = label
+    button.setAccessibilityLabel(label)
+    button.target = self
+    button.action = action
+    return button
+  }
 
-    let hostingView = NSHostingView(rootView: ToolbarAddressFieldView(workspace: workspace))
-    hostingView.frame = NSRect(x: 0, y: 0,
-                               width: AddressCapsuleLayout.preferredWidth,
-                               height: AddressCapsuleLayout.height)
-    hostingView.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    hostingView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    hostingView.translatesAutoresizingMaskIntoConstraints = false
+  private func makeChromeItem() -> NSToolbarItem {
+    let item = NSToolbarItem(itemIdentifier: ToolbarID.chrome)
+    item.label = "Page Controls"
+    item.paletteLabel = "Page Controls"
+    item.isBordered = false
+
+    let sidebarButton = makeButton(
+      label: "Hide Sidebar", symbol: "sidebar.left",
+      action: #selector(handleSidebarToggle(_:)), glass: true)
+    let backButton = makeButton(
+      label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)))
+    let forwardButton = makeButton(
+      label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)))
+    let reloadButton = makeButton(
+      label: "Reload", symbol: "arrow.clockwise", action: #selector(reloadOrStop(_:)))
+    let addressView = NSHostingView(rootView: ToolbarAddressFieldView(
+      workspace: workspace,
+      onFocusChange: { [weak self] in self?.handle(.focusChanged) }))
+    let view = ToolbarChromeView(
+      sidebarButton: sidebarButton,
+      backButton: backButton,
+      forwardButton: forwardButton,
+      reloadButton: reloadButton,
+      addressView: addressView)
+    view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    view.translatesAutoresizingMaskIntoConstraints = false
     NSLayoutConstraint.activate([
-      hostingView.widthAnchor.constraint(
-        greaterThanOrEqualToConstant: AddressCapsuleLayout.minimumWidth),
-      hostingView.heightAnchor.constraint(equalToConstant: AddressCapsuleLayout.height),
+      view.widthAnchor.constraint(greaterThanOrEqualToConstant: 1),
+      view.heightAnchor.constraint(equalToConstant: AddressCapsuleLayout.height),
     ])
-    // NSToolbarItem's view constraints establish the minimum, but AppKit does
-    // not stretch an NSHostingView beyond its fitting width without a maximum.
-    // These legacy sizing properties remain the native way to make this custom
-    // item absorb the remaining toolbar width.
-    item.minSize = NSSize(width: AddressCapsuleLayout.minimumWidth,
-                          height: AddressCapsuleLayout.height)
+    // AppKit still uses these bounds to let one custom item occupy the
+    // remaining toolbar width; its child frames never affect item sizing.
+    item.minSize = NSSize(width: 1, height: AddressCapsuleLayout.height)
     item.maxSize = NSSize(width: 10_000, height: AddressCapsuleLayout.height)
-    item.view = hostingView
+    item.view = view
+    chromeView = view
+    view.postsFrameChangedNotifications = true
+    chromeFrameObservation = NotificationCenter.default.publisher(
+      for: NSView.frameDidChangeNotification,
+      object: view
+    ).sink { [weak self] _ in
+      MainActor.assumeIsolated { self?.handle(.geometryChanged) }
+    }
     return item
   }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [
-      ToolbarID.leadingSpacer,
-      ToolbarID.showSidebar,
-      .space,
-      ToolbarID.back,
-      ToolbarID.forward,
-      ToolbarID.reload,
-      .space,
-      ToolbarID.address,
-      ToolbarID.sectionPlaceholder,
-    ]
+    [ToolbarID.chrome, ToolbarID.sectionPlaceholder]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -339,72 +412,9 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       ])
       item.view = view
       return item
-    case ToolbarID.leadingSpacer:
-      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-      item.isBordered = false
-      item.view = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: 1))
-      item.minSize = NSSize(width: 0, height: 1)
-      item.maxSize = NSSize(width: 0, height: 1)
-      leadingSpacerToolbarItem = item
-      return item
-    case ToolbarID.showSidebar:
-      let title = isSidebarCollapsed() ? "Show Sidebar" : "Hide Sidebar"
-      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-      item.label = title
-      item.paletteLabel = title
-      item.toolTip = title
-      item.isBordered = true
-      let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-      button.bezelStyle = .glass
-      button.title = ""
-      button.image = toolbarImage(named: "sidebar.left", description: title)
-      button.imagePosition = .imageOnly
-      button.translatesAutoresizingMaskIntoConstraints = false
-      NSLayoutConstraint.activate([
-        button.widthAnchor.constraint(equalToConstant: 36),
-        button.heightAnchor.constraint(equalToConstant: 36),
-      ])
-      button.toolTip = title
-      button.setAccessibilityLabel(title)
-      button.target = self
-      button.action = #selector(handleSidebarToggle(_:))
-      item.view = button
-      item.minSize = button.frame.size
-      item.maxSize = button.frame.size
-      sidebarButton = button
-      showSidebarToolbarItem = item
-      return item
-    case ToolbarID.back:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "Back",
-        symbol: "chevron.backward",
-        action: #selector(goBack(_:)),
-        autovalidates: false)
-      backToolbarItem = item
-      return item
-    case ToolbarID.forward:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "Forward",
-        symbol: "chevron.forward",
-        action: #selector(goForward(_:)),
-        autovalidates: false)
-      forwardToolbarItem = item
-      return item
-    case ToolbarID.reload:
-      let item = makeButtonItem(
-        identifier: itemIdentifier,
-        label: "Reload",
-        symbol: "arrow.clockwise",
-        action: #selector(reloadOrStop(_:)),
-        autovalidates: false)
-      reloadToolbarItem = item
-      return item
-    case ToolbarID.address:
-      return makeAddressItem()
+    case ToolbarID.chrome:
+      return makeChromeItem()
     default:
-      // AppKit creates the standard toggle-sidebar item itself.
       return nil
     }
   }
@@ -413,15 +423,15 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     onSidebarToggle()
   }
 
-  @objc private func goBack(_ sender: NSToolbarItem) {
+  @objc private func goBack(_ sender: NSButton) {
     workspace.selectedSession?.goBack()
   }
 
-  @objc private func goForward(_ sender: NSToolbarItem) {
+  @objc private func goForward(_ sender: NSButton) {
     workspace.selectedSession?.goForward()
   }
 
-  @objc private func reloadOrStop(_ sender: NSToolbarItem) {
+  @objc private func reloadOrStop(_ sender: NSButton) {
     workspace.selectedSession?.reloadOrStop()
   }
 }

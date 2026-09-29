@@ -5,16 +5,14 @@
 //  The toolbar's address capsule: the tab favicon, the native address field
 //  and the capsule glass that carries the focus ring.
 //
-//  BrowserToolbarController owns the NSToolbarItem and the navigation
-//  buttons; everything inside the address item lives here, so the capsule's
-//  geometry has exactly one definition.
+//  BrowserToolbarController positions this view above the Chromium view;
+//  the capsule's appearance and editing behavior live here.
 //
 
 import AppKit
 import SwiftUI
 
-/// Geometry of the address capsule, shared by the SwiftUI contents and the
-/// NSToolbarItem that hosts them.
+/// Geometry of the address capsule.
 ///
 /// The corner radius is half the height, which makes each end of the pill a
 /// full circle of radius `height / 2`. The favicon is inset by that radius
@@ -24,9 +22,8 @@ import SwiftUI
 enum AddressCapsuleLayout {
   static let height: CGFloat = 36
   static let cornerRadius = height / 2
-  static let minimumWidth: CGFloat = 240
-  /// Width the hosting view starts at before the toolbar stretches it.
-  static let preferredWidth: CGFloat = 320
+  static let unfocusedWidthRatio: CGFloat = 0.38
+  static let focusedWidthRatio: CGFloat = 0.45
   static let faviconSize: CGFloat = 16
   static let faviconToTextSpacing: CGFloat = 7
   static let textMinimumHeight: CGFloat = 20
@@ -38,6 +35,7 @@ enum AddressCapsuleLayout {
 
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  var onFocusChange: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -50,7 +48,7 @@ struct ToolbarAddressFieldView: View {
           .accessibilityHidden(true)
       }
     }
-    .frame(minWidth: AddressCapsuleLayout.minimumWidth, maxWidth: .infinity)
+    .frame(maxWidth: .infinity)
     .frame(height: AddressCapsuleLayout.height)
   }
 
@@ -71,9 +69,10 @@ struct ToolbarAddressFieldView: View {
         onFocusChange: { focused in
           interaction.isFocused = focused
           session.addressFieldFocusChanged(focused)
+          onFocusChange()
         }
       )
-      .frame(minWidth: AddressCapsuleLayout.minimumWidth, maxWidth: .infinity,
+      .frame(maxWidth: .infinity,
              minHeight: AddressCapsuleLayout.textMinimumHeight,
              idealHeight: AddressCapsuleLayout.textIdealHeight)
       .layoutPriority(1)
@@ -82,7 +81,7 @@ struct ToolbarAddressFieldView: View {
     }
     .padding(.leading, AddressCapsuleLayout.leadingInset)
     .padding(.trailing, AddressCapsuleLayout.trailingInset)
-    .frame(minWidth: AddressCapsuleLayout.minimumWidth, maxWidth: .infinity)
+    .frame(maxWidth: .infinity)
     .frame(height: AddressCapsuleLayout.height)
     .browserAddressFieldSurface(cornerRadius: AddressCapsuleLayout.cornerRadius)
     .contentShape(Capsule())
