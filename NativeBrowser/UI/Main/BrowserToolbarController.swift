@@ -14,7 +14,8 @@ import SwiftUI
 @MainActor
 private final class ToolbarChromeView: NSView {
   private let sidebarButton: NSButton
-  private let navigationGroup = NSVisualEffectView()
+  private let navigationGroup = NSGlassEffectView()
+  private let navigationContent = NSView()
   private let backButton: NSButton
   private let forwardButton: NSButton
   private let reloadButton: NSButton
@@ -34,18 +35,22 @@ private final class ToolbarChromeView: NSView {
     self.addressView = addressView
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: AddressCapsuleLayout.height))
 
-    navigationGroup.material = .titlebar
-    navigationGroup.blendingMode = .withinWindow
-    navigationGroup.state = .active
-    navigationGroup.wantsLayer = true
-    navigationGroup.layer?.cornerRadius = AddressCapsuleLayout.cornerRadius
-    navigationGroup.layer?.masksToBounds = true
+    navigationGroup.style = .regular
+    navigationGroup.cornerRadius = AddressCapsuleLayout.cornerRadius
+    if #available(macOS 27.0, *) {
+      navigationGroup.effectIsInteractive = true
+    }
+    navigationContent.frame = NSRect(x: 0, y: 0,
+                                     width: 2 + 3 * AddressCapsuleLayout.height,
+                                     height: AddressCapsuleLayout.height)
+    navigationContent.autoresizingMask = [.width, .height]
+    navigationGroup.contentView = navigationContent
 
     addSubview(sidebarButton)
     addSubview(navigationGroup)
-    navigationGroup.addSubview(backButton)
-    navigationGroup.addSubview(forwardButton)
-    navigationGroup.addSubview(reloadButton)
+    navigationContent.addSubview(backButton)
+    navigationContent.addSubview(forwardButton)
+    navigationContent.addSubview(reloadButton)
     addSubview(addressView)
 
     let height = AddressCapsuleLayout.height
