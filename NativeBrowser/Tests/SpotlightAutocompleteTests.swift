@@ -142,7 +142,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
 
   func testSearchProviderParsesGoogleResponseAndEncodesQuery() async throws {
     let provider = SearchSuggestionProvider { request in
-      XCTAssertGreaterThanOrEqual(request.timeoutInterval, 3)
+      XCTAssertGreaterThanOrEqual(request.timeoutInterval, 5)
       let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
       XCTAssertEqual(components.queryItems?.first(where: { $0.name == "q" })?.value, "swift async")
       let data = Data(#"["swift async",["swift async await","swift async let"]]"#.utf8)

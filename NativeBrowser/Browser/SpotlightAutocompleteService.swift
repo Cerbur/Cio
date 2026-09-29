@@ -193,7 +193,7 @@ struct SearchSuggestionProvider {
       URLQueryItem(name: "q", value: input),
     ]
     var request = URLRequest(url: components.url!)
-    request.timeoutInterval = 3
+    request.timeoutInterval = 5
     do {
       let (data, response) = try await fetch(request)
       try Task.checkCancellation()
