@@ -95,23 +95,24 @@ final class AddressFieldIsolationTests: XCTestCase {
     XCTAssertFalse(model.userChangedText("one"))
   }
 
-  func testUnfocusedWebAddressKeepsHostAndPathWithoutURLDecorations() {
+  func testUnfocusedWebAddressShowsOnlyTheHost() {
     let model = AddressFieldModel()
-    let examples: [(String, String)] = [
-      ("https://www.bilibili.com/", "bilibili.com"),
-      ("https://bilibili.com/", "bilibili.com"),
-      ("https://search.bilibili.com/", "search.bilibili.com"),
-      ("https://search.bilibili.com/all/", "search.bilibili.com/all"),
-      ("https://bilibili.com/all/", "bilibili.com/all"),
-      ("https://search.bilibili.com/?vt=14396182", "search.bilibili.com"),
-      ("http://www.example.com:8080/a%20b/?q=secret#part", "example.com:8080/a%20b")
+    let examples: [(String, String, String)] = [
+      ("https://www.bilibili.com/", "bilibili.com", "bilibili.com"),
+      ("https://bilibili.com/", "bilibili.com", "bilibili.com"),
+      ("https://search.bilibili.com/", "search.bilibili.com", "search.bilibili.com"),
+      ("https://search.bilibili.com/all/", "search.bilibili.com", "search.bilibili.com/all"),
+      ("https://bilibili.com/all/", "bilibili.com", "bilibili.com/all"),
+      ("https://search.bilibili.com/?vt=14396182", "search.bilibili.com", "search.bilibili.com"),
+      ("http://www.example.com:8080/a%20b/?q=secret#part", "example.com", "example.com:8080/a%20b")
     ]
 
-    for (full, compact) in examples {
+    for (full, hostOnly, includingPath) in examples {
       let address = url(full)
       model.applyBrowserURL(address)
       XCTAssertEqual(model.editText, full, "focused text must remain the full URL")
-      XCTAssertEqual(model.compactDisplayText(for: address), compact)
+      XCTAssertEqual(model.compactDisplayText(for: address), hostOnly)
+      XCTAssertEqual(model.compactDisplayTextIncludingPath(for: address), includingPath)
     }
   }
 
@@ -124,6 +125,6 @@ final class AddressFieldIsolationTests: XCTestCase {
 
     XCTAssertFalse(model.isEditing)
     XCTAssertEqual(model.editText, "https://example.com/path?token=secret")
-    XCTAssertEqual(model.compactDisplayText(for: model.committedURL), "example.com/path")
+    XCTAssertEqual(model.compactDisplayText(for: model.committedURL), "example.com")
   }
 }

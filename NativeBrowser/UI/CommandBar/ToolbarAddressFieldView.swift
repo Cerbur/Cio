@@ -85,6 +85,12 @@ struct ToolbarAddressFieldView: View {
     .frame(minWidth: AddressCapsuleLayout.minimumWidth, maxWidth: .infinity)
     .frame(height: AddressCapsuleLayout.height)
     .browserAddressFieldSurface(cornerRadius: AddressCapsuleLayout.cornerRadius)
+    .contentShape(Capsule())
+    .simultaneousGesture(TapGesture().onEnded {
+      if !interaction.isFocused {
+        session.requestAddressFieldFocus()
+      }
+    })
     .overlay {
       if interaction.isFocused || session.addressField.isEditing {
         RoundedRectangle(cornerRadius: AddressCapsuleLayout.cornerRadius,

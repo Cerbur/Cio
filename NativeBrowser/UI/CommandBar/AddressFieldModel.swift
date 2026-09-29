@@ -84,11 +84,18 @@ final class AddressFieldModel: ObservableObject {
     url?.absoluteString ?? ""
   }
 
-  /// The address shown when the field does not have keyboard focus. Web URLs
-  /// keep their host, optional port and full path, but omit the scheme, a
-  /// leading www., the final slash, query and fragment. Other schemes retain
-  /// their full form so a local or browser-internal URL stays identifiable.
+  /// The address shown without focus. For URLs with a host, show only that
+  /// host and drop a leading www. URLs without a host keep their full form.
   func compactDisplayText(for url: URL?) -> String {
+    guard let url else { return "" }
+    guard let host = url.host, !host.isEmpty else { return url.absoluteString }
+    let visibleHost = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    return visibleHost.contains(":") ? "[\(visibleHost)]" : visibleHost
+  }
+
+  /// Retained for a future mode that includes the full path in the unfocused
+  /// address. The current presentation uses only `compactDisplayText(for:)`.
+  func compactDisplayTextIncludingPath(for url: URL?) -> String {
     guard let url else { return "" }
     guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
           let scheme = components.scheme?.lowercased(),

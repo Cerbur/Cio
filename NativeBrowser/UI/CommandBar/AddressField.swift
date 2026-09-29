@@ -78,6 +78,7 @@ struct AddressField: NSViewRepresentable {
       coordinator?.reportFocusChange(focused)
     }
     context.coordinator.observeFocusRequests(for: field, model: model)
+    context.coordinator.observeOutsideClicks(for: field)
     return field
   }
 
@@ -100,12 +101,14 @@ struct AddressField: NSViewRepresentable {
 
   static func dismantleNSView(_ field: NativeBrowserAddressField, coordinator: Coordinator) {
     coordinator.stopObservingFocusRequests()
+    coordinator.stopObservingOutsideClicks()
   }
 
   @MainActor
   final class Coordinator: NSObject, NSTextFieldDelegate {
     var parent: AddressField
     private var focusObserver: NSObjectProtocol?
+    private var outsideClickMonitor: Any?
     /// The model the current observation is registered for. A focus request is
     /// only honoured for the session's own address field.
     private var observedModel: AddressFieldModel?
@@ -149,6 +152,42 @@ struct AddressField: NSViewRepresentable {
           field?.focusAndSelectAll()
         }
       }
+    }
+
+    /// SwiftUI sidebar controls can handle a click without becoming first
+    /// responder. End address editing before dispatching an outside click so
+    /// the field collapses while the clicked control still receives its event.
+    func observeOutsideClicks(for field: NativeBrowserAddressField) {
+      guard outsideClickMonitor == nil else { return }
+      outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
+        matching: [.leftMouseDown, .rightMouseDown]
+      ) { [weak self, weak field] event in
+        guard let self, let field,
+              let window = field.window, event.window === window
+        else { return event }
+        let point = field.convert(event.locationInWindow, from: nil)
+        if field.bounds.contains(point) {
+          if event.type == .leftMouseDown && !self.isFocused {
+            // A first click on text should focus and select the full URL.
+            // Consuming this down prevents NSTextField from moving the caret
+            // to the clicked character after the selection is made.
+            self.reportFocusChange(true)
+            field.focusAndSelectAll()
+            return nil
+          }
+          return event
+        }
+        if self.isFocused {
+          window.makeFirstResponder(nil)
+        }
+        return event
+      }
+    }
+
+    func stopObservingOutsideClicks() {
+      guard let outsideClickMonitor else { return }
+      NSEvent.removeMonitor(outsideClickMonitor)
+      self.outsideClickMonitor = nil
     }
 
     /// Return is handled here rather than through -action so that the code that
@@ -197,6 +236,14 @@ struct AddressField: NSViewRepresentable {
           : parent.model.compactDisplayText(for: parent.model.committedURL)
         addressField.setDisplayText(text, animated: true)
       }
+      if focused {
+        // NSTextField may place the caret later in this same mouse event.
+        // Select after that work completes, before the next input event.
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.isFocused, !self.parent.model.isEditing else { return }
+          self.addressField?.selectAllFromStart()
+        }
+      }
       let state = focused ? "gained" : "lost"
       log.debug("address field focus \(state, privacy: .public)")
       parent.onFocusChange(focused)
@@ -229,6 +276,7 @@ final class NativeBrowserAddressField: NSTextField {
     let accepted = super.becomeFirstResponder()
     if accepted {
       onFocusChange?(true)
+      selectAllFromStart()
     }
     return accepted
   }
@@ -243,14 +291,20 @@ final class NativeBrowserAddressField: NSTextField {
 
   /// SwiftUI's hosting view can leave an embedded AppKit control out of the
   /// window's responder chain after Chromium has owned the keyboard. Re-enter
-  /// the normal AppKit path at mouse-down time; NSTextField still performs the
-  /// actual caret placement, selection and field-editor handling.
+  /// the normal AppKit path at mouse-down time; AppKit still handles placement
+  /// of the caret when the field already has focus.
   override func mouseDown(with event: NSEvent) {
-    if let window, window.firstResponder !== self, window.firstResponder !== currentEditor() {
+    if let window, !hasKeyboardFocus(in: window) {
       _ = window.makeFirstResponder(self)
     }
     configureFieldEditor()
     super.mouseDown(with: event)
+  }
+
+  private func hasKeyboardFocus(in window: NSWindow) -> Bool {
+    if window.firstResponder === self { return true }
+    guard let editor = currentEditor() else { return false }
+    return window.firstResponder === editor
   }
 
   /// True while the field editor is owned by this field, whether or not it is
@@ -262,11 +316,20 @@ final class NativeBrowserAddressField: NSTextField {
   /// Makes this field first responder with its whole value selected.
   func focusAndSelectAll() {
     guard let window else { return }
-    if window.firstResponder !== self && window.firstResponder !== currentEditor() {
+    if !hasKeyboardFocus(in: window) {
       window.makeFirstResponder(self)
     }
     configureFieldEditor()
-    currentEditor()?.selectAll(nil)
+    selectAllFromStart()
+  }
+
+  /// Selects the entire address with the active end at the beginning, so the
+  /// insertion caret is on the left while the next typed key replaces all.
+  func selectAllFromStart() {
+    guard let editor = currentEditor() as? NSTextView else { return }
+    let end = (editor.string as NSString).length
+    editor.setSelectedRange(NSRange(location: end, length: 0))
+    editor.moveToBeginningOfDocumentAndModifySelection(nil)
   }
 
   /// Applies the address-bar text rules to the shared field editor.
