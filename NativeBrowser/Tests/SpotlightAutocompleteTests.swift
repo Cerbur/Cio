@@ -68,6 +68,7 @@ final class SpotlightAutocompleteTests: XCTestCase {
     XCTAssertEqual(merged.filter { $0.kind == .onlineSearch }.count, 4)
     let firstOnline = merged.firstIndex { $0.kind == .onlineSearch }!
     XCTAssertTrue(merged[2..<firstOnline].allSatisfy { $0.kind == .historyAddress })
+    XCTAssertLessThan(firstOnline, 5)
     XCTAssertEqual(
       SpotlightAutocompleteService.merge(domain: nil, input: input, history: history, online: online).first?.kind,
       .input)

@@ -380,8 +380,15 @@ final class SpotlightAutocompleteService: ObservableObject {
     let uniqueOnline = online.filter { onlineSeen.insert($0.id).inserted }
     let slots = 10 - result.count
     let historyCount = min(uniqueHistory.count, max(slots / 2, slots - uniqueOnline.count))
-    for candidate in uniqueHistory.prefix(historyCount) { _ = append(candidate) }
-    for candidate in uniqueOnline { _ = append(candidate) }
+    let earlyHistoryCount = min(2, historyCount)
+    for candidate in uniqueHistory.prefix(earlyHistoryCount) { _ = append(candidate) }
+    // Spotlight shows five rows before scrolling. Keep one online result in
+    // that first group even when history has enough matches to fill ten rows.
+    if let firstOnline = uniqueOnline.first { _ = append(firstOnline) }
+    for candidate in uniqueHistory.dropFirst(earlyHistoryCount).prefix(historyCount - earlyHistoryCount) {
+      _ = append(candidate)
+    }
+    for candidate in uniqueOnline.dropFirst() { _ = append(candidate) }
     return result
   }
 }
