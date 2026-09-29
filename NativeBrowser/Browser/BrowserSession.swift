@@ -484,7 +484,8 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       // Chromium must not keep focus at the same time: otherwise both the field
       // editor and the Chromium view believe they own the keyboard, and typing
       // can reach the page while the caret sits in the address bar.
-      blur()
+      wantsPageFocus = false
+      bridge?.setFocus(false)
     } else {
       addressField.endEditing()
     }

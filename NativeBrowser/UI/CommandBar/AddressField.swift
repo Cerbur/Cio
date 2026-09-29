@@ -27,6 +27,8 @@ import SwiftUI
 
 struct AddressField: NSViewRepresentable {
   @ObservedObject var model: AddressFieldModel
+  /// The toolbar controller owns the presentation state across tab changes.
+  var isFocused: Bool
 
   /// Called when the user changes the text (before any submit).
   var onChange: (String) -> Void
@@ -36,6 +38,9 @@ struct AddressField: NSViewRepresentable {
 
   /// Called when the user presses Escape.
   var onEscape: () -> Void
+
+  /// Routed through the toolbar so both reload controls use one command path.
+  var onReloadOrStop: () -> Void
 
   /// Called when the field gains or loses keyboard focus.
   var onFocusChange: (Bool) -> Void
@@ -69,9 +74,9 @@ struct AddressField: NSViewRepresentable {
     // deliver -controlTextDidBeginEditing for a *programmatic* focus change, so
     // ⌘L would otherwise leave the session believing the page still owns the
     // keyboard - and then creating or switching a tab would steal focus out of
-    // the address field. The end of editing still arrives through the delegate
-    // (controlTextDidEndEditing), which is when the shared field editor is
-    // handed back.
+    // the address field. End-of-editing usually arrives through the delegate;
+    // the outside-click monitor also reports it when AppKit keeps the shared
+    // field editor attached.
     field.onFocusChange = { [weak coordinator = context.coordinator] focused in
       coordinator?.reportFocusChange(focused)
     }
@@ -82,14 +87,15 @@ struct AddressField: NSViewRepresentable {
 
   func updateNSView(_ field: NativeBrowserAddressField, context: Context) {
     context.coordinator.parent = self
-    field.alignment = context.coordinator.isFocused ? .left : .center
+    context.coordinator.syncFocusFromToolbar(isFocused)
+    field.alignment = isFocused ? .left : .center
     // The toolbar is reused when the selected tab changes, so the focus
     // observation has to follow the model it is bound to now.
     context.coordinator.observeFocusRequests(for: field, model: model)
     // Assigning -stringValue while the field editor is active would reset the
     // user's selection and disturb an in-flight IME composition, so the text is
     // only written when it genuinely differs.
-    let displayedText = context.coordinator.isFocused
+    let displayedText = isFocused
       ? model.editText : model.compactDisplayText(for: model.committedURL)
     field.setDisplayText(displayedText)
   }
@@ -146,38 +152,63 @@ struct AddressField: NSViewRepresentable {
         forName: .browserAddressFieldShouldFocus,
         object: model,
         queue: .main
-      ) { [weak field] _ in
+      ) { [weak self, weak field, weak model] _ in
         MainActor.assumeIsolated {
-          field?.focusAndSelectAll()
+          // Capsule taps finish in SwiftUI after this notification returns.
+          // Focus on the next turn so the hosting view cannot reclaim the
+          // responder and discard the field editor's selection.
+          DispatchQueue.main.async { [weak self, weak field, weak model] in
+            guard let self, let model, self.observedModel === model else { return }
+            self.reportFocusChange(true)
+            field?.focusAndSelectAll()
+          }
         }
       }
     }
 
-    /// SwiftUI sidebar controls can handle a click without becoming first
-    /// responder. End address editing before dispatching an outside click so
-    /// the field collapses while the clicked control still receives its event.
+    /// End editing on any click outside the capsule, including clicks on
+    /// controls that do not become first responder themselves.
     func observeOutsideClicks(for field: NativeBrowserAddressField) {
       guard outsideClickMonitor == nil else { return }
       outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
         matching: [.leftMouseDown, .rightMouseDown]
       ) { [weak self, weak field] event in
-        guard let self, let field,
-              let window = field.window, event.window === window
+        guard let self, let field, let window = field.window
         else { return event }
-        let point = field.convert(event.locationInWindow, from: nil)
-        if field.bounds.contains(point) {
-          if event.type == .leftMouseDown && !self.isFocused {
-            // A first click on text should focus and select the full URL.
-            // Consuming this down prevents NSTextField from moving the caret
-            // to the clicked character after the selection is made.
-            self.reportFocusChange(true)
-            field.focusAndSelectAll()
-            return nil
+        let fieldRect = field.convert(field.bounds, to: nil)
+        let capsuleRect = fieldRect.insetBy(
+          dx: -AddressCapsuleLayout.endControlWidth,
+          dy: -(AddressCapsuleLayout.height - fieldRect.height) / 2)
+        if event.window === window,
+           capsuleRect.contains(event.locationInWindow) {
+          if event.type == .leftMouseDown {
+            let reloadRect = NSRect(
+              x: capsuleRect.maxX - AddressCapsuleLayout.cornerRadius
+                - AddressCapsuleLayout.reloadHitDiameter / 2,
+              y: capsuleRect.midY - AddressCapsuleLayout.reloadHitDiameter / 2,
+              width: AddressCapsuleLayout.reloadHitDiameter,
+              height: AddressCapsuleLayout.reloadHitDiameter)
+            if reloadRect.contains(event.locationInWindow) {
+              self.parent.onReloadOrStop()
+              if self.isFocused { field.focusAndSelectAll() }
+              return nil
+            }
+            if !fieldRect.contains(event.locationInWindow) || !self.isFocused {
+              // Handle the full capsule before SwiftUI's host can take the
+              // responder. Text clicks while already editing retain caret
+              // placement; first clicks select the full committed address.
+              self.reportFocusChange(true)
+              field.focusAndSelectAll()
+              return nil
+            }
           }
           return event
         }
         if self.isFocused {
           window.makeFirstResponder(nil)
+          // Some click targets never take first responder, so AppKit may not
+          // send an end-editing callback on its own.
+          self.reportFocusChange(false)
         }
         return event
       }
@@ -202,6 +233,9 @@ struct AddressField: NSViewRepresentable {
         return true
       case #selector(NSResponder.cancelOperation(_:)):
         parent.onEscape()
+        // The page may take first responder without AppKit sending this
+        // field's end-editing callback. Keep the toolbar state in sync.
+        reportFocusChange(false)
         return true
       default:
         return false
@@ -249,6 +283,12 @@ struct AddressField: NSViewRepresentable {
       let state = focused ? "gained" : "lost"
       log.debug("address field focus \(state, privacy: .public)")
       parent.onFocusChange(focused)
+    }
+
+    /// Selection changes arrive from the toolbar even when AppKit does not
+    /// report an end-editing callback for the shared field editor.
+    func syncFocusFromToolbar(_ focused: Bool) {
+      isFocused = focused
     }
   }
 }
@@ -312,8 +352,12 @@ final class NativeBrowserAddressField: NSTextField {
   func focusAndSelectAll() {
     guard let window else { return }
     if !hasKeyboardFocus(in: window) {
-      window.makeFirstResponder(self)
+      _ = window.makeFirstResponder(self)
     }
+    // Becoming first responder does not necessarily install NSTextField's
+    // shared field editor. Start editing before selecting, so capsule clicks
+    // and ⌘L leave the address ready for the next keystroke.
+    if currentEditor() == nil { selectText(nil) }
     configureFieldEditor()
     selectAllFromStart()
   }

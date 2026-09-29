@@ -6,7 +6,7 @@
 //  reload/stop control, and the capsule glass that carries the focus ring.
 //
 //  BrowserToolbarController positions this view above the Chromium view;
-//  the capsule's appearance and editing behavior live here.
+//  the capsule's appearance lives here, while toolbar events own its focus state.
 //
 
 import AppKit
@@ -30,13 +30,14 @@ enum AddressCapsuleLayout {
 
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
-  @StateObject private var interaction = BrowserInteractionState()
+  @ObservedObject var interaction: BrowserInteractionState
+  var onFocusChange: (BrowserSession, Bool) -> Void
+  var onReloadOrStop: (BrowserSession) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     GeometryReader { geometry in
       let isFocused = interaction.isFocused
-        && workspace.selectedSession?.isEditingAddressField == true
       let widthRatio = isFocused
         ? 1 : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio
       let capsuleWidth = geometry.size.width * widthRatio
@@ -53,25 +54,20 @@ struct ToolbarAddressFieldView: View {
       .frame(width: geometry.size.width, height: AddressCapsuleLayout.height)
     }
     .frame(height: AddressCapsuleLayout.height)
+    .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
+               value: interaction.isFocused)
   }
 
   private func addressField(for session: BrowserSession, width: CGFloat) -> some View {
     ZStack {
       AddressField(
         model: session.addressField,
+        isFocused: interaction.isFocused,
         onChange: { session.addressField.userChangedText($0) },
         onSubmit: { session.submitAddressField() },
         onEscape: { session.cancelAddressEditing() },
-        onFocusChange: { focused in
-          if reduceMotion {
-            interaction.isFocused = focused
-          } else {
-            withAnimation(.spring(response: 0.31, dampingFraction: 0.68)) {
-              interaction.isFocused = focused
-            }
-          }
-          session.addressFieldFocusChanged(focused)
-        }
+        onReloadOrStop: { onReloadOrStop(session) },
+        onFocusChange: { onFocusChange(session, $0) }
       )
       .frame(width: max(0, width - 2 * AddressCapsuleLayout.endControlWidth),
              height: AddressCapsuleLayout.textIdealHeight)
@@ -83,12 +79,11 @@ struct ToolbarAddressFieldView: View {
         .frame(width: AddressCapsuleLayout.endControlWidth,
                height: AddressCapsuleLayout.height)
         .contentShape(Rectangle())
-        .onTapGesture { session.requestAddressFieldFocus() }
         .accessibilityHidden(true)
         .position(x: AddressCapsuleLayout.cornerRadius,
                   y: AddressCapsuleLayout.height / 2)
 
-      AddressReloadButton(session: session)
+      AddressReloadButton(session: session, onReloadOrStop: { onReloadOrStop(session) })
         .id(session.id)
         .frame(width: AddressCapsuleLayout.reloadHitDiameter,
                height: AddressCapsuleLayout.reloadHitDiameter)
@@ -106,52 +101,43 @@ struct ToolbarAddressFieldView: View {
     .contentShape(Capsule())
     .overlay {
       GeometryReader { geometry in
-        NativeAddressFocusRing(isFocused: interaction.isFocused
-                               && session.isEditingAddressField)
+        NativeAddressFocusRing(isFocused: interaction.isFocused)
           .frame(width: geometry.size.width + NativeAddressFocusRing.inset * 2,
                  height: AddressCapsuleLayout.height + NativeAddressFocusRing.inset * 2)
           .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
       }
       .allowsHitTesting(false)
     }
-    .onReceive(NotificationCenter.default.publisher(for: .browserFocusAddressField)) {
-      notification in
-      guard (notification.object as? BrowserSession) === session else { return }
-      NotificationCenter.default.post(
-        name: .browserAddressFieldShouldFocus,
-        object: session.addressField)
-    }
   }
 }
 
-/// A continuous loading rotation finishes its current turn after CEF reports
-/// completion (or the user stops it). The idle image always rests upright.
+/// Loading state comes from the selected session; the idle symbol rests upright.
 private struct AddressReloadButton: View {
   @ObservedObject var session: BrowserSession
+  var onReloadOrStop: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @StateObject private var rotation = AddressReloadRotation()
+  @State private var rotationStart = Date()
   @State private var isHovered = false
 
   var body: some View {
-    Button {
-      if session.isLoading {
-        rotation.finish(at: Date(), reduceMotion: reduceMotion)
-        session.stop()
-      } else {
-        session.reload()
-      }
-    } label: {
-      TimelineView(.animation) { context in
-        Image(systemName: "arrow.triangle.2.circlepath")
-          .font(.system(size: 16, weight: .semibold))
-          .rotationEffect(.degrees(rotation.angle(at: context.date, reduceMotion: reduceMotion)))
-          .frame(width: AddressCapsuleLayout.reloadHitDiameter,
-                 height: AddressCapsuleLayout.reloadHitDiameter)
-          .background {
-            Circle().fill(isHovered ? Color.primary.opacity(0.14) : .clear)
+    Button(action: onReloadOrStop) {
+      Group {
+        if session.isLoading && !reduceMotion {
+          TimelineView(.animation) { context in
+            reloadSymbol
+              .rotationEffect(.degrees(
+                context.date.timeIntervalSince(rotationStart) / 0.9 * 360))
           }
-          .contentShape(Circle())
+        } else {
+          reloadSymbol
+        }
       }
+      .frame(width: AddressCapsuleLayout.reloadHitDiameter,
+             height: AddressCapsuleLayout.reloadHitDiameter)
+      .background {
+        Circle().fill(isHovered ? Color.primary.opacity(0.14) : .clear)
+      }
+      .contentShape(Circle())
     }
     .buttonStyle(.plain)
     .onHover { hovered in
@@ -159,53 +145,14 @@ private struct AddressReloadButton: View {
     }
     .help(session.isLoading ? "Stop" : "Reload")
     .accessibilityLabel(session.isLoading ? "Stop" : "Reload")
-    .onAppear {
-      if session.isLoading { rotation.start(at: Date(), reduceMotion: reduceMotion) }
-    }
     .onChange(of: session.isLoading) { _, isLoading in
-      if isLoading {
-        rotation.start(at: Date(), reduceMotion: reduceMotion)
-      } else {
-        rotation.finish(at: Date(), reduceMotion: reduceMotion)
-      }
+      if isLoading { rotationStart = Date() }
     }
   }
-}
 
-@MainActor
-private final class AddressReloadRotation: ObservableObject {
-  @Published private var spinStartedAt: Date?
-  @Published private var finishStartedAt: Date?
-  @Published private var finishAngle: Double = 0
-
-  private let turnDuration: TimeInterval = 0.9
-
-  func angle(at date: Date, reduceMotion: Bool) -> Double {
-    if reduceMotion { return 0 }
-    if let spinStartedAt {
-      return (date.timeIntervalSince(spinStartedAt) / turnDuration * 360)
-        .truncatingRemainder(dividingBy: 360)
-    }
-    if let finishStartedAt {
-      let elapsed = date.timeIntervalSince(finishStartedAt)
-      let remaining = 360 - finishAngle
-      return elapsed >= remaining / 360 * turnDuration
-        ? 0 : finishAngle + elapsed / turnDuration * 360
-    }
-    return 0
-  }
-
-  func start(at date: Date, reduceMotion: Bool) {
-    spinStartedAt = reduceMotion ? nil : date
-    finishStartedAt = nil
-  }
-
-  func finish(at date: Date, reduceMotion: Bool) {
-    guard let spinStartedAt else { return }
-    finishAngle = (date.timeIntervalSince(spinStartedAt) / turnDuration * 360)
-      .truncatingRemainder(dividingBy: 360)
-    self.spinStartedAt = nil
-    finishStartedAt = reduceMotion ? nil : date
+  private var reloadSymbol: some View {
+    Image(systemName: "arrow.triangle.2.circlepath")
+      .font(.system(size: 16, weight: .semibold))
   }
 }
 

@@ -2191,8 +2191,8 @@ No global keyboard monitor, no key polling and no Chromium key interception is
 involved.
 
 The field also reports *taking* the keyboard itself, from
-`NativeBrowserAddressField.becomeFirstResponder`, and the end of editing still
-arrives as `controlTextDidEndEditing`. AppKit does not reliably deliver the
+`NativeBrowserAddressField.becomeFirstResponder`; the end of editing arrives
+through `controlTextDidEndEditing` or the outside-click monitor. AppKit does not reliably deliver the
 begin-editing callback for a programmatic focus change, and without that signal
 the session would not know the field owns the keyboard (section 56).
 
@@ -2212,7 +2212,8 @@ capture the outgoing selected session and whether its PAGE holds AppKit focus
   -> publish state, sync the surface  (old container hidden, new one visible)
   -> the page had the keyboard?
        yes -> incoming.focusPage()    now, and when its browser is ready
-       no  -> incoming.blur()         record that the page must not take it
+       no  -> incoming.blur()         toolbar finishes any address edit, then
+                                      focuses the incoming page
 ```
 
 Consequences:
@@ -2222,10 +2223,10 @@ Consequences:
   tab order and returns without blurring or focusing anything. A background tab's
   container is hidden before its browser is created, so that browser cannot take
   the keyboard either.
-- **A tab change never pulls focus out of the address field.** When the outgoing
-  page did not hold first responder, the incoming session is explicitly told that
-  the page must not take it; neither the pending browser creation nor the deferred
-  half of `focusPage()` can then move the field editor.
+- **A tab change ends address editing.** The toolbar's session-change event
+  clears its address presentation state, releases the shared field editor,
+  ends the outgoing session's edit, and focuses the incoming page. The new
+  tab therefore shows its centred compact domain.
 - **A hidden surface is never made first responder.** `focusPage()` refuses
   unless the container is the visible selected surface, and the main-queue hop
   inside it re-checks that. An explicit `makeFirstResponder:` succeeds even for a
@@ -2257,16 +2258,12 @@ Consequences:
   change, so ⌘L used to leave the session believing the page still owned the
   keyboard - and the next tab change then stole focus out of the field.
   `NativeBrowserAddressField.becomeFirstResponder` now reports the focus gain
-  through the representable's coordinator (the end of editing still arrives as
-  `controlTextDidEndEditing`), so "the native field owns the keyboard" is state
+  through the representable's coordinator (the delegate or outside-click monitor
+  reports the end of editing), so "the native field owns the keyboard" is state
   the session actually has.
-- **Creating a tab hands the keyboard to the new page only when the page had
-  it.** With `select: true` and page focus on the old tab, the old page is
-  blurred, the new surface is shown, and the new page receives focus as soon as
-  its browser exists. With the address field focused, the field editor stays
-  first responder (the new session is told the page must not take the keyboard,
-  and Chromium's own focus request for the new browser is cancelled) while the
-  toolbar re-binds to the selected session's model.
+- **Creating a selected tab ends address editing.** The selection transition
+  first blurs the outgoing page and shows the new surface. The toolbar's
+  session-change event then ends any address edit and focuses the new page.
 - **Closing the selected tab transfers the keyboard** to the tab the collection
   selects (recent valid stable tab, else temporary queue head, else a remaining
   tab or the last-tab replacement), and the

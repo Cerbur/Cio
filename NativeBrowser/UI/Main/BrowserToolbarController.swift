@@ -139,6 +139,9 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     case geometryChanged
     case sidebarChanged
     case sessionChanged
+    case addressFocusChanged(BrowserSession, Bool)
+    case addressFocusRequested(BrowserSession)
+    case addressReloadOrStop(BrowserSession)
   }
 
   private let workspace: BrowserWorkspaceStore
@@ -154,6 +157,8 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private var workspaceObservation: AnyCancellable?
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
+  private let addressPresentation = BrowserInteractionState()
+  private var addressFocusRequestObservation: AnyCancellable?
 
   init(
     workspace: BrowserWorkspaceStore,
@@ -174,6 +179,14 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       MainActor.assumeIsolated { self?.handle(.geometryChanged) }
     }
     observeWorkspace()
+    addressFocusRequestObservation = NotificationCenter.default.publisher(
+      for: .browserFocusAddressField
+    ).sink { [weak self] notification in
+      MainActor.assumeIsolated {
+        guard let session = notification.object as? BrowserSession else { return }
+        self?.handle(.addressFocusRequested(session))
+      }
+    }
     bindSelectedSession(workspace.selectedSession)
   }
 
@@ -230,7 +243,25 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     case .sidebarChanged:
       chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
+      if observedSession !== workspace.selectedSession, addressPresentation.isFocused {
+        addressPresentation.isFocused = false
+        window?.makeFirstResponder(nil)
+        observedSession?.addressFieldFocusChanged(false)
+        workspace.selectedSession?.focusPage()
+      }
       bindSelectedSession(workspace.selectedSession)
+    case .addressFocusChanged(let session, let focused):
+      guard workspace.selectedSession === session else { return }
+      addressPresentation.isFocused = focused
+      session.addressFieldFocusChanged(focused)
+    case .addressFocusRequested(let session):
+      guard workspace.selectedSession === session else { return }
+      NotificationCenter.default.post(
+        name: .browserAddressFieldShouldFocus,
+        object: session.addressField)
+    case .addressReloadOrStop(let session):
+      guard workspace.selectedSession === session else { return }
+      session.reloadOrStop()
     case .geometryChanged:
       break
     }
@@ -364,7 +395,14 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     let reloadButton = makeButton(
       label: "Reload", symbol: "arrow.clockwise", action: #selector(reloadOrStop(_:)))
     let addressView = NSHostingView(rootView: ToolbarAddressFieldView(
-      workspace: workspace))
+      workspace: workspace,
+      interaction: addressPresentation,
+      onFocusChange: { [weak self] session, focused in
+        self?.handle(.addressFocusChanged(session, focused))
+      },
+      onReloadOrStop: { [weak self] session in
+        self?.handle(.addressReloadOrStop(session))
+      }))
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,
