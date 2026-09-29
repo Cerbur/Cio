@@ -49,6 +49,7 @@ struct AddressField: NSViewRepresentable {
     field.action = #selector(Coordinator.submitAction(_:))
     field.font = .systemFont(ofSize: 13)
     field.textColor = .labelColor
+    field.alignment = .center
     field.isBezeled = false
     field.drawsBackground = false
     field.isEditable = true
@@ -81,6 +82,7 @@ struct AddressField: NSViewRepresentable {
 
   func updateNSView(_ field: NativeBrowserAddressField, context: Context) {
     context.coordinator.parent = self
+    field.alignment = context.coordinator.isFocused ? .left : .center
     // The toolbar is reused when the selected tab changes, so the focus
     // observation has to follow the model it is bound to now.
     context.coordinator.observeFocusRequests(for: field, model: model)
@@ -229,6 +231,9 @@ struct AddressField: NSViewRepresentable {
       guard isFocused != focused else { return }
       isFocused = focused
       if let addressField {
+        let alignment: NSTextAlignment = focused ? .left : .center
+        addressField.alignment = alignment
+        (addressField.currentEditor() as? NSTextView)?.alignment = alignment
         let text = focused ? parent.model.editText
           : parent.model.compactDisplayText(for: parent.model.committedURL)
         addressField.setDisplayText(text)
