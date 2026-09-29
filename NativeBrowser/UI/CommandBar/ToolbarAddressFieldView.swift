@@ -22,7 +22,7 @@ enum AddressCapsuleLayout {
   static let unfocusedWidthRatio: CGFloat = 0.38
   static let focusedWidthRatio: CGFloat = 0.45
   static let faviconSize: CGFloat = 16
-  static let reloadHitDiameter: CGFloat = 16
+  static let reloadHitDiameter: CGFloat = 18
   static let textIdealHeight: CGFloat = 22
   /// Reserve matching space at both ends so idle text is centred in the pill.
   static let endControlWidth: CGFloat = 40
@@ -143,7 +143,7 @@ private struct AddressReloadButton: View {
     } label: {
       TimelineView(.animation) { context in
         Image(systemName: "arrow.triangle.2.circlepath")
-          .font(.system(size: 11, weight: .semibold))
+          .font(.system(size: 16, weight: .semibold))
           .rotationEffect(.degrees(rotation.angle(at: context.date, reduceMotion: reduceMotion)))
           .frame(width: AddressCapsuleLayout.reloadHitDiameter,
                  height: AddressCapsuleLayout.reloadHitDiameter)
