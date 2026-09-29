@@ -14,6 +14,7 @@ import SwiftUI
 @MainActor
 private final class ToolbarChromeView: NSView {
   private let sidebarButton: NSButton
+  private let sidebarGlass = NSGlassEffectView()
   private let navigationGroup = NSGlassEffectView()
   private let navigationContent = NSView()
   private let backButton: NSButton
@@ -35,6 +36,17 @@ private final class ToolbarChromeView: NSView {
     self.addressView = addressView
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: AddressCapsuleLayout.height))
 
+    sidebarGlass.style = .regular
+    sidebarGlass.cornerRadius = AddressCapsuleLayout.cornerRadius
+    if #available(macOS 27.0, *) {
+      sidebarGlass.effectIsInteractive = true
+    }
+    sidebarButton.frame = NSRect(x: 0, y: 0,
+                                 width: AddressCapsuleLayout.height,
+                                 height: AddressCapsuleLayout.height)
+    sidebarButton.autoresizingMask = [.width, .height]
+    sidebarGlass.contentView = sidebarButton
+
     navigationGroup.style = .regular
     navigationGroup.cornerRadius = AddressCapsuleLayout.cornerRadius
     if #available(macOS 27.0, *) {
@@ -46,7 +58,7 @@ private final class ToolbarChromeView: NSView {
     navigationContent.autoresizingMask = [.width, .height]
     navigationGroup.contentView = navigationContent
 
-    addSubview(sidebarButton)
+    addSubview(sidebarGlass)
     addSubview(navigationGroup)
     navigationContent.addSubview(backButton)
     navigationContent.addSubview(forwardButton)
@@ -106,7 +118,7 @@ private final class ToolbarChromeView: NSView {
     let addressLeft = browserRect.midX - addressWidth / 2
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
-             on: sidebarButton)
+             on: sidebarGlass)
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 3 * height, height: height),
              on: navigationGroup)
     setFrame(NSRect(x: addressLeft, y: y, width: addressWidth, height: height),
@@ -324,17 +336,10 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private func makeButton(
     label: String,
     symbol: String,
-    action: Selector,
-    glass: Bool = false
+    action: Selector
   ) -> NSButton {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-    button.bezelStyle = .glass
-    button.isBordered = glass
-    if glass {
-      button.wantsLayer = true
-      button.layer?.cornerRadius = AddressCapsuleLayout.cornerRadius
-      button.layer?.masksToBounds = true
-    }
+    button.isBordered = false
     button.title = ""
     button.image = toolbarImage(named: symbol, description: label)
     button.imagePosition = .imageOnly
@@ -353,7 +358,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
 
     let sidebarButton = makeButton(
       label: "Hide Sidebar", symbol: "sidebar.left",
-      action: #selector(handleSidebarToggle(_:)), glass: true)
+      action: #selector(handleSidebarToggle(_:)))
     let backButton = makeButton(
       label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)))
     let forwardButton = makeButton(
