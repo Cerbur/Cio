@@ -108,40 +108,107 @@ struct HistorySuggestionProvider {
   }
 }
 
+@MainActor
+final class SearchSuggestionCache {
+  static let shared = SearchSuggestionCache()
+
+  private struct Entry {
+    let suggestions: [SpotlightSuggestion]
+    let expiresAt: Date
+    let storedAt: Date
+  }
+
+  private var entries: [String: Entry] = [:]
+  private var retryAfter: Date?
+  private let capacity = 64
+  private let lifetime: TimeInterval = 90
+  private let failureCooldown: TimeInterval = 15
+
+  func suggestions(for input: String, now: Date = Date()) -> [SpotlightSuggestion]? {
+    guard let entry = entries[input] else { return nil }
+    guard entry.expiresAt > now else {
+      entries.removeValue(forKey: input)
+      return nil
+    }
+    return entry.suggestions
+  }
+
+  func store(_ suggestions: [SpotlightSuggestion], for input: String, now: Date = Date()) {
+    retryAfter = nil
+    entries[input] = Entry(
+      suggestions: suggestions, expiresAt: now.addingTimeInterval(lifetime), storedAt: now)
+    if entries.count > capacity,
+       let oldest = entries.min(by: { $0.value.storedAt < $1.value.storedAt })?.key {
+      entries.removeValue(forKey: oldest)
+    }
+  }
+
+  func canRequest(now: Date = Date()) -> Bool {
+    guard let retryAfter else { return true }
+    return now >= retryAfter
+  }
+
+  func recordFailure(now: Date = Date()) {
+    retryAfter = now.addingTimeInterval(failureCooldown)
+  }
+}
+
+@MainActor
 struct SearchSuggestionProvider {
   let fetch: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+  private let cache: SearchSuggestionCache
 
   init(session: URLSession = .shared) {
     fetch = { request in try await session.data(for: request) }
+    cache = .shared
   }
 
   init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
     self.fetch = fetch
+    cache = SearchSuggestionCache()
   }
 
+  func cachedSuggestions(for input: String) -> [SpotlightSuggestion]? {
+    cache.suggestions(for: input)
+  }
+
+  var canRequest: Bool { cache.canRequest() }
+
   func suggestions(for input: String) async throws -> [SpotlightSuggestion] {
+    if let cached = cache.suggestions(for: input) { return cached }
+    guard cache.canRequest() else { return [] }
     var components = URLComponents(string: "https://suggestqueries.google.com/complete/search")!
     components.queryItems = [
       URLQueryItem(name: "client", value: "firefox"),
       URLQueryItem(name: "q", value: input),
     ]
     var request = URLRequest(url: components.url!)
-    request.timeoutInterval = 3
-    let (data, response) = try await fetch(request)
-    guard (response as? HTTPURLResponse)?.statusCode == 200,
-          let payload = try JSONSerialization.jsonObject(with: data) as? [Any],
-          payload.count > 1,
-          let queries = payload[1] as? [String] else { return [] }
+    request.timeoutInterval = 1.5
+    do {
+      let (data, response) = try await fetch(request)
+      try Task.checkCancellation()
+      guard (response as? HTTPURLResponse)?.statusCode == 200,
+            let payload = try JSONSerialization.jsonObject(with: data) as? [Any],
+            payload.count > 1,
+            let queries = payload[1] as? [String] else {
+        throw URLError(.cannotParseResponse)
+      }
 
-    return queries.prefix(10).enumerated().compactMap { index, query in
-      let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !value.isEmpty else { return nil }
-      return SpotlightSuggestion(
-        title: value,
-        subtitle: "Search Google",
-        mode: .googleSearch(value),
-        kind: .onlineSearch,
-        score: 70 - index)
+      let suggestions: [SpotlightSuggestion] = queries.prefix(10).enumerated().compactMap { index, query in
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return SpotlightSuggestion(
+          title: value,
+          subtitle: "Search Google",
+          mode: .googleSearch(value),
+          kind: .onlineSearch,
+          score: 70 - index)
+      }
+      cache.store(suggestions, for: input)
+      return suggestions
+    } catch {
+      if !Task.isCancelled { cache.recordFailure() }
+      throw error
     }
   }
 
@@ -186,7 +253,6 @@ final class SpotlightAutocompleteService: ObservableObject {
   private var inputSuggestion: SpotlightSuggestion?
   private var historyAddresses: [SpotlightSuggestion] = []
   private var onlineSuggestions: [SpotlightSuggestion] = []
-  private var historyReady = false
   private(set) var requestedInput = ""
   private(set) var displayedInput = ""
 
@@ -196,11 +262,14 @@ final class SpotlightAutocompleteService: ObservableObject {
   }
 
   func update(_ text: String) {
+    let input = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if input == requestedInput && (remoteTask != nil || historyTask != nil) { return }
     remoteTask?.cancel()
     historyTask?.cancel()
+    remoteTask = nil
+    historyTask = nil
     generation += 1
     let currentGeneration = generation
-    let input = text.trimmingCharacters(in: .whitespacesAndNewlines)
     requestedInput = input
     guard !input.isEmpty else {
       domainMatch = nil
@@ -216,14 +285,15 @@ final class SpotlightAutocompleteService: ObservableObject {
     domainMatch = historyProvider.domainSuggestion(for: input)
     inputSuggestion = Self.inputSuggestion(for: input)
     historyAddresses = []
-    historyReady = false
     let normalizedInput = input.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    onlineSuggestions = SearchSuggestionProvider.maySend(input)
+    let maySend = SearchSuggestionProvider.maySend(input)
+    let cachedOnline = maySend ? searchProvider.cachedSuggestions(for: input) : nil
+    onlineSuggestions = cachedOnline ?? (maySend
       ? onlineSuggestions.filter {
         $0.title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
           .hasPrefix(normalizedInput)
       }
-      : []
+      : [])
     displayedInput = input
     publish()
 
@@ -231,14 +301,13 @@ final class SpotlightAutocompleteService: ObservableObject {
       await Task.yield()
       guard !Task.isCancelled, let self, self.generation == currentGeneration else { return }
       let matches = self.historyProvider.suggestions(for: input)
-      do { try await Task.sleep(for: .milliseconds(20)) } catch { return }
       guard !Task.isCancelled, self.generation == currentGeneration else { return }
       self.historyAddresses = matches
-      self.historyReady = true
       self.publish()
+      self.historyTask = nil
     }
 
-    guard SearchSuggestionProvider.maySend(input) else { return }
+    guard maySend, cachedOnline == nil, searchProvider.canRequest else { return }
     let now = ProcessInfo.processInfo.systemUptime
     let delay = max(0, (lastRemoteRequestAt ?? 0) + 0.04 - now)
     remoteTask = Task { [weak self, searchProvider] in
@@ -249,9 +318,11 @@ final class SpotlightAutocompleteService: ObservableObject {
         let remote = try await searchProvider.suggestions(for: input)
         guard !Task.isCancelled, self.generation == currentGeneration else { return }
         self.onlineSuggestions = remote
-        if self.historyReady { self.publish() }
+        self.publish()
+        self.remoteTask = nil
       } catch {
         // History remains available when the remote provider is unavailable.
+        if let self, self.generation == currentGeneration { self.remoteTask = nil }
       }
     }
   }
@@ -292,14 +363,15 @@ final class SpotlightAutocompleteService: ObservableObject {
     if let domain { _ = append(domain) }
     if let input { _ = append(input) }
 
-    var historyCount = 0
-    for candidate in history where historyCount < 2 {
-      if append(candidate) { historyCount += 1 }
-    }
-    var onlineCount = 0
-    for candidate in online where onlineCount < 2 {
-      if append(candidate) { onlineCount += 1 }
-    }
+    let baseSeen = seen
+    var historySeen = baseSeen
+    let uniqueHistory = history.filter { historySeen.insert($0.id).inserted }
+    var onlineSeen = baseSeen
+    let uniqueOnline = online.filter { onlineSeen.insert($0.id).inserted }
+    let slots = 10 - result.count
+    let historyCount = min(uniqueHistory.count, max(slots / 2, slots - uniqueOnline.count))
+    for candidate in uniqueHistory.prefix(historyCount) { _ = append(candidate) }
+    for candidate in uniqueOnline { _ = append(candidate) }
     return result
   }
 }
