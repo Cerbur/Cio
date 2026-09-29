@@ -318,6 +318,9 @@ private struct SpotlightInputField: NSViewRepresentable {
     field.focusRingType = .none
     field.isEditable = true
     field.isSelectable = true
+    // Spotlight owns its suggestion list; AppKit's completion panel would
+    // otherwise briefly appear when this field first takes focus.
+    field.isAutomaticTextCompletionEnabled = false
     field.stringValue = text
     DispatchQueue.main.async { [weak field] in
       guard let field, field.window != nil else { return }
