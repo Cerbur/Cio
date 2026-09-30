@@ -11,9 +11,24 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Keep native button tracking and symbol rendering, but give the hover and
+/// pressed backgrounds a circular outline instead of the toolbar bezel.
+@MainActor
+private final class CircularToolbarButtonCell: NSButtonCell {
+  override func drawBezel(withFrame frame: NSRect, in controlView: NSView) {
+    guard isEnabled else { return }
+    let diameter = max(0, min(frame.width, frame.height) - 8)
+    let circle = NSRect(x: frame.midX - diameter / 2, y: frame.midY - diameter / 2,
+                        width: diameter, height: diameter)
+    NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.12 : 0.06).setFill()
+    NSBezierPath(ovalIn: circle).fill()
+  }
+}
+
 @MainActor
 private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressFieldView> {
   override func hitTest(_ point: NSPoint) -> NSView? {
+    guard rootView.presentation.isVisible else { return nil }
     let local = convert(point, from: superview)
     let focused = rootView.interaction.isFocused
     let rows = focused ? rootView.autocomplete.suggestions.count : 0
@@ -30,13 +45,12 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 @MainActor
 private final class ToolbarChromeView: NSView {
   private let sidebarButton: NSButton
-  private let sidebarGlass = NSGlassEffectView()
-  private let navigationGroup = NSGlassEffectView()
-  private let navigationContent = NSView()
+  private let sidebarGlass: NSHostingView<ToolbarGlassControlView>
+  private let navigationGroup: NSHostingView<ToolbarGlassControlView>
   private let backButton: NSButton
   private let forwardButton: NSButton
-  private let addressView: NSHostingView<ToolbarAddressFieldView>
-  private var showsAddress = true
+  private let addressView: AddressOverlayHostingView
+  private let presentation: ToolbarPresentationState
   private var trafficLights: [NSButton] = []
   private weak var trafficLightsWindow: NSWindow?
 
@@ -44,35 +58,32 @@ private final class ToolbarChromeView: NSView {
     sidebarButton: NSButton,
     backButton: NSButton,
     forwardButton: NSButton,
-    addressView: NSHostingView<ToolbarAddressFieldView>
+    addressView: AddressOverlayHostingView,
+    presentation: ToolbarPresentationState
   ) {
     self.sidebarButton = sidebarButton
     self.backButton = backButton
     self.forwardButton = forwardButton
     self.addressView = addressView
+    self.presentation = presentation
+    let height = AddressCapsuleLayout.height
+    let navigationContent = NSView(frame: NSRect(x: 0, y: 0,
+                                                width: 2 + 2 * height, height: height))
+    sidebarGlass = NSHostingView(rootView: ToolbarGlassControlView(
+      content: sidebarButton, presentation: presentation,
+      size: NSSize(width: height, height: height)))
+    navigationGroup = NSHostingView(rootView: ToolbarGlassControlView(
+      content: navigationContent, presentation: presentation,
+      size: NSSize(width: 2 + 2 * height, height: height)))
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
 
-    sidebarGlass.style = .regular
-    sidebarGlass.cornerRadius = AddressCapsuleLayout.cornerRadius
-    if #available(macOS 27.0, *) {
-      sidebarGlass.effectIsInteractive = true
+    for host in [sidebarGlass, navigationGroup] {
+      host.safeAreaRegions = []
+      host.clipsToBounds = false
     }
-    sidebarButton.frame = NSRect(x: 0, y: 0,
-                                 width: AddressCapsuleLayout.height,
-                                 height: AddressCapsuleLayout.height)
+    sidebarButton.frame = NSRect(x: 0, y: 0, width: height, height: height)
     sidebarButton.autoresizingMask = [.width, .height]
-    sidebarGlass.contentView = sidebarButton
-
-    navigationGroup.style = .regular
-    navigationGroup.cornerRadius = AddressCapsuleLayout.cornerRadius
-    if #available(macOS 27.0, *) {
-      navigationGroup.effectIsInteractive = true
-    }
-    navigationContent.frame = NSRect(x: 0, y: 0,
-                                     width: 2 + 2 * AddressCapsuleLayout.height,
-                                     height: AddressCapsuleLayout.height)
     navigationContent.autoresizingMask = [.width, .height]
-    navigationGroup.contentView = navigationContent
 
     addSubview(sidebarGlass)
     addSubview(navigationGroup)
@@ -81,7 +92,6 @@ private final class ToolbarChromeView: NSView {
     // The field is a shell overlay, keeping the same native editor mounted
     // while its glass expands over the Main View.
 
-    let height = AddressCapsuleLayout.height
     backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
     forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
   }
@@ -99,6 +109,15 @@ private final class ToolbarChromeView: NSView {
   override var mouseDownCanMoveWindow: Bool { true }
 
   override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    if !presentation.isVisible, let hit,
+       hit.isDescendant(of: sidebarGlass) || hit.isDescendant(of: navigationGroup) {
+      return self
+    }
+    return hit
+  }
 
   func installTrafficLights(in window: NSWindow) {
     guard trafficLightsWindow !== window else { return }
@@ -140,11 +159,8 @@ private final class ToolbarChromeView: NSView {
     }
   }
 
-  func setAddressVisible(_ visible: Bool) {
-    showsAddress = visible
-    addressView.isHidden = !visible
-    sidebarGlass.isHidden = !visible
-    navigationGroup.isHidden = !visible
+  func setAddressVisible(_ visible: Bool, animated: Bool) {
+    presentation.setVisible(visible, animated: animated && window != nil)
   }
 
   func setSidebarCollapsed(_ collapsed: Bool) {
@@ -186,7 +202,6 @@ private final class ToolbarChromeView: NSView {
       let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
       let panelHeight = AddressCapsuleLayout.maximumHeight
       let originY = contentView.isFlipped ? anchor.minY : anchor.maxY - panelHeight
-      addressView.isHidden = !showsAddress
       setFrame(NSRect(x: anchor.minX, y: originY, width: addressWidth, height: panelHeight), on: addressView)
     }
   }
@@ -220,6 +235,7 @@ final class BrowserToolbarController: NSObject {
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
   private let addressPresentation = BrowserInteractionState()
+  private let toolbarPresentation = ToolbarPresentationState()
   private var addressFocusRequestObservation: AnyCancellable?
 
   init(
@@ -281,13 +297,19 @@ final class BrowserToolbarController: NSObject {
         }
         .store(in: &windowObservations)
     }
-    setSpaceControlsVisible(showsSpaceToolbar)
+    setSpaceControlsVisible(showsSpaceToolbar, animated: false)
     bindSelectedSession(workspace.selectedSession)
     updateSidebarState()
   }
 
-  func setSpaceControlsVisible(_ visible: Bool) {
-    chromeView?.setAddressVisible(visible)
+  func setSpaceControlsVisible(_ visible: Bool, animated: Bool = true) {
+    if !visible, addressPresentation.isFocused {
+      addressAutocomplete.end()
+      addressPresentation.isFocused = false
+      window?.makeFirstResponder(nil)
+      observedSession?.addressFieldFocusChanged(false)
+    }
+    chromeView?.setAddressVisible(visible, animated: animated)
     handle(.geometryChanged)
   }
 
@@ -313,11 +335,12 @@ final class BrowserToolbarController: NSObject {
       }
       bindSelectedSession(workspace.selectedSession)
     case .addressFocusChanged(let session, let focused):
-      guard workspace.selectedSession === session else { return }
+      guard workspace.selectedSession === session,
+            !focused || toolbarPresentation.isVisible else { return }
       addressPresentation.isFocused = focused
       session.addressFieldFocusChanged(focused)
     case .addressFocusRequested(let session):
-      guard workspace.selectedSession === session else { return }
+      guard workspace.selectedSession === session, toolbarPresentation.isVisible else { return }
       NotificationCenter.default.post(
         name: .browserAddressFieldShouldFocus,
         object: session.addressField)
@@ -411,6 +434,7 @@ final class BrowserToolbarController: NSObject {
     action: Selector
   ) -> NSButton {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+    button.cell = CircularToolbarButtonCell(textCell: "")
     button.bezelStyle = .toolbar
     button.isBordered = true
     button.showsBorderOnlyWhileMouseInside = true
@@ -436,6 +460,7 @@ final class BrowserToolbarController: NSObject {
       workspace: workspace,
       interaction: addressPresentation,
       autocomplete: addressAutocomplete,
+      presentation: toolbarPresentation,
       onFocusChange: { [weak self] session, focused in
         self?.handle(.addressFocusChanged(session, focused))
       },
@@ -443,11 +468,13 @@ final class BrowserToolbarController: NSObject {
         self?.handle(.addressReloadOrStop(session))
       }))
     addressView.safeAreaRegions = []
+    addressView.clipsToBounds = false
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,
       forwardButton: forwardButton,
-      addressView: addressView)
+      addressView: addressView,
+      presentation: toolbarPresentation)
     view.setAccessibilityRole(.toolbar)
     view.setAccessibilityLabel("Toolbar")
     chromeView = view

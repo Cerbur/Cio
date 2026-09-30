@@ -40,6 +40,7 @@ struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @ObservedObject var interaction: BrowserInteractionState
   @ObservedObject var autocomplete: AddressAutocompleteModel
+  @ObservedObject var presentation: ToolbarPresentationState
   @State private var hoverGate = SpotlightHoverGate()
   var onFocusChange: (BrowserSession, Bool) -> Void
   var onReloadOrStop: (BrowserSession) -> Void
@@ -70,7 +71,10 @@ struct ToolbarAddressFieldView: View {
         }
         .frame(width: width, height: height, alignment: .top)
         .mask(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .browserAddressFieldSurface(cornerRadius: radius)
+        .opacity(presentation.isVisible ? 1 : 0)
+        .background {
+          ToolbarGlassSurface(presentation: presentation, cornerRadius: radius)
+        }
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .shadow(color: .black.opacity(rowCount > 0 ? 0.18 : 0), radius: 16, y: 8)
         .overlay {
@@ -82,6 +86,8 @@ struct ToolbarAddressFieldView: View {
       }
     }
     .frame(height: AddressCapsuleLayout.maximumHeight, alignment: .top)
+    .allowsHitTesting(presentation.isVisible)
+    .accessibilityHidden(!presentation.isVisible)
     .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
                value: interaction.isFocused)
     .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
