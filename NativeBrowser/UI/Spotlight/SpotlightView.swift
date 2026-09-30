@@ -343,6 +343,16 @@ private struct SpotlightInputField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> NativeBrowserAddressField {
     let field = NativeBrowserAddressField()
+    // Regression guard: keep .URL explicit before the field first takes focus,
+    // including for search queries, and keep AddressField's content type aligned.
+    // With nil, NSAutoFillHeuristicController infers password/one-time-code input.
+    // A captured window trace showed SPSafariPlatformSupport.displayOTPAutoFill
+    // creating an SPRoundedWindow that flashed for a few frames on the first
+    // Spotlight opening after app launch, then hid when its content size updated.
+    // Disabling text completion or inline prediction does not stop this AutoFill
+    // path. If changing this setting, verify a cold launch's FIRST Spotlight
+    // opening with window tracing; a settled screenshot can miss the regression.
+    field.contentType = .URL
     context.coordinator.lastFocusGeneration = focusGeneration
     field.delegate = context.coordinator
     field.placeholderString = "Search or enter a website"
@@ -353,8 +363,11 @@ private struct SpotlightInputField: NSViewRepresentable {
     field.focusRingType = .none
     field.isEditable = true
     field.isSelectable = true
-    // Spotlight owns its suggestion list; AppKit's completion panel would
-    // otherwise briefly appear when this field first takes focus.
+    // Keep long queries on one line; the native editor scrolls horizontally.
+    field.lineBreakMode = .byTruncatingTail
+    field.usesSingleLineMode = true
+    // Spotlight owns its suggestion list. This disables AppKit text completion;
+    // the separate password/code AutoFill panel is prevented by .URL above.
     field.isAutomaticTextCompletionEnabled = false
     field.stringValue = input.text
     DispatchQueue.main.async { [weak field] in

@@ -51,6 +51,12 @@ struct AddressField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> NativeBrowserAddressField {
     let field = NativeBrowserAddressField()
+    // Keep .URL explicit before focus, even when this field accepts search text.
+    // A nil content type enables AppKit's password/one-time-code AutoFill
+    // heuristics, independently of isAutomaticTextCompletionEnabled. Keep this
+    // aligned with SpotlightInputField; its comment records the captured popup
+    // call path and the cold-launch check needed to catch a few-frame regression.
+    field.contentType = .URL
     field.placeholderString = AddressFieldModel.placeholder
     field.stringValue = model.compactDisplayText(for: model.committedURL)
     field.delegate = context.coordinator
@@ -204,9 +210,15 @@ struct AddressField: NSViewRepresentable {
         guard let self, let field, let window = field.window
         else { return event }
         let fieldRect = field.convert(field.bounds, to: nil)
-        let capsuleRect = fieldRect.insetBy(
-          dx: -AddressCapsuleLayout.endControlWidth,
-          dy: -(AddressCapsuleLayout.height - fieldRect.height) / 2)
+        // The expanded input starts at the candidate text column. Include its
+        // wider leading inset so icon and list-edge clicks stay inside the panel.
+        let leadingInset = self.parent.dropdownHeight > 0
+          ? AddressCapsuleLayout.suggestionTextInset : AddressCapsuleLayout.endControlWidth
+        let capsuleRect = NSRect(
+          x: fieldRect.minX - leadingInset,
+          y: fieldRect.midY - AddressCapsuleLayout.height / 2,
+          width: fieldRect.width + leadingInset + AddressCapsuleLayout.endControlWidth,
+          height: AddressCapsuleLayout.height)
         if event.window === window,
            capsuleRect.contains(event.locationInWindow) {
           if event.type == .leftMouseDown {

@@ -9,6 +9,7 @@ final class AddressAutocompleteModel: ObservableObject {
   @Published private(set) var suggestions: [SpotlightSuggestion] = []
   @Published private(set) var selectedIndex = 0
   @Published private(set) var isActive = false
+  @Published private(set) var hasUserEdited = false
   private var selectedID: String?
   private let service: NavigationAutocompleteService
   private var observation: AnyCancellable?
@@ -21,12 +22,15 @@ final class AddressAutocompleteModel: ObservableObject {
   }
 
   func begin(_ text: String) {
+    end()
     isActive = true
-    edit(text, isComposing: false, allowsCompletion: false)
+    // Focus exposes the committed address, without retrieving or previewing it.
+    input.edit(text, isComposing: false, allowsAutomaticCompletion: false)
   }
 
   func end() {
     isActive = false
+    hasUserEdited = false
     service.cancel()
     suggestions = []
     selectedID = nil
@@ -34,6 +38,9 @@ final class AddressAutocompleteModel: ObservableObject {
   }
 
   func edit(_ text: String, isComposing: Bool, allowsCompletion: Bool) {
+    guard isActive,
+          text != input.userInput || text != input.text || isComposing != input.isComposing else { return }
+    hasUserEdited = true
     input.edit(text, isComposing: isComposing, allowsAutomaticCompletion: allowsCompletion)
     selectedID = nil
     selectedIndex = 0
@@ -61,13 +68,15 @@ final class AddressAutocompleteModel: ObservableObject {
     input.preview(suggestions[index], explicit: true)
   }
 
-  var selectedMode: SpotlightMode? {
+  var selectedSuggestion: SpotlightSuggestion? {
     guard isActive, !input.isComposing, suggestions.indices.contains(selectedIndex) else { return nil }
-    return suggestions[selectedIndex].mode
+    return suggestions[selectedIndex]
   }
 
+  var selectedMode: SpotlightMode? { selectedSuggestion?.mode }
+
   private func apply(_ snapshot: NavigationAutocompleteSnapshot) {
-    guard isActive, !input.isComposing,
+    guard isActive, hasUserEdited, !input.isComposing,
           snapshot.input == input.userInput.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
     suggestions = Array(SpotlightAutocompleteService.merge(
       domain: snapshot.domain.map(SpotlightSuggestion.init),

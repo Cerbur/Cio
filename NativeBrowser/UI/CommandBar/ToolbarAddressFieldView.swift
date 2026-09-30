@@ -20,6 +20,15 @@ enum AddressCapsuleLayout {
   static let rowHeight: CGFloat = 48
   static let rowSpacing: CGFloat = 4
   static let listInset: CGFloat = 8
+  static let suggestionHorizontalInset: CGFloat = 12
+  static let suggestionIconWidth: CGFloat = 24
+  static let suggestionIconSpacing: CGFloat = 12
+  static var suggestionIconCenter: CGFloat {
+    listInset + suggestionHorizontalInset + suggestionIconWidth / 2
+  }
+  static var suggestionTextInset: CGFloat {
+    listInset + suggestionHorizontalInset + suggestionIconWidth + suggestionIconSpacing
+  }
   static func panelHeight(rowCount: Int) -> CGFloat {
     height + (rowCount > 0
       ? 1 + 2 * listInset + CGFloat(rowCount) * rowHeight + CGFloat(rowCount - 1) * rowSpacing : 0)
@@ -101,11 +110,13 @@ struct ToolbarAddressFieldView: View {
   }
 
   private func addressField(for session: BrowserSession, width: CGFloat) -> some View {
-    ZStack {
+    let isExpanded = rowCount > 0
+    let textInset = isExpanded ? AddressCapsuleLayout.suggestionTextInset : AddressCapsuleLayout.endControlWidth
+    return ZStack(alignment: .leading) {
       AddressField(
         model: session.addressField,
         isFocused: interaction.isFocused,
-        completion: autocomplete.isActive ? autocomplete.input : nil,
+        completion: autocomplete.isActive && autocomplete.hasUserEdited ? autocomplete.input : nil,
         dropdownHeight: AddressCapsuleLayout.panelHeight(rowCount: rowCount) - AddressCapsuleLayout.height,
         onChange: { text, isComposing, allowsCompletion in
           session.addressField.userChangedText(text)
@@ -119,17 +130,24 @@ struct ToolbarAddressFieldView: View {
         onReloadOrStop: { onReloadOrStop(session) },
         onFocusChange: { onFocusChange(session, $0) }
       )
-      .frame(width: max(0, width - 2 * AddressCapsuleLayout.endControlWidth),
+      .frame(width: max(0, width - textInset - AddressCapsuleLayout.endControlWidth),
              height: AddressCapsuleLayout.textIdealHeight)
+      .padding(.leading, textInset)
       .accessibilityIdentifier("address-input")
 
-      TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
-                     session: session, size: AddressCapsuleLayout.faviconSize)
+      Group {
+        if isExpanded, let suggestion = autocomplete.selectedSuggestion {
+          suggestionIcon(suggestion, size: AddressCapsuleLayout.faviconSize)
+        } else {
+          TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
+                         session: session, size: AddressCapsuleLayout.faviconSize)
+        }
+      }
         .frame(width: AddressCapsuleLayout.endControlWidth,
                height: AddressCapsuleLayout.height)
         .contentShape(Rectangle())
         .accessibilityHidden(true)
-        .position(x: AddressCapsuleLayout.cornerRadius,
+        .position(x: isExpanded ? AddressCapsuleLayout.suggestionIconCenter : AddressCapsuleLayout.cornerRadius,
                   y: AddressCapsuleLayout.height / 2)
 
       AddressReloadButton(session: session, onReloadOrStop: { onReloadOrStop(session) })
@@ -145,14 +163,9 @@ struct ToolbarAddressFieldView: View {
   private func suggestionRow(_ suggestion: SpotlightSuggestion, index: Int,
                              session: BrowserSession) -> some View {
     Button { submit(session: session, mode: suggestion.mode) } label: {
-      HStack(spacing: 12) {
-        if case .website(let url) = suggestion.mode {
-          TabFaviconView(pageURL: url, session: nil, size: 18).frame(width: 24)
-        } else {
-          Image(systemName: suggestion.symbolName)
-            .font(.system(size: 17, weight: .medium))
-            .foregroundStyle(.secondary).frame(width: 24)
-        }
+      HStack(spacing: AddressCapsuleLayout.suggestionIconSpacing) {
+        suggestionIcon(suggestion, size: 18)
+          .frame(width: AddressCapsuleLayout.suggestionIconWidth)
         VStack(alignment: .leading, spacing: 2) {
           Text(suggestion.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
           if !suggestion.subtitle.isEmpty {
@@ -161,7 +174,7 @@ struct ToolbarAddressFieldView: View {
         }
         Spacer(minLength: 0)
       }
-      .padding(.horizontal, 12)
+      .padding(.horizontal, AddressCapsuleLayout.suggestionHorizontalInset)
       .frame(maxWidth: .infinity, minHeight: AddressCapsuleLayout.rowHeight, alignment: .leading)
       .background {
         if index == autocomplete.selectedIndex {
@@ -176,6 +189,17 @@ struct ToolbarAddressFieldView: View {
     .onContinuousHover { phase in
       guard case .active = phase else { return }
       if hoverGate.moved(to: NSEvent.mouseLocation) { autocomplete.select(index) }
+    }
+  }
+
+  @ViewBuilder
+  private func suggestionIcon(_ suggestion: SpotlightSuggestion, size: CGFloat) -> some View {
+    if case .website(let url) = suggestion.mode {
+      TabFaviconView(pageURL: url, session: nil, size: size)
+    } else {
+      Image(systemName: suggestion.symbolName)
+        .font(.system(size: size, weight: .medium))
+        .foregroundStyle(.secondary)
     }
   }
 
