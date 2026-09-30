@@ -21,8 +21,9 @@ struct SpotlightView: View {
   let onDismiss: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var text = ""
+  @State private var input = SpotlightInputState()
   @State private var selectedIndex = 0
+  @State private var selectedSuggestionID: String?
   @State private var glassProgress: CGFloat = 0
   @State private var glassOpacity = 0.0
   @State private var isContentVisible = false
@@ -37,6 +38,14 @@ struct SpotlightView: View {
   private let suggestionSpacing: CGFloat = 4
 
   private var suggestions: [SpotlightSuggestion] { autocomplete.suggestions }
+
+  private var resultsMatchInput: Bool {
+    autocomplete.displayedInput == input.userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var previewSuggestion: SpotlightSuggestion? {
+    suggestions.first { $0.id == input.previewID }
+  }
 
   private var isExpanded: Bool { !suggestions.isEmpty }
 
@@ -134,12 +143,9 @@ struct SpotlightView: View {
     }
     .onChange(of: presentation.isPresented) { _, presented in
       animatePresentation(presented)
-      if presented { autocomplete.update(text) } else { autocomplete.cancel() }
+      if presented { autocomplete.update(input.userInput) } else { autocomplete.cancel() }
     }
     .onDisappear { autocomplete.cancel() }
-    .onChange(of: suggestions.count) { _, count in
-      if selectedIndex >= count { selectedIndex = max(0, count - 1) }
-    }
     .onChange(of: targetPanelHeight) { _, height in
       if reduceMotion {
         panelHeight = height
@@ -149,8 +155,9 @@ struct SpotlightView: View {
         }
       }
     }
-    .onChange(of: suggestions.map(\.id)) { _, _ in
+    .onChange(of: suggestions) { _, _ in
       hoverGate.reset(to: NSEvent.mouseLocation)
+      synchronizeSelection()
     }
     .accessibilityIdentifier("spotlight")
   }
@@ -158,22 +165,31 @@ struct SpotlightView: View {
   private var panelContents: some View {
     VStack(spacing: 0) {
       HStack(spacing: 16) {
-        Image(systemName: "magnifyingglass")
-          .font(.system(size: 22, weight: .medium))
-          .foregroundStyle(.secondary)
-          .frame(width: 28)
-          .accessibilityHidden(true)
+        Group {
+          if let suggestion = previewSuggestion, case .website(let url) = suggestion.mode {
+            TabFaviconView(pageURL: url, session: nil, size: 22)
+          } else {
+            Image(systemName: "magnifyingglass")
+              .font(.system(size: 22, weight: .medium))
+              .foregroundStyle(.secondary)
+          }
+        }
+        .frame(width: 28)
+        .accessibilityHidden(true)
 
         SpotlightInputField(
-          text: text,
+          input: input,
           focusGeneration: focusGeneration,
-          onChange: { value in
-            text = value
+          onChange: { value, isComposing, allowsCompletion in
+            input.edit(value, isComposing: isComposing, allowsAutomaticCompletion: allowsCompletion)
             selectedIndex = 0
+            selectedSuggestionID = nil
             scrollToSuggestionID = nil
             hoverGate.reset(to: NSEvent.mouseLocation)
             autocomplete.update(value)
+            synchronizeSelection()
           },
+          onAcceptCompletion: { input.acceptCompletion() },
           onSubmit: submitSelected,
           onEscape: onDismiss,
           onMove: moveSelection)
@@ -231,7 +247,7 @@ struct SpotlightView: View {
                 .id(suggestion.id)
                 .onContinuousHover { phase in
                   guard case .active = phase else { return }
-                  if hoverGate.moved(to: NSEvent.mouseLocation) { selectedIndex = index }
+                  if hoverGate.moved(to: NSEvent.mouseLocation) { selectSuggestion(at: index) }
                 }
               }
             }
@@ -240,7 +256,7 @@ struct SpotlightView: View {
           }
           .frame(height: suggestionListHeight)
           .scrollIndicators(suggestions.count > 5 ? .visible : .hidden)
-          .allowsHitTesting(autocomplete.displayedInput == text.trimmingCharacters(in: .whitespacesAndNewlines))
+          .allowsHitTesting(resultsMatchInput)
           .onChange(of: scrollToSuggestionID) { _, id in
             if let id { reader.scrollTo(id) }
           }
@@ -280,8 +296,8 @@ struct SpotlightView: View {
   }
 
   private func submitSelected() {
-    if autocomplete.displayedInput != text.trimmingCharacters(in: .whitespacesAndNewlines) {
-      if let mode = SpotlightMode.suggestions(for: text).first { onSelect(mode) }
+    if !resultsMatchInput {
+      if let mode = SpotlightMode.suggestions(for: input.userInput).first { onSelect(mode) }
       return
     }
     guard suggestions.indices.contains(selectedIndex) else { return }
@@ -289,17 +305,36 @@ struct SpotlightView: View {
   }
 
   private func moveSelection(_ direction: Int) {
-    guard autocomplete.displayedInput == text.trimmingCharacters(in: .whitespacesAndNewlines),
-          !suggestions.isEmpty else { return }
-    selectedIndex = (selectedIndex + direction + suggestions.count) % suggestions.count
+    guard resultsMatchInput, !suggestions.isEmpty else { return }
+    selectSuggestion(at: (selectedIndex + direction + suggestions.count) % suggestions.count)
     scrollToSuggestionID = suggestions[selectedIndex].id
+  }
+
+  private func selectSuggestion(at index: Int) {
+    guard resultsMatchInput, !input.isComposing, suggestions.indices.contains(index) else { return }
+    selectedIndex = index
+    selectedSuggestionID = suggestions[index].id
+    input.preview(suggestions[index], explicit: true)
+  }
+
+  private func synchronizeSelection() {
+    guard resultsMatchInput else { return }
+    if let id = selectedSuggestionID, let index = suggestions.firstIndex(where: { $0.id == id }) {
+      selectedIndex = index
+    } else {
+      selectedSuggestionID = nil
+      selectedIndex = 0
+    }
+    let suggestion = suggestions.indices.contains(selectedIndex) ? suggestions[selectedIndex] : nil
+    input.preview(suggestion, explicit: selectedSuggestionID != nil)
   }
 }
 
 private struct SpotlightInputField: NSViewRepresentable {
-  let text: String
+  let input: SpotlightInputState
   let focusGeneration: Int
-  let onChange: (String) -> Void
+  let onChange: (String, Bool, Bool) -> Void
+  let onAcceptCompletion: () -> Void
   let onSubmit: () -> Void
   let onEscape: () -> Void
   let onMove: (Int) -> Void
@@ -321,7 +356,7 @@ private struct SpotlightInputField: NSViewRepresentable {
     // Spotlight owns its suggestion list; AppKit's completion panel would
     // otherwise briefly appear when this field first takes focus.
     field.isAutomaticTextCompletionEnabled = false
-    field.stringValue = text
+    field.stringValue = input.text
     DispatchQueue.main.async { [weak field] in
       guard let field, field.window != nil else { return }
       field.focusAndSelectAll()
@@ -331,7 +366,7 @@ private struct SpotlightInputField: NSViewRepresentable {
 
   func updateNSView(_ field: NativeBrowserAddressField, context: Context) {
     context.coordinator.parent = self
-    if field.stringValue != text { field.stringValue = text }
+    context.coordinator.applyInput(to: field)
     if context.coordinator.lastFocusGeneration != focusGeneration {
       context.coordinator.lastFocusGeneration = focusGeneration
       DispatchQueue.main.async { [weak field] in
@@ -345,12 +380,35 @@ private struct SpotlightInputField: NSViewRepresentable {
   final class Coordinator: NSObject, NSTextFieldDelegate {
     var parent: SpotlightInputField
     var lastFocusGeneration = 0
+    private var lastAppliedRevision = -1
+    private var isApplyingPreview = false
+    private var isDeleting = false
 
     init(parent: SpotlightInputField) { self.parent = parent }
 
+    func applyInput(to field: NativeBrowserAddressField) {
+      guard lastAppliedRevision != parent.input.revision else { return }
+      let editor = field.currentEditor() as? NSTextView
+      guard editor?.hasMarkedText() != true else { return }
+      lastAppliedRevision = parent.input.revision
+      isApplyingPreview = true
+      defer { isApplyingPreview = false }
+      if field.stringValue != parent.input.text { field.stringValue = parent.input.text }
+      if let range = parent.input.selection {
+        editor?.setSelectedRange(range)
+        editor?.scrollRangeToVisible(range)
+      }
+    }
+
     func controlTextDidChange(_ notification: Notification) {
-      guard let field = notification.object as? NSTextField else { return }
-      parent.onChange(field.stringValue)
+      guard !isApplyingPreview, let field = notification.object as? NSTextField else { return }
+      let editor = field.currentEditor() as? NSTextView
+      let isComposing = editor?.hasMarkedText() == true
+      let range = editor?.selectedRange()
+      let isAtEnd = range == NSRange(location: (field.stringValue as NSString).length, length: 0)
+      let allowsCompletion = !isComposing && !isDeleting && isAtEnd
+      isDeleting = false
+      parent.onChange(field.stringValue, isComposing, allowsCompletion)
     }
 
     func control(
@@ -369,6 +427,14 @@ private struct SpotlightInputField: NSViewRepresentable {
         parent.onMove(-1)
       case #selector(NSResponder.moveDown(_:)):
         parent.onMove(1)
+      case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.moveRight(_:)),
+           #selector(NSResponder.moveToEndOfLine(_:)):
+        guard let range = parent.input.selection, range.length > 0,
+              textView.selectedRange() == range else { return false }
+        parent.onAcceptCompletion()
+      case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
+        isDeleting = true
+        return false
       default:
         return false
       }
