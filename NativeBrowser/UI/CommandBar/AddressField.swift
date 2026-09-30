@@ -64,6 +64,9 @@ struct AddressField: NSViewRepresentable {
     field.isEditable = true
     field.isSelectable = true
     field.isEnabled = true
+    // In the shell-owned toolbar, AppKit must not choose the address as the
+    // window's initial editor. Capsule clicks and Cmd+L enable it explicitly.
+    field.refusesFirstResponder = true
     // The capsule draws one native AppKit focus ring around the whole control,
     // so the text field must not add a second ring around its own bounds.
     field.focusRingType = .none
@@ -381,6 +384,7 @@ final class NativeBrowserAddressField: NSTextField {
   /// the normal AppKit path at mouse-down time; AppKit still handles placement
   /// of the caret when the field already has focus.
   override func mouseDown(with event: NSEvent) {
+    refusesFirstResponder = false
     if let window, !hasKeyboardFocus(in: window) {
       _ = window.makeFirstResponder(self)
     }
@@ -402,6 +406,7 @@ final class NativeBrowserAddressField: NSTextField {
 
   /// Makes this field first responder with its whole value selected.
   func focusAndSelectAll() {
+    refusesFirstResponder = false
     guard let window else { return }
     if !hasKeyboardFocus(in: window) {
       _ = window.makeFirstResponder(self)

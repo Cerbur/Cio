@@ -45,10 +45,6 @@ final class BrowserMainViewController: NSViewController {
     splitController.splitView = SeamlessSplitView()
     splitController.splitView.isVertical = true
     splitController.splitView.dividerStyle = .thin
-    splitController.splitView.wantsLayer = true
-    splitController.splitView.layer?.cornerRadius = BrowserLayout.mainViewCornerRadius
-    splitController.splitView.layer?.cornerCurve = .continuous
-    splitController.splitView.layer?.masksToBounds = true
     splitController.addSplitViewItem(sidebarItem)
     splitController.addSplitViewItem(browserItem)
     spaceSplitController = splitController
@@ -64,6 +60,10 @@ final class BrowserMainViewController: NSViewController {
 
   override func loadView() {
     let container = NSView()
+    container.wantsLayer = true
+    container.layer?.cornerRadius = BrowserLayout.contentCornerRadius
+    container.layer?.cornerCurve = .continuous
+    container.layer?.masksToBounds = true
     view = container
     addChild(spaceSplitController)
     container.addSubview(spaceSplitController.view)
@@ -72,9 +72,9 @@ final class BrowserMainViewController: NSViewController {
       spaceSplitController.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
       spaceSplitController.view.topAnchor.constraint(equalTo: container.topAnchor),
       spaceSplitController.view.trailingAnchor.constraint(
-        equalTo: container.trailingAnchor, constant: -BrowserLayout.mainViewEdgeInset),
+        equalTo: container.trailingAnchor),
       spaceSplitController.view.bottomAnchor.constraint(
-        equalTo: container.bottomAnchor, constant: -BrowserLayout.mainViewEdgeInset),
+        equalTo: container.bottomAnchor),
     ])
   }
 }

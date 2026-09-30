@@ -12,8 +12,8 @@ struct MainWindowView: View {
 
   var body: some View {
     NativeBrowserShellRepresentable(runtime: runtime)
-      // Give the toolbar and navigation rail the same outer gutter.
-      .padding([.top, .leading], BrowserLayout.shellInset)
+      // The shell owns toolbar/rail geometry, including the native titlebar area.
+      .ignoresSafeArea(.container)
       .background {
         GlassBackdrop()
           .ignoresSafeArea()

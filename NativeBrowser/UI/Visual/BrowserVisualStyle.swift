@@ -11,20 +11,6 @@
 import AppKit
 import SwiftUI
 
-/// Shared geometry for the native AppKit sidebar and its SwiftUI content.
-enum BrowserLayout {
-  static let shellCornerRadius: CGFloat = 18
-  static let shellInset: CGFloat = 4
-  static let mainViewEdgeInset: CGFloat = 4
-  static let mainViewCornerRadius = shellCornerRadius - mainViewEdgeInset
-  static let railWidth: CGFloat = 51
-  static let sidebarMinimumWidth: CGFloat = 182
-  static let sidebarDefaultWidth = sidebarMinimumWidth
-  static let sidebarMaximumWidth: CGFloat = 480
-  static let sidebarWidthPreferenceKey = "cio.sidebar.width"
-  static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
-}
-
 /// The window-wide, highly translucent glass underneath the shell.
 struct GlassBackdrop: View {
   var body: some View {

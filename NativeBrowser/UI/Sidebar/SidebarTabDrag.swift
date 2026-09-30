@@ -545,9 +545,7 @@ private struct SidebarTabGlassBlock<Content: View>: View {
   @ViewBuilder let content: Content
 
   var body: some View {
-    let shape = style == .tile
-      ? SidebarTabAppearance.glassShape
-      : RoundedRectangle(cornerRadius: 12, style: .continuous)
+    let shape = SidebarTabAppearance.glassShape
     content
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: style == .tile ? .center : .leading)
       .glassEffect(.regular, in: shape)

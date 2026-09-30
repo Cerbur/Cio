@@ -2,9 +2,9 @@
 //  BrowserToolbarController.swift
 //  NativeBrowser
 //
-//  One stable native toolbar item hosts all page controls. Browser, window,
-//  sidebar and focus events each trigger a layout from the current geometry;
-//  none of those events changes the toolbar item's own width or position.
+//  Shell-owned toolbar with native window buttons and page controls. Its
+//  height comes from the same metric as the navigation rail; AppKit no longer
+//  adds an independent toolbar safe area above the Main View.
 //
 
 import AppKit
@@ -37,6 +37,8 @@ private final class ToolbarChromeView: NSView {
   private let forwardButton: NSButton
   private let addressView: NSHostingView<ToolbarAddressFieldView>
   private var showsAddress = true
+  private var trafficLights: [NSButton] = []
+  private weak var trafficLightsWindow: NSWindow?
 
   init(
     sidebarButton: NSButton,
@@ -48,7 +50,7 @@ private final class ToolbarChromeView: NSView {
     self.backButton = backButton
     self.forwardButton = forwardButton
     self.addressView = addressView
-    super.init(frame: NSRect(x: 0, y: 0, width: 1, height: AddressCapsuleLayout.height))
+    super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
 
     sidebarGlass.style = .regular
     sidebarGlass.cornerRadius = AddressCapsuleLayout.cornerRadius
@@ -76,8 +78,8 @@ private final class ToolbarChromeView: NSView {
     addSubview(navigationGroup)
     navigationContent.addSubview(backButton)
     navigationContent.addSubview(forwardButton)
-    // Mounted above the content view rather than inside the 36-point toolbar.
-    // The same native field stays mounted while its unified surface expands.
+    // The field is a shell overlay, keeping the same native editor mounted
+    // while its glass expands over the Main View.
 
     let height = AddressCapsuleLayout.height
     backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
@@ -90,12 +92,59 @@ private final class ToolbarChromeView: NSView {
   }
 
   override var intrinsicContentSize: NSSize {
-    NSSize(width: NSView.noIntrinsicMetric, height: AddressCapsuleLayout.height)
+    NSSize(width: NSView.noIntrinsicMetric, height: BrowserLayout.chromeThickness)
+  }
+
+  override var isFlipped: Bool { true }
+  override var mouseDownCanMoveWindow: Bool { true }
+
+  override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+
+  func installTrafficLights(in window: NSWindow) {
+    guard trafficLightsWindow !== window else { return }
+    trafficLightsWindow = window
+    let controls: [(NSWindow.ButtonType, Selector, String)] = [
+      (.closeButton, #selector(NSWindow.performClose(_:)), "Close"),
+      (.miniaturizeButton, #selector(NSWindow.performMiniaturize(_:)), "Minimize"),
+      (.zoomButton, #selector(NSWindow.toggleFullScreen(_:)), "Full Screen"),
+    ]
+    // AppKit can reclaim the window-owned titlebar buttons during relayout.
+    // Its public factory supplies native buttons owned by this toolbar instead.
+    trafficLights = controls.compactMap { type, action, label in
+      guard let button = NSWindow.standardWindowButton(type, for: window.styleMask) else { return nil }
+      button.target = window
+      button.action = action
+      button.setAccessibilityLabel(label)
+      button.toolTip = label
+      button.autoresizingMask = []
+      addSubview(button)
+      return button
+    }
+  }
+
+  override func layout() {
+    super.layout()
+    layoutTrafficLights()
+  }
+
+  private func layoutTrafficLights() {
+    for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+      window?.standardWindowButton(type)?.isHidden = true
+    }
+    let fullscreen = window?.styleMask.contains(.fullScreen) == true
+    let frames = BrowserShellFrames.trafficLightFrames(
+      sizes: trafficLights.map { $0.frame.size }, toolbarHeight: bounds.height)
+    for (button, frame) in zip(trafficLights, frames) {
+      button.isHidden = fullscreen
+      button.frame = frame
+    }
   }
 
   func setAddressVisible(_ visible: Bool) {
     showsAddress = visible
     addressView.isHidden = !visible
+    sidebarGlass.isHidden = !visible
+    navigationGroup.isHidden = !visible
   }
 
   func setSidebarCollapsed(_ collapsed: Bool) {
@@ -114,10 +163,11 @@ private final class ToolbarChromeView: NSView {
   }
 
   func applyLayout(
-    browserRect: NSRect,
-    trafficLightsRight: CGFloat
+    browserRect: NSRect
   ) {
     guard browserRect.width > 0 else { return }
+    layoutTrafficLights()
+    let trafficLightsRight = trafficLights.last?.frame.maxX ?? 0
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
     let sidebarLeft = max(trafficLightsRight + 10, browserRect.minX - height - 10)
@@ -131,7 +181,7 @@ private final class ToolbarChromeView: NSView {
              on: sidebarGlass)
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
-    if let contentView = window?.contentView?.superview {
+    if let contentView = superview {
       if addressView.superview !== contentView { contentView.addSubview(addressView, positioned: .above, relativeTo: nil) }
       let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
       let panelHeight = AddressCapsuleLayout.maximumHeight
@@ -147,12 +197,7 @@ private final class ToolbarChromeView: NSView {
 }
 
 @MainActor
-final class BrowserToolbarController: NSObject, NSToolbarDelegate {
-  private enum ToolbarID {
-    static let chrome = NSToolbarItem.Identifier("cio.page-controls")
-    static let sectionPlaceholder = NSToolbarItem.Identifier("cio.section-toolbar-placeholder")
-  }
-
+final class BrowserToolbarController: NSObject {
   private enum ToolbarEvent {
     case geometryChanged
     case sidebarChanged
@@ -168,11 +213,9 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   private let isSidebarCollapsed: () -> Bool
   private let onSidebarToggle: () -> Void
   private weak var window: NSWindow?
-  private var toolbar: NSToolbar?
   private var chromeView: ToolbarChromeView?
   private var browserFrameObservation: AnyCancellable?
-  private var chromeFrameObservation: AnyCancellable?
-  private var windowResizeObservation: AnyCancellable?
+  private var windowObservations = Set<AnyCancellable>()
   private var workspaceObservation: AnyCancellable?
   private var selectedSessionObservations = Set<AnyCancellable>()
   private weak var observedSession: BrowserSession?
@@ -211,32 +254,32 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     bindSelectedSession(workspace.selectedSession)
   }
 
+  /// Mounted as a sibling of Main View and navigation rail by the shell.
+  var view: NSView {
+    if let chromeView { return chromeView }
+    return makeChromeView()
+  }
+
   func install(in window: NSWindow, showsSpaceToolbar: Bool) {
     self.window = window
-
-    if toolbar == nil {
-      let toolbar = NSToolbar(identifier: NSToolbar.Identifier("cio.native-browser-toolbar"))
-      toolbar.delegate = self
-      toolbar.displayMode = .iconOnly
-      toolbar.allowsUserCustomization = false
-      self.toolbar = toolbar
-    }
-
-    if !window.styleMask.contains(.fullSizeContentView) {
-      window.styleMask.insert(.fullSizeContentView)
-    }
+    window.styleMask.insert(.fullSizeContentView)
     window.isOpaque = false
     window.backgroundColor = .clear
+    window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
-    window.toolbarStyle = .unified
-    if window.toolbar !== toolbar { window.toolbar = toolbar }
-    toolbar?.isVisible = true
+    window.toolbar = nil
+    window.initialFirstResponder = browserView
+    _ = view
+    chromeView?.installTrafficLights(in: window)
 
-    windowResizeObservation = NotificationCenter.default.publisher(
-      for: NSWindow.didResizeNotification,
-      object: window
-    ).sink { [weak self] _ in
-      MainActor.assumeIsolated { self?.handle(.geometryChanged) }
+    windowObservations.removeAll()
+    for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification,
+                 NSWindow.didExitFullScreenNotification] {
+      NotificationCenter.default.publisher(for: name, object: window)
+        .sink { [weak self] _ in
+          MainActor.assumeIsolated { self?.handle(.geometryChanged) }
+        }
+        .store(in: &windowObservations)
     }
     setSpaceControlsVisible(showsSpaceToolbar)
     bindSelectedSession(workspace.selectedSession)
@@ -245,10 +288,6 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
 
   func setSpaceControlsVisible(_ visible: Bool) {
     chromeView?.setAddressVisible(visible)
-    toolbar?.items.forEach { item in
-      item.isHidden = item.itemIdentifier == ToolbarID.sectionPlaceholder
-        ? visible : !visible
-    }
     handle(.geometryChanged)
   }
 
@@ -292,19 +331,10 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   }
 
   private func applyCurrentLayout() {
-    guard let window,
-          let chromeView,
-          chromeView.window === window,
-          browserView.window === window,
-          let zoomButton = window.standardWindowButton(.zoomButton)
-    else { return }
-
+    guard let window, let chromeView,
+          chromeView.window === window, browserView.window === window else { return }
     let browserRect = browserView.convert(browserView.bounds, to: chromeView)
-    let trafficLightsRight = zoomButton.convert(
-      NSPoint(x: zoomButton.bounds.maxX, y: 0), to: chromeView).x
-    chromeView.applyLayout(
-      browserRect: browserRect,
-      trafficLightsRight: trafficLightsRight)
+    chromeView.applyLayout(browserRect: browserRect)
   }
 
   private func observeWorkspace() {
@@ -394,12 +424,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     return button
   }
 
-  private func makeChromeItem() -> NSToolbarItem {
-    let item = NSToolbarItem(itemIdentifier: ToolbarID.chrome)
-    item.label = "Page Controls"
-    item.paletteLabel = "Page Controls"
-    item.isBordered = false
-
+  private func makeChromeView() -> ToolbarChromeView {
     let sidebarButton = makeButton(
       label: "Hide Sidebar", symbol: "sidebar.left",
       action: #selector(handleSidebarToggle(_:)))
@@ -423,59 +448,10 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       backButton: backButton,
       forwardButton: forwardButton,
       addressView: addressView)
-    view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-    view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    view.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      view.widthAnchor.constraint(greaterThanOrEqualToConstant: 1),
-      view.heightAnchor.constraint(equalToConstant: AddressCapsuleLayout.height),
-    ])
-    // AppKit still uses these bounds to let one custom item occupy the
-    // remaining toolbar width; its child frames never affect item sizing.
-    item.minSize = NSSize(width: 1, height: AddressCapsuleLayout.height)
-    item.maxSize = NSSize(width: 10_000, height: AddressCapsuleLayout.height)
-    item.view = view
+    view.setAccessibilityRole(.toolbar)
+    view.setAccessibilityLabel("Toolbar")
     chromeView = view
-    view.postsFrameChangedNotifications = true
-    chromeFrameObservation = NotificationCenter.default.publisher(
-      for: NSView.frameDidChangeNotification,
-      object: view
-    ).sink { [weak self] _ in
-      MainActor.assumeIsolated { self?.handle(.geometryChanged) }
-    }
-    return item
-  }
-
-  func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [ToolbarID.chrome, ToolbarID.sectionPlaceholder]
-  }
-
-  func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    toolbarDefaultItemIdentifiers(toolbar)
-  }
-
-  func toolbar(
-    _ toolbar: NSToolbar,
-    itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-    willBeInsertedIntoToolbar flag: Bool
-  ) -> NSToolbarItem? {
-    switch itemIdentifier {
-    case ToolbarID.sectionPlaceholder:
-      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-      item.isBordered = false
-      let view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 36))
-      view.translatesAutoresizingMaskIntoConstraints = false
-      NSLayoutConstraint.activate([
-        view.widthAnchor.constraint(equalToConstant: 1),
-        view.heightAnchor.constraint(equalToConstant: 36),
-      ])
-      item.view = view
-      return item
-    case ToolbarID.chrome:
-      return makeChromeItem()
-    default:
-      return nil
-    }
+    return view
   }
 
   @objc private func handleSidebarToggle(_ sender: NSButton) {

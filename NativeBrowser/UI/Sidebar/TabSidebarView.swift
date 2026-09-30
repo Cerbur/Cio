@@ -11,7 +11,7 @@ import SwiftUI
 
 enum SidebarTabAppearance {
   static let faviconSize: CGFloat = 18
-  static let glassShape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+  static let glassShape = RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius, style: .continuous)
 }
 
 @MainActor
@@ -103,7 +103,7 @@ struct TabSidebarView: View {
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let pinGlassOverlap: CGFloat = 24
-  private let topPinEdgeInset: CGFloat = 12
+  private let topPinEdgeInset = BrowserLayout.sidebarContentInset
   private let topPinHeight: CGFloat = 40.5  // 75% of the former 54-point tiles.
 
   private func columns(for width: CGFloat) -> Int {

@@ -23,13 +23,36 @@ struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
   ) {}
 }
 
+/// Three siblings over the shell glass. Only Main View clips its children.
 @MainActor
-private final class ShellSplitController: NSSplitViewController {
-  override func splitView(
-    _ splitView: NSSplitView,
-    shouldHideDividerAt dividerIndex: Int
-  ) -> Bool {
-    dividerIndex == 0 || super.splitView(splitView, shouldHideDividerAt: dividerIndex)
+private final class BrowserShellView: NSView {
+  let toolbarView: NSView
+  let railView: NSView
+  let mainView: NSView
+  var onLayout: (() -> Void)?
+
+  init(toolbarView: NSView, railView: NSView, mainView: NSView) {
+    self.toolbarView = toolbarView
+    self.railView = railView
+    self.mainView = mainView
+    super.init(frame: .zero)
+    addSubview(mainView)
+    addSubview(railView)
+    addSubview(toolbarView)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override var isFlipped: Bool { true }
+
+  override func layout() {
+    super.layout()
+    let frames = BrowserShellFrames(bounds: bounds)
+    toolbarView.frame = frames.toolbar
+    railView.frame = frames.navigationRail
+    mainView.frame = frames.mainView
+    onLayout?()
   }
 }
 
@@ -55,7 +78,7 @@ final class NativeBrowserShellController: NSViewController {
   private let runtime: ApplicationRuntime
   private let sidebarChromeLayout = SidebarChromeLayout()
   private let mainViewController: BrowserMainViewController
-  private let shellSplitController: ShellSplitController
+  private let railController: NSHostingController<NavigationRail>
   private lazy var browserToolbar = BrowserToolbarController(
     workspace: runtime.workspaceStore,
     history: runtime.historyService,
@@ -81,21 +104,8 @@ final class NativeBrowserShellController: NSViewController {
     self.runtime = runtime
     mainViewController = BrowserMainViewController(
       runtime: runtime, sidebarChromeLayout: sidebarChromeLayout)
-    let railHostingController = NSHostingController(rootView: NavigationRail(runtime: runtime))
-    let railItem = NSSplitViewItem(viewController: railHostingController)
-    railItem.minimumThickness = BrowserLayout.railWidth
-    railItem.maximumThickness = BrowserLayout.railWidth
-    railItem.canCollapse = false
-    let mainItem = NSSplitViewItem(viewController: mainViewController)
-    mainItem.canCollapse = false
-
-    let splitController = ShellSplitController()
-    splitController.splitView = SeamlessSplitView()
-    splitController.splitView.isVertical = true
-    splitController.splitView.dividerStyle = .thin
-    splitController.addSplitViewItem(railItem)
-    splitController.addSplitViewItem(mainItem)
-    shellSplitController = splitController
+    railController = NSHostingController(rootView: NavigationRail(runtime: runtime))
+    railController.safeAreaRegions = []
 
     super.init(nibName: nil, bundle: nil)
   }
@@ -106,17 +116,14 @@ final class NativeBrowserShellController: NSViewController {
   }
 
   override func loadView() {
-    let shellView = NSView()
+    addChild(mainViewController)
+    addChild(railController)
+    let shellView = BrowserShellView(
+      toolbarView: browserToolbar.view,
+      railView: railController.view,
+      mainView: mainViewController.view)
+    shellView.onLayout = { [weak self] in self?.browserToolbar.browserGeometryDidChange() }
     view = shellView
-    addChild(shellSplitController)
-    shellView.addSubview(shellSplitController.view)
-    shellSplitController.view.translatesAutoresizingMaskIntoConstraints = false
-    NSLayoutConstraint.activate([
-      shellSplitController.view.leadingAnchor.constraint(equalTo: shellView.leadingAnchor),
-      shellSplitController.view.trailingAnchor.constraint(equalTo: shellView.trailingAnchor),
-      shellSplitController.view.topAnchor.constraint(equalTo: shellView.topAnchor),
-      shellSplitController.view.bottomAnchor.constraint(equalTo: shellView.bottomAnchor),
-    ])
   }
 
   override func viewDidLoad() {
@@ -128,8 +135,7 @@ final class NativeBrowserShellController: NSViewController {
 
   override func viewWillAppear() {
     super.viewWillAppear()
-    // Configure full-size content before the nested split controller lays out
-    // its full-height sidebar beneath the toolbar.
+    // The shell fills the native titlebar area and positions its own chrome.
     if let window = view.window {
       browserToolbar.install(in: window, showsSpaceToolbar: runtime.presentedInternalPanel == nil)
     }
@@ -159,6 +165,9 @@ final class NativeBrowserShellController: NSViewController {
     }
     updateSidebarChromeLayout()
     updateSpotlightPresentation(runtime.workspaceStore.isSpotlightPresented)
+    if !runtime.workspaceStore.isSpotlightPresented {
+      runtime.workspaceStore.selectedSession?.focusPage()
+    }
   }
 
   override func viewDidLayout() {
@@ -181,8 +190,7 @@ final class NativeBrowserShellController: NSViewController {
       }
   }
 
-  /// The overlay is a sibling of the entire rail/sidebar/browser split, so it
-  /// uses the shell's full bounds and stays above every content section.
+  /// Spotlight covers the content below the toolbar and beside the rail.
   private func updateSpotlightPresentation(_ isPresented: Bool) {
     spotlightRemovalTask?.cancel()
     if let hostingView = spotlightHostingView {
@@ -211,12 +219,12 @@ final class NativeBrowserShellController: NSViewController {
         at: point, in: self.runtime.workspaceStore.selectedSpaceID)
     }
     hostingView.translatesAutoresizingMaskIntoConstraints = false
-    view.addSubview(hostingView, positioned: .above, relativeTo: shellSplitController.view)
+    view.addSubview(hostingView, positioned: .above, relativeTo: mainViewController.view)
     NSLayoutConstraint.activate([
-      hostingView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      hostingView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      hostingView.topAnchor.constraint(equalTo: view.topAnchor),
-      hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+      hostingView.leadingAnchor.constraint(equalTo: mainViewController.view.leadingAnchor),
+      hostingView.trailingAnchor.constraint(equalTo: mainViewController.view.trailingAnchor),
+      hostingView.topAnchor.constraint(equalTo: mainViewController.view.topAnchor),
+      hostingView.bottomAnchor.constraint(equalTo: mainViewController.view.bottomAnchor),
     ])
     spotlightHostingView = hostingView
     spotlightPresentationState = presentation

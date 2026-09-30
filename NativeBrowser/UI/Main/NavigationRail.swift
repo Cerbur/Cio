@@ -10,7 +10,7 @@ import SwiftUI
 struct NavigationRail: View {
   @ObservedObject var runtime: ApplicationRuntime
 
-  private let buttonSize: CGFloat = 36
+  private let buttonSize = BrowserLayout.chromeControlSize
 
   var body: some View {
     VStack(spacing: 0) {
@@ -19,11 +19,9 @@ struct NavigationRail: View {
         sectionButton("History", symbol: "clock.arrow.circlepath", panel: .history)
         sectionButton("Downloads", symbol: "arrow.down.circle", panel: .downloads)
       }
-      // Balance the shell's leading inset against the split view's thin divider.
-      .offset(x: -(BrowserLayout.shellInset - 1) / 2)
       Spacer(minLength: 0)
     }
-    .padding(.top, 10.5)
+    .padding(.top, (BrowserLayout.chromeThickness - buttonSize) / 2)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color.clear)
   }
