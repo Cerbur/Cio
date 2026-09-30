@@ -97,6 +97,7 @@ struct TabSidebarView: View {
   @State private var tabDrag = SidebarTabDrag()
   @State private var isSidebarHovered = false
   @State private var isClearHovered = false
+  @State private var hoveredNewTabSpaceID: UUID?
   @State private var clearingSpaceID: UUID?
   @State private var dumpAngle: Double = 0
   @GestureState private var isTabDragGestureActive = false
@@ -185,6 +186,7 @@ struct TabSidebarView: View {
       .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
       .onChange(of: isSidebarHovered) { _, isHovered in
         if !isHovered {
+          hoveredNewTabSpaceID = nil
           withAnimation(.easeOut(duration: 0.18)) { isClearHovered = false }
         }
       }
@@ -211,6 +213,7 @@ struct TabSidebarView: View {
     let clearableCount = temporaryTabs.filter { $0.id != workspace.selectedTabID }.count
     let pinSlots = slots(pinnedTabs, tier: .space(space.id))
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
+    let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
@@ -251,17 +254,27 @@ struct TabSidebarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .frame(height: 34)
+            .contentShape(SidebarTabAppearance.glassShape)
         }
         .buttonStyle(.plain)
         .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
         .background {
           if spotlightIsActive {
             Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+          } else if newTabIsHovered {
+            SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
           }
         }
         .overlay {
           if spotlightIsActive {
             SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
+          }
+        }
+        .onHover { isHovered in
+          if isHovered {
+            hoveredNewTabSpaceID = space.id
+          } else if hoveredNewTabSpaceID == space.id {
+            hoveredNewTabSpaceID = nil
           }
         }
         .help("Open Spotlight to create a tab")

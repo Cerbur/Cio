@@ -141,6 +141,7 @@ targets:
       - path: NativeBrowser/Browser/NavigationInput.swift
       - path: NativeBrowser/Browser/SpotlightMode.swift
       - path: NativeBrowser/Browser/SpotlightAutocompleteService.swift
+      - path: NativeBrowser/Browser/Autocomplete
       - path: NativeBrowser/UI/Spotlight/SpotlightHoverGate.swift
       # The Milestone 4 workspace model is pure Foundation: it is compiled
       # into this target so Space/tab membership, ordering, selection and
