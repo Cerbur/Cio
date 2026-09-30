@@ -188,7 +188,7 @@ struct AddressField: NSViewRepresentable {
               y: capsuleRect.midY - AddressCapsuleLayout.reloadHitDiameter / 2,
               width: AddressCapsuleLayout.reloadHitDiameter,
               height: AddressCapsuleLayout.reloadHitDiameter)
-            if reloadRect.contains(event.locationInWindow) {
+            if NSBezierPath(ovalIn: reloadRect).contains(event.locationInWindow) {
               self.parent.onReloadOrStop()
               if self.isFocused { field.focusAndSelectAll() }
               return nil

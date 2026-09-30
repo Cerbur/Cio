@@ -22,7 +22,7 @@ enum AddressCapsuleLayout {
   static let unfocusedWidthRatio: CGFloat = 0.38
   static let focusedWidthRatio: CGFloat = 0.45
   static let faviconSize: CGFloat = 16
-  static let reloadHitDiameter: CGFloat = 18
+  static let reloadHitDiameter = height
   static let textIdealHeight: CGFloat = 22
   /// Reserve matching space at both ends so idle text is centred in the pill.
   static let endControlWidth: CGFloat = 40
@@ -134,25 +134,26 @@ private struct AddressReloadButton: View {
       }
       .frame(width: AddressCapsuleLayout.reloadHitDiameter,
              height: AddressCapsuleLayout.reloadHitDiameter)
-      .background {
-        Circle().fill(isHovered ? Color.primary.opacity(0.14) : .clear)
-      }
       .contentShape(Circle())
     }
     .buttonStyle(.plain)
-    .onHover { hovered in
-      withAnimation(.easeOut(duration: 0.15)) { isHovered = hovered }
-    }
+    .onHover { isHovered = $0 }
     .help(session.isLoading ? "Stop" : "Reload")
     .accessibilityLabel(session.isLoading ? "Stop" : "Reload")
+    .accessibilityIdentifier("address-reload")
     .onChange(of: session.isLoading) { _, isLoading in
       if isLoading { rotationStart = Date() }
     }
   }
 
   private var reloadSymbol: some View {
-    Image(systemName: "arrow.triangle.2.circlepath")
-      .font(.system(size: 16, weight: .semibold))
+    let highlightsHover = isHovered && !session.isLoading
+    return Image(systemName: "arrow.triangle.2.circlepath")
+      .font(.system(size: 14, weight: .semibold))
+      .foregroundStyle(highlightsHover ? Color.black : Color.secondary)
+      .scaleEffect(highlightsHover ? 16.0 / 14.0 : 1)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.15),
+                 value: highlightsHover)
   }
 }
 
