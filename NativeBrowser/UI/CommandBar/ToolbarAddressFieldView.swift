@@ -233,10 +233,12 @@ private struct AddressReloadButton: View {
   }
 }
 
-/// AppKit draws the system focus halo around the same capsule that SwiftUI
-/// resizes. Keeping the view mounted lets its bounds follow every spring frame.
+/// A shared AppKit outline keeps the focus colour and width consistent across
+/// the capsule and suggestion panel. Its bounds follow every spring frame.
 private struct NativeAddressFocusRing: NSViewRepresentable {
   static let inset: CGFloat = 6
+  static let lineWidth: CGFloat = 3
+  static let colour = NSColor(srgbRed: 0.58, green: 0.70, blue: 0.84, alpha: 1)
 
   let isFocused: Bool
   let cornerRadius: CGFloat
@@ -273,12 +275,17 @@ private struct NativeAddressFocusRing: NSViewRepresentable {
     override func draw(_ dirtyRect: NSRect) {
       guard isFocused else { return }
       NSGraphicsContext.saveGraphicsState()
-      NSFocusRingPlacement.only.set()
       let capsule = bounds.insetBy(dx: NativeAddressFocusRing.inset,
                                    dy: NativeAddressFocusRing.inset)
-      NSBezierPath(roundedRect: capsule,
-                   xRadius: cornerRadius,
-                   yRadius: cornerRadius).fill()
+      // Centre the stroke outside the glass, preserving the system halo's
+      // footprint without its backdrop-dependent colour and compositing.
+      let offset = NativeAddressFocusRing.lineWidth / 2
+      let outline = NSBezierPath(roundedRect: capsule.insetBy(dx: -offset, dy: -offset),
+                                 xRadius: cornerRadius + offset,
+                                 yRadius: cornerRadius + offset)
+      outline.lineWidth = NativeAddressFocusRing.lineWidth
+      NativeAddressFocusRing.colour.setStroke()
+      outline.stroke()
       NSGraphicsContext.restoreGraphicsState()
     }
 
