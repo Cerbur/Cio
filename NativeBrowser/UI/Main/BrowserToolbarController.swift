@@ -19,20 +19,17 @@ private final class ToolbarChromeView: NSView {
   private let navigationContent = NSView()
   private let backButton: NSButton
   private let forwardButton: NSButton
-  private let reloadButton: NSButton
   private let addressView: NSHostingView<ToolbarAddressFieldView>
 
   init(
     sidebarButton: NSButton,
     backButton: NSButton,
     forwardButton: NSButton,
-    reloadButton: NSButton,
     addressView: NSHostingView<ToolbarAddressFieldView>
   ) {
     self.sidebarButton = sidebarButton
     self.backButton = backButton
     self.forwardButton = forwardButton
-    self.reloadButton = reloadButton
     self.addressView = addressView
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: AddressCapsuleLayout.height))
 
@@ -53,7 +50,7 @@ private final class ToolbarChromeView: NSView {
       navigationGroup.effectIsInteractive = true
     }
     navigationContent.frame = NSRect(x: 0, y: 0,
-                                     width: 2 + 3 * AddressCapsuleLayout.height,
+                                     width: 2 + 2 * AddressCapsuleLayout.height,
                                      height: AddressCapsuleLayout.height)
     navigationContent.autoresizingMask = [.width, .height]
     navigationGroup.contentView = navigationContent
@@ -62,13 +59,11 @@ private final class ToolbarChromeView: NSView {
     addSubview(navigationGroup)
     navigationContent.addSubview(backButton)
     navigationContent.addSubview(forwardButton)
-    navigationContent.addSubview(reloadButton)
     addSubview(addressView)
 
     let height = AddressCapsuleLayout.height
     backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
     forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
-    reloadButton.frame = NSRect(x: 1 + 2 * height, y: 0, width: height, height: height)
   }
 
   @available(*, unavailable)
@@ -89,16 +84,10 @@ private final class ToolbarChromeView: NSView {
   func setNavigationState(
     canGoBack: Bool,
     canGoForward: Bool,
-    isLoading: Bool,
-    hasSession: Bool,
-    reloadImage: NSImage?
+    hasSession: Bool
   ) {
     backButton.isEnabled = hasSession && canGoBack
     forwardButton.isEnabled = hasSession && canGoForward
-    reloadButton.image = reloadImage
-    reloadButton.toolTip = isLoading ? "Stop" : "Reload"
-    reloadButton.setAccessibilityLabel(isLoading ? "Stop" : "Reload")
-    reloadButton.isEnabled = hasSession
   }
 
   func applyLayout(
@@ -117,7 +106,7 @@ private final class ToolbarChromeView: NSView {
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
              on: sidebarGlass)
-    setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 3 * height, height: height),
+    setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
     setFrame(NSRect(x: addressLeft, y: y, width: addressWidth, height: height),
              on: addressView)
@@ -303,26 +292,24 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       selectedSessionObservations.removeAll()
       observedSession = nil
       applyNavigationToolbarState(
-        canGoBack: false, canGoForward: false, isLoading: false, hasSession: false)
+        canGoBack: false, canGoForward: false, hasSession: false)
       return
     }
 
     if observedSession !== session {
       selectedSessionObservations.removeAll()
       observedSession = session
-      Publishers.CombineLatest3(
+      Publishers.CombineLatest(
         session.$canGoBack,
-        session.$canGoForward,
-        session.$isLoading
+        session.$canGoForward
       )
       .receive(on: RunLoop.main)
-      .sink { [weak self, weak session] canGoBack, canGoForward, isLoading in
+      .sink { [weak self, weak session] canGoBack, canGoForward in
         MainActor.assumeIsolated {
           guard let self, let session, self.observedSession === session else { return }
           self.applyNavigationToolbarState(
             canGoBack: canGoBack,
             canGoForward: canGoForward,
-            isLoading: isLoading,
             hasSession: true)
         }
       }
@@ -332,24 +319,18 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     applyNavigationToolbarState(
       canGoBack: session.canGoBack,
       canGoForward: session.canGoForward,
-      isLoading: session.isLoading,
       hasSession: true)
   }
 
   private func applyNavigationToolbarState(
     canGoBack: Bool,
     canGoForward: Bool,
-    isLoading: Bool,
     hasSession: Bool
   ) {
     chromeView?.setNavigationState(
       canGoBack: canGoBack,
       canGoForward: canGoForward,
-      isLoading: isLoading,
-      hasSession: hasSession,
-      reloadImage: toolbarImage(
-        named: isLoading ? "xmark" : "arrow.clockwise",
-        description: isLoading ? "Stop" : "Reload"))
+      hasSession: hasSession)
   }
 
   private func toolbarImage(named symbol: String, description: String) -> NSImage? {
@@ -392,8 +373,6 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)))
     let forwardButton = makeButton(
       label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)))
-    let reloadButton = makeButton(
-      label: "Reload", symbol: "arrow.clockwise", action: #selector(reloadOrStop(_:)))
     let addressView = NSHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
       interaction: addressPresentation,
@@ -407,7 +386,6 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       sidebarButton: sidebarButton,
       backButton: backButton,
       forwardButton: forwardButton,
-      reloadButton: reloadButton,
       addressView: addressView)
     view.setContentHuggingPriority(.defaultLow, for: .horizontal)
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -476,7 +454,4 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
     workspace.selectedSession?.goForward()
   }
 
-  @objc private func reloadOrStop(_ sender: NSButton) {
-    workspace.selectedSession?.reloadOrStop()
-  }
 }

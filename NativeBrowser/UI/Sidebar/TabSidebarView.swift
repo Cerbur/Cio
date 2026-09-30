@@ -706,9 +706,6 @@ private struct SidebarTabRow: View {
             .font(.callout.weight(selected ? .semibold : .regular))
             .lineLimit(1)
           Spacer(minLength: 0)
-          if tab.isLoading {
-            ProgressView().controlSize(.mini)
-          }
         }
         .padding(.leading, 11)
         .frame(maxWidth: .infinity, minHeight: 36)
