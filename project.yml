@@ -159,6 +159,7 @@ targets:
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.
+      - path: NativeBrowser/UI/CommandBar/AddressAutocompleteModel.swift
       - path: NativeBrowser/UI/CommandBar/AddressFieldModel.swift
       - path: NativeBrowser/App/Logging.swift
       - path: NativeBrowser/App/URLLogSanitizer.swift

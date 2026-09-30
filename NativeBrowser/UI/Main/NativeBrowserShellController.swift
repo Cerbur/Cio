@@ -58,6 +58,7 @@ final class NativeBrowserShellController: NSViewController {
   private let shellSplitController: ShellSplitController
   private lazy var browserToolbar = BrowserToolbarController(
     workspace: runtime.workspaceStore,
+    history: runtime.historyService,
     browserView: browserItem.viewController.view,
     isSidebarCollapsed: { [weak self] in self?.sidebarItem.isCollapsed ?? true },
     onSidebarToggle: { [weak self] in self?.handleSidebarToggle() })

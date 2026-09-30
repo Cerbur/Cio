@@ -17,6 +17,14 @@ import SwiftUI
 /// The corner radius is half the height, making each end of the pill a circle.
 /// The favicon and reload icon sit on the respective cap centres.
 enum AddressCapsuleLayout {
+  static let rowHeight: CGFloat = 48
+  static let rowSpacing: CGFloat = 4
+  static let listInset: CGFloat = 8
+  static func panelHeight(rowCount: Int) -> CGFloat {
+    height + (rowCount > 0
+      ? 1 + 2 * listInset + CGFloat(rowCount) * rowHeight + CGFloat(rowCount - 1) * rowSpacing : 0)
+  }
+  static var maximumHeight: CGFloat { panelHeight(rowCount: AddressAutocompleteModel.rowLimit) }
   static let height: CGFloat = 36
   static let cornerRadius = height / 2
   static let unfocusedWidthRatio: CGFloat = 0.38
@@ -31,31 +39,59 @@ enum AddressCapsuleLayout {
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
   @ObservedObject var interaction: BrowserInteractionState
+  @ObservedObject var autocomplete: AddressAutocompleteModel
+  @State private var hoverGate = SpotlightHoverGate()
   var onFocusChange: (BrowserSession, Bool) -> Void
   var onReloadOrStop: (BrowserSession) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  private var rowCount: Int { interaction.isFocused ? autocomplete.suggestions.count : 0 }
+
   var body: some View {
     GeometryReader { geometry in
-      let isFocused = interaction.isFocused
-      let widthRatio = isFocused
+      let widthRatio = interaction.isFocused
         ? 1 : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio
-      let capsuleWidth = geometry.size.width * widthRatio
-      Group {
-        if let session = workspace.selectedSession {
-          addressField(for: session, width: capsuleWidth)
-        } else {
-          Color.clear
-            .accessibilityHidden(true)
+      let width = geometry.size.width * widthRatio
+      let height = AddressCapsuleLayout.panelHeight(rowCount: rowCount)
+      let radius: CGFloat = rowCount > 0 ? 20 : AddressCapsuleLayout.cornerRadius
+      if let session = workspace.selectedSession {
+        VStack(spacing: 0) {
+          addressField(for: session, width: width)
+          if rowCount > 0 {
+            Divider().padding(.horizontal, 16)
+            VStack(spacing: AddressCapsuleLayout.rowSpacing) {
+              ForEach(Array(autocomplete.suggestions.enumerated()), id: \.element.id) { index, suggestion in
+                suggestionRow(suggestion, index: index, session: session)
+              }
+            }
+            .padding(AddressCapsuleLayout.listInset)
+            .transition(.opacity)
+          }
         }
+        .frame(width: width, height: height, alignment: .top)
+        .mask(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .browserAddressFieldSurface(cornerRadius: radius)
+        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .shadow(color: .black.opacity(rowCount > 0 ? 0.18 : 0), radius: 16, y: 8)
+        .overlay {
+          NativeAddressFocusRing(isFocused: interaction.isFocused, cornerRadius: radius)
+            .padding(-NativeAddressFocusRing.inset)
+            .allowsHitTesting(false)
+        }
+        .frame(width: geometry.size.width, alignment: .top)
       }
-      .frame(width: capsuleWidth,
-             height: AddressCapsuleLayout.height)
-      .frame(width: geometry.size.width, height: AddressCapsuleLayout.height)
     }
-    .frame(height: AddressCapsuleLayout.height)
+    .frame(height: AddressCapsuleLayout.maximumHeight, alignment: .top)
     .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
                value: interaction.isFocused)
+    .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
+               value: rowCount)
+    .onChange(of: interaction.isFocused) { _, focused in
+      if focused, let session = workspace.selectedSession { autocomplete.begin(session.addressField.editText) }
+      else { autocomplete.end() }
+      hoverGate.reset(to: NSEvent.mouseLocation)
+    }
+    .onChange(of: workspace.selectedSession?.id) { _, _ in autocomplete.end() }
   }
 
   private func addressField(for session: BrowserSession, width: CGFloat) -> some View {
@@ -63,16 +99,23 @@ struct ToolbarAddressFieldView: View {
       AddressField(
         model: session.addressField,
         isFocused: interaction.isFocused,
-        onChange: { session.addressField.userChangedText($0) },
-        onSubmit: { session.submitAddressField() },
-        onEscape: { session.cancelAddressEditing() },
+        completion: autocomplete.isActive ? autocomplete.input : nil,
+        dropdownHeight: AddressCapsuleLayout.panelHeight(rowCount: rowCount) - AddressCapsuleLayout.height,
+        onChange: { text, isComposing, allowsCompletion in
+          session.addressField.userChangedText(text)
+          autocomplete.edit(text, isComposing: isComposing, allowsCompletion: allowsCompletion)
+          hoverGate.reset(to: NSEvent.mouseLocation)
+        },
+        onAcceptCompletion: { autocomplete.acceptCompletion() },
+        onMove: { autocomplete.move($0) },
+        onSubmit: { submit(session: session) },
+        onEscape: { autocomplete.end(); session.cancelAddressEditing() },
         onReloadOrStop: { onReloadOrStop(session) },
         onFocusChange: { onFocusChange(session, $0) }
       )
       .frame(width: max(0, width - 2 * AddressCapsuleLayout.endControlWidth),
              height: AddressCapsuleLayout.textIdealHeight)
-      .contentShape(Rectangle())
-      .allowsHitTesting(true)
+      .accessibilityIdentifier("address-input")
 
       TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
                      session: session, size: AddressCapsuleLayout.faviconSize)
@@ -91,24 +134,57 @@ struct ToolbarAddressFieldView: View {
                   y: AddressCapsuleLayout.height / 2)
     }
     .frame(width: width, height: AddressCapsuleLayout.height)
-    // Reveal only the contents inside the animating capsule. The glass is a
-    // separate background and keeps its own native rounded edge.
-    .mask {
-      RoundedRectangle(cornerRadius: AddressCapsuleLayout.cornerRadius,
-                       style: .continuous)
-    }
-    .browserAddressFieldSurface(cornerRadius: AddressCapsuleLayout.cornerRadius)
-    .contentShape(Capsule())
-    .overlay {
-      GeometryReader { geometry in
-        NativeAddressFocusRing(isFocused: interaction.isFocused)
-          .frame(width: geometry.size.width + NativeAddressFocusRing.inset * 2,
-                 height: AddressCapsuleLayout.height + NativeAddressFocusRing.inset * 2)
-          .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+  }
+
+  private func suggestionRow(_ suggestion: SpotlightSuggestion, index: Int,
+                             session: BrowserSession) -> some View {
+    Button { submit(session: session, mode: suggestion.mode) } label: {
+      HStack(spacing: 12) {
+        if case .website(let url) = suggestion.mode {
+          TabFaviconView(pageURL: url, session: nil, size: 18).frame(width: 24)
+        } else {
+          Image(systemName: suggestion.symbolName)
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.secondary).frame(width: 24)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(suggestion.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+          if !suggestion.subtitle.isEmpty {
+            Text(suggestion.subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+          }
+        }
+        Spacer(minLength: 0)
       }
-      .allowsHitTesting(false)
+      .padding(.horizontal, 12)
+      .frame(maxWidth: .infinity, minHeight: AddressCapsuleLayout.rowHeight, alignment: .leading)
+      .background {
+        if index == autocomplete.selectedIndex {
+          RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.accentColor.opacity(0.24))
+        }
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("address-suggestion-\(index)")
+    .accessibilityAddTraits(index == autocomplete.selectedIndex ? .isSelected : [])
+    .onContinuousHover { phase in
+      guard case .active = phase else { return }
+      if hoverGate.moved(to: NSEvent.mouseLocation) { autocomplete.select(index) }
     }
   }
+
+  private func submit(session: BrowserSession, mode: SpotlightMode? = nil) {
+    guard let mode = mode ?? autocomplete.selectedMode else {
+      session.submitAddressField()
+      autocomplete.end()
+      return
+    }
+    session.addressField.endEditing()
+    if case .openTab(let url) = mode.action { session.load(url) }
+    autocomplete.end()
+    session.focusPage()
+  }
+
 }
 
 /// Loading state comes from the selected session; the idle symbol rests upright.
@@ -163,18 +239,24 @@ private struct NativeAddressFocusRing: NSViewRepresentable {
   static let inset: CGFloat = 6
 
   let isFocused: Bool
+  let cornerRadius: CGFloat
 
   func makeNSView(context: Context) -> FocusRingView {
     let view = FocusRingView()
+    view.cornerRadius = cornerRadius
     view.isFocused = isFocused
     return view
   }
 
   func updateNSView(_ view: FocusRingView, context: Context) {
+    view.cornerRadius = cornerRadius
     view.isFocused = isFocused
   }
 
   final class FocusRingView: NSView {
+    var cornerRadius: CGFloat = AddressCapsuleLayout.cornerRadius {
+      didSet { if oldValue != cornerRadius { needsDisplay = true } }
+    }
     var isFocused = false {
       didSet {
         if oldValue != isFocused { needsDisplay = true }
@@ -195,8 +277,8 @@ private struct NativeAddressFocusRing: NSViewRepresentable {
       let capsule = bounds.insetBy(dx: NativeAddressFocusRing.inset,
                                    dy: NativeAddressFocusRing.inset)
       NSBezierPath(roundedRect: capsule,
-                   xRadius: AddressCapsuleLayout.cornerRadius,
-                   yRadius: AddressCapsuleLayout.cornerRadius).fill()
+                   xRadius: cornerRadius,
+                   yRadius: cornerRadius).fill()
       NSGraphicsContext.restoreGraphicsState()
     }
 

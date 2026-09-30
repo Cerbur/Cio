@@ -12,6 +12,22 @@ import Combine
 import SwiftUI
 
 @MainActor
+private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressFieldView> {
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let local = convert(point, from: superview)
+    let focused = rootView.interaction.isFocused
+    let rows = focused ? rootView.autocomplete.suggestions.count : 0
+    let width = bounds.width * (focused ? 1
+      : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio)
+    let height = AddressCapsuleLayout.panelHeight(rowCount: rows)
+    let rect = NSRect(x: (bounds.width - width) / 2,
+                      y: isFlipped ? 0 : bounds.height - height, width: width, height: height)
+    guard rect.contains(local) else { return nil }
+    return super.hitTest(point)
+  }
+}
+
+@MainActor
 private final class ToolbarChromeView: NSView {
   private let sidebarButton: NSButton
   private let sidebarGlass = NSGlassEffectView()
@@ -20,6 +36,7 @@ private final class ToolbarChromeView: NSView {
   private let backButton: NSButton
   private let forwardButton: NSButton
   private let addressView: NSHostingView<ToolbarAddressFieldView>
+  private var showsAddress = true
 
   init(
     sidebarButton: NSButton,
@@ -59,7 +76,8 @@ private final class ToolbarChromeView: NSView {
     addSubview(navigationGroup)
     navigationContent.addSubview(backButton)
     navigationContent.addSubview(forwardButton)
-    addSubview(addressView)
+    // Mounted above the content view rather than inside the 36-point toolbar.
+    // The same native field stays mounted while its unified surface expands.
 
     let height = AddressCapsuleLayout.height
     backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
@@ -73,6 +91,11 @@ private final class ToolbarChromeView: NSView {
 
   override var intrinsicContentSize: NSSize {
     NSSize(width: NSView.noIntrinsicMetric, height: AddressCapsuleLayout.height)
+  }
+
+  func setAddressVisible(_ visible: Bool) {
+    showsAddress = visible
+    addressView.isHidden = !visible
   }
 
   func setSidebarCollapsed(_ collapsed: Bool) {
@@ -108,8 +131,14 @@ private final class ToolbarChromeView: NSView {
              on: sidebarGlass)
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
-    setFrame(NSRect(x: addressLeft, y: y, width: addressWidth, height: height),
-             on: addressView)
+    if let contentView = window?.contentView?.superview {
+      if addressView.superview !== contentView { contentView.addSubview(addressView, positioned: .above, relativeTo: nil) }
+      let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
+      let panelHeight = AddressCapsuleLayout.maximumHeight
+      let originY = contentView.isFlipped ? anchor.minY : anchor.maxY - panelHeight
+      addressView.isHidden = !showsAddress
+      setFrame(NSRect(x: anchor.minX, y: originY, width: addressWidth, height: panelHeight), on: addressView)
+    }
   }
 
   private func setFrame(_ frame: NSRect, on view: NSView) {
@@ -134,6 +163,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   }
 
   private let workspace: BrowserWorkspaceStore
+  private let addressAutocomplete: AddressAutocompleteModel
   private let browserView: NSView
   private let isSidebarCollapsed: () -> Bool
   private let onSidebarToggle: () -> Void
@@ -151,11 +181,13 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
 
   init(
     workspace: BrowserWorkspaceStore,
+    history: HistoryService,
     browserView: NSView,
     isSidebarCollapsed: @escaping () -> Bool,
     onSidebarToggle: @escaping () -> Void
   ) {
     self.workspace = workspace
+    self.addressAutocomplete = AddressAutocompleteModel(history: history)
     self.browserView = browserView
     self.isSidebarCollapsed = isSidebarCollapsed
     self.onSidebarToggle = onSidebarToggle
@@ -212,6 +244,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
   }
 
   func setSpaceControlsVisible(_ visible: Bool) {
+    chromeView?.setAddressVisible(visible)
     toolbar?.items.forEach { item in
       item.isHidden = item.itemIdentifier == ToolbarID.sectionPlaceholder
         ? visible : !visible
@@ -233,6 +266,7 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
       if observedSession !== workspace.selectedSession, addressPresentation.isFocused {
+        addressAutocomplete.end()
         addressPresentation.isFocused = false
         window?.makeFirstResponder(nil)
         observedSession?.addressFieldFocusChanged(false)
@@ -373,15 +407,17 @@ final class BrowserToolbarController: NSObject, NSToolbarDelegate {
       label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)))
     let forwardButton = makeButton(
       label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)))
-    let addressView = NSHostingView(rootView: ToolbarAddressFieldView(
+    let addressView = AddressOverlayHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
       interaction: addressPresentation,
+      autocomplete: addressAutocomplete,
       onFocusChange: { [weak self] session, focused in
         self?.handle(.addressFocusChanged(session, focused))
       },
       onReloadOrStop: { [weak self] session in
         self?.handle(.addressReloadOrStop(session))
       }))
+    addressView.safeAreaRegions = []
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,

@@ -31,7 +31,11 @@ struct AddressField: NSViewRepresentable {
   var isFocused: Bool
 
   /// Called when the user changes the text (before any submit).
-  var onChange: (String) -> Void
+  var completion: SpotlightInputState? = nil
+  var dropdownHeight: CGFloat = 0
+  var onChange: (String, Bool, Bool) -> Void
+  var onAcceptCompletion: () -> Void = {}
+  var onMove: (Int) -> Void = { _ in }
 
   /// Called when the user presses Return.
   var onSubmit: () -> Void
@@ -96,8 +100,11 @@ struct AddressField: NSViewRepresentable {
     // user's selection and disturb an in-flight IME composition, so the text is
     // only written when it genuinely differs.
     let displayedText = isFocused
-      ? model.editText : model.compactDisplayText(for: model.committedURL)
-    field.setDisplayText(displayedText)
+      ? (completion?.text ?? model.editText) : model.compactDisplayText(for: model.committedURL)
+    if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
+      field.setDisplayText(displayedText)
+      context.coordinator.applyCompletion(to: field)
+    }
   }
 
   func makeCoordinator() -> Coordinator {
@@ -120,6 +127,24 @@ struct AddressField: NSViewRepresentable {
     private(set) var isFocused = false
     private weak var addressField: NativeBrowserAddressField?
     private let log = AppLog.navigation
+    private var lastAppliedRevision = -1
+    private var isApplyingPreview = false
+    private var isDeleting = false
+
+    func applyCompletion(to field: NativeBrowserAddressField) {
+      guard parent.isFocused, let input = parent.completion,
+            lastAppliedRevision != input.revision else { return }
+      let editor = field.currentEditor() as? NSTextView
+      guard editor?.hasMarkedText() != true else { return }
+      lastAppliedRevision = input.revision
+      isApplyingPreview = true
+      defer { isApplyingPreview = false }
+      field.setDisplayText(input.text)
+      if let range = input.selection {
+        editor?.setSelectedRange(range)
+        editor?.scrollRangeToVisible(range)
+      }
+    }
 
     init(parent: AddressField) {
       self.parent = parent
@@ -204,6 +229,12 @@ struct AddressField: NSViewRepresentable {
           }
           return event
         }
+        if self.isFocused, event.window === window {
+          var dropdownRect = capsuleRect
+          dropdownRect.origin.y -= self.parent.dropdownHeight
+          dropdownRect.size.height = self.parent.dropdownHeight
+          if dropdownRect.contains(event.locationInWindow) { return event }
+        }
         if self.isFocused {
           window.makeFirstResponder(nil)
           // Some click targets never take first responder, so AppKit may not
@@ -227,6 +258,7 @@ struct AddressField: NSViewRepresentable {
       textView: NSTextView,
       doCommandBy commandSelector: Selector
     ) -> Bool {
+      if textView.hasMarkedText() { return false }
       switch commandSelector {
       case #selector(NSResponder.insertNewline(_:)):
         parent.onSubmit()
@@ -237,14 +269,34 @@ struct AddressField: NSViewRepresentable {
         // field's end-editing callback. Keep the toolbar state in sync.
         reportFocusChange(false)
         return true
+      case #selector(NSResponder.moveUp(_:)):
+        parent.onMove(-1)
+        return true
+      case #selector(NSResponder.moveDown(_:)):
+        parent.onMove(1)
+        return true
+      case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.moveRight(_:)),
+           #selector(NSResponder.moveToEndOfLine(_:)):
+        guard let range = parent.completion?.selection, range.length > 0,
+              textView.selectedRange() == range else { return false }
+        parent.onAcceptCompletion()
+        return true
+      case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
+        isDeleting = true
+        return false
       default:
         return false
       }
     }
 
     func controlTextDidChange(_ notification: Notification) {
-      guard let field = notification.object as? NSTextField else { return }
-      parent.onChange(field.stringValue)
+      guard !isApplyingPreview, let field = notification.object as? NSTextField else { return }
+      let editor = field.currentEditor() as? NSTextView
+      let isComposing = editor?.hasMarkedText() == true
+      let atEnd = editor?.selectedRange() == NSRange(location: (field.stringValue as NSString).length, length: 0)
+      let allowsCompletion = !isComposing && !isDeleting && atEnd
+      isDeleting = false
+      parent.onChange(field.stringValue, isComposing, allowsCompletion)
     }
 
     func controlTextDidBeginEditing(_ notification: Notification) {
