@@ -45,6 +45,7 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 
 @MainActor
 private final class ToolbarChromeView: NSView {
+  var onGeometryRequest: (() -> Void)?
   private let sidebarButton: NSButton
   private let sidebarGlass: NSHostingView<ToolbarGlassControlView>
   private let navigationGroup: NSHostingView<ToolbarGlassControlView>
@@ -120,6 +121,14 @@ private final class ToolbarChromeView: NSView {
 
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
+    if !showsWindowControls {
+      // Pane chrome overlaps the shell's toolbar row. Only its visible page
+      // controls handle input; empty space must reach the shell's sidebar and
+      // window controls (and retain the shell's window-drag behavior).
+      guard presentation.isVisible, let hit,
+            hit.isDescendant(of: navigationGroup) else { return nil }
+      return hit
+    }
     if let hit {
       if !sidebarPresentation.isVisible, hit.isDescendant(of: sidebarGlass) { return self }
       if !presentation.isVisible, hit.isDescendant(of: navigationGroup) { return self }
@@ -193,6 +202,17 @@ private final class ToolbarChromeView: NSView {
     forwardButton.isEnabled = hasSession && canGoForward
   }
 
+  private func windowControlsTrailingEdge(in view: NSView) -> CGFloat? {
+    guard showsWindowControls else { return nil }
+    // Keep this reservation while library panels hide the shell controls.
+    // Pane controls may restore before the sidebar button becomes visible;
+    // their layout must not depend on the order of those visibility updates.
+    // Refresh the shell first: sidebar-collapse notifications can reach pane
+    // toolbars before the shell has laid out its window controls.
+    onGeometryRequest?()
+    return view.convert(sidebarGlass.bounds, from: sidebarGlass).maxX
+  }
+
   func applyLayout(
     browserRect: NSRect, sidebarAnchor: NSRect
   ) {
@@ -202,8 +222,15 @@ private final class ToolbarChromeView: NSView {
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
     let sidebarLeft = max(trafficLightsRight + 10, sidebarAnchor.minX - height - 10)
-    let navigationLeft = showsWindowControls
+    let defaultNavigationLeft = showsWindowControls
       ? max(browserRect.minX + 7, sidebarLeft + height + 10) : browserRect.minX + 7
+    // Pane and shell toolbars share the chrome host. Reserve the shell's actual
+    // window-control area in this pane's coordinates, including during motion.
+    let windowControlsRight = showsWindowControls ? nil : superview?.subviews
+      .compactMap { $0 as? ToolbarChromeView }
+      .first(where: { $0.showsWindowControls })?
+      .windowControlsTrailingEdge(in: self)
+    let navigationLeft = max(defaultNavigationLeft, windowControlsRight.map { $0 + 10 } ?? defaultNavigationLeft)
     // Keep the host at its maximum width. SwiftUI animates the capsule inside
     // it so the native glass is never clipped by the host's rectangular bounds.
     let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
@@ -686,6 +713,7 @@ final class BrowserToolbarController: NSObject {
     view.setAccessibilityRole(.toolbar)
     view.setAccessibilityLabel(tabID == nil ? "Toolbar" : "Pane Toolbar")
     chromeView = view
+    view.onGeometryRequest = { [weak self] in self?.applyCurrentLayout() }
     if let session = boundSession {
       applyNavigationToolbarState(canGoBack: session.canGoBack,
                                   canGoForward: session.canGoForward, hasSession: true)
