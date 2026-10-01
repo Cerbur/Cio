@@ -270,6 +270,11 @@ final class BrowserSessionManager: ObservableObject {
     surfaceHost?.previewSplit(on: side)
   }
 
+  func commitSplitPreview(_ commit: () -> Bool) -> Bool {
+    guard let surfaceHost else { return commit() }
+    return surfaceHost.commitSplitPreview(commit)
+  }
+
   /// Keeps one container for every live session and makes only the workspace's
   /// effective selected tab visible. Inactive Space sessions remain mounted and
   /// live; switching Spaces never reaches BrowserBridge::CreateBrowser.

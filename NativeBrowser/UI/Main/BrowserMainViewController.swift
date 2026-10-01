@@ -112,9 +112,10 @@ final class BrowserMainViewController: NSViewController {
     }
     drag.onSplitDrop = { [weak self] id in
       guard let self, let side = self.splitDropSide else { return false }
-      self.runtime.workspaceStore.sessionManager.previewSplit(on: nil)
       self.splitDropSide = nil
-      return self.runtime.workspaceStore.splitTab(id, on: side)
+      return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
+        self.runtime.workspaceStore.splitTab(id, on: side)
+      }
     }
     drag.onPreviewEnd = { [weak self] in
       self?.splitDropSide = nil

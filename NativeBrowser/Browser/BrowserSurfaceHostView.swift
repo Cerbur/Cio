@@ -56,7 +56,13 @@ final class BrowserSurfaceHostView: NSView {
   private var split: BrowserSplitLayout?
   private var isCovered = false
   private var previewSide: BrowserSplitLayout.Side?
+  private var isCommittingSplitPreview = false
   private var resizingFraction: CGFloat?
+  private var toolbarFrames: [UUID: CGRect] = [:]
+  private var selectedToolbarFrame: CGRect?
+  private var toolbarTargetFrames: [UUID: CGRect] = [:]
+  private var selectedToolbarTargetFrame: CGRect?
+  nonisolated(unsafe) private var toolbarAnimationTimer: Timer?
   private weak var workspace: BrowserWorkspaceStore?
   private var history: HistoryService?
   private var toolbars: [UUID: BrowserToolbarController] = [:]
@@ -114,7 +120,7 @@ final class BrowserSurfaceHostView: NSView {
       if !containers.values.contains(where: { $0 === container }) { container.removeFromSuperview() }
     }
     if pairChanged { rebuildToolbars() }
-    applySurfaceLayout()
+    applySurfaceLayout(animatedToolbar: isCommittingSplitPreview)
   }
 
   override func layout() {
@@ -126,10 +132,27 @@ final class BrowserSurfaceHostView: NSView {
   func previewSplit(on side: BrowserSplitLayout.Side?) {
     guard previewSide != side else { return }
     previewSide = side
-    applySurfaceLayout()
+    applySurfaceLayout(animatedToolbar: true)
   }
 
-  private func applySurfaceLayout() {
+  /// Consume the preview without first presenting the full-width page. The
+  /// workspace publishes the committed pair synchronously inside this closure.
+  func commitSplitPreview(_ commit: () -> Bool) -> Bool {
+    let hadPreview = previewSide != nil
+    if hadPreview, let selectedTabID {
+      // Transfer the shell's current animated frame to the surviving pane's
+      // toolbar, including a drop before the preview animation has finished.
+      toolbarFrames[selectedTabID] = selectedToolbarFrame ?? bounds
+    }
+    previewSide = nil
+    isCommittingSplitPreview = hadPreview
+    defer { isCommittingSplitPreview = false }
+    let committed = commit()
+    if !committed { applySurfaceLayout(animatedToolbar: hadPreview) }
+    return committed
+  }
+
+  private func applySurfaceLayout(animatedToolbar: Bool = false) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
@@ -144,10 +167,9 @@ final class BrowserSurfaceHostView: NSView {
         // Keep every Chromium surface at its committed size during tab placement.
         place(container, in: id == selectedTabID ? frames.survivor : .zero, cropOnly: true)
       }
-      for id in toolbars.keys {
-        layoutToolbar(for: id, in: frames.survivor, visible: id == selectedTabID)
-      }
-      onSelectedSurfaceFrameChange?(frames.survivor)
+      let paneFrames = toolbars.keys.filter { $0 == selectedTabID }
+        .reduce(into: [UUID: CGRect]()) { $0[$1] = frames.survivor }
+      updateToolbarLayout(panes: paneFrames, selectedFrame: frames.survivor, animated: animatedToolbar)
     } else if let split {
       var shown = split
       shown.fraction = resizingFraction ?? split.fraction
@@ -157,19 +179,86 @@ final class BrowserSurfaceHostView: NSView {
         // Divider drags resize Chromium immediately so responsive page layout
         // previews at the actual pane width, rather than cropping the old page.
         place(container, in: frame, cropOnly: false)
-        layoutToolbar(for: id, in: frame, visible: true)
       }
       divider.frame = frames.divider
       divider.isHidden = false
-      onSelectedSurfaceFrameChange?(nil)
+      updateToolbarLayout(panes: [split.leftTabID: frames.left, split.rightTabID: frames.right],
+                          selectedFrame: nil, animated: animatedToolbar)
     } else {
       divider.isHidden = true
       if let selectedTabID, let container = containers[selectedTabID] {
         place(container, in: bounds, cropOnly: false)
       }
-      onSelectedSurfaceFrameChange?(nil)
+      updateToolbarLayout(panes: [:], selectedFrame: nil, animated: animatedToolbar)
     }
     // Inactive containers keep their last committed geometry and their live page.
+  }
+
+  /// Interpolate only toolbar geometry. Chromium crops/resizes keep their own
+  /// timing, and splitter tracking continues to update page widths immediately.
+  private func updateToolbarLayout(panes: [UUID: CGRect], selectedFrame: CGRect?, animated: Bool) {
+    guard panes != toolbarTargetFrames || selectedFrame != selectedToolbarTargetFrame else {
+      // Layout may be repeated while a window or overlay is being attached.
+      // Preserve an active transition; otherwise refresh the mounted controls.
+      if toolbarAnimationTimer == nil { applyToolbarLayout(panes: panes, selectedFrame: selectedFrame) }
+      return
+    }
+    toolbarTargetFrames = panes
+    selectedToolbarTargetFrame = selectedFrame
+    toolbarAnimationTimer?.invalidate()
+    toolbarAnimationTimer = nil
+    for id in toolbars.keys where panes[id] == nil {
+      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: false)
+    }
+    guard animated, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+      applyToolbarLayout(panes: panes, selectedFrame: selectedFrame)
+      return
+    }
+    let startFrames = toolbarFrames
+    let startSelected = selectedToolbarFrame ?? bounds
+    let endSelected = selectedFrame ?? bounds
+    // Newly mounted pane controls must start at the transferred preview frame
+    // immediately, rather than drawing their default frame until the first tick.
+    let initialFrames = panes.map { id, end in (id, startFrames[id] ?? end) }
+    applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: initialFrames), selectedFrame: startSelected)
+    let startTime = ProcessInfo.processInfo.systemUptime
+    let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        let progress = min(1, (ProcessInfo.processInfo.systemUptime - startTime) / 0.3)
+        // Smooth acceleration/deceleration matches the glass block's morph.
+        let amount = CGFloat(progress * progress * (3 - 2 * progress))
+        let current = panes.map { id, end in
+          (id, Self.interpolatedFrame(from: startFrames[id] ?? end, to: end, amount: amount))
+        }
+        self.applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: current),
+          selectedFrame: progress == 1 ? selectedFrame : Self.interpolatedFrame(
+            from: startSelected, to: endSelected, amount: amount))
+        if progress == 1 {
+          self.toolbarAnimationTimer?.invalidate()
+          self.toolbarAnimationTimer = nil
+        }
+      }
+    }
+    toolbarAnimationTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private func applyToolbarLayout(panes: [UUID: CGRect], selectedFrame: CGRect?) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    toolbarFrames = panes
+    selectedToolbarFrame = selectedFrame
+    for (id, frame) in panes { layoutToolbar(for: id, in: frame, visible: true) }
+    onSelectedSurfaceFrameChange?(selectedFrame)
+  }
+
+  private static func interpolatedFrame(from start: CGRect, to end: CGRect, amount: CGFloat) -> CGRect {
+    CGRect(x: start.minX + (end.minX - start.minX) * amount,
+           y: start.minY + (end.minY - start.minY) * amount,
+           width: start.width + (end.width - start.width) * amount,
+           height: start.height + (end.height - start.height) * amount)
   }
 
   private func layoutToolbar(for id: UUID, in frame: CGRect, visible: Bool) {
@@ -273,6 +362,7 @@ final class BrowserSurfaceHostView: NSView {
   }
 
   deinit {
+    toolbarAnimationTimer?.invalidate()
     if let paneClickMonitor { NSEvent.removeMonitor(paneClickMonitor) }
   }
 

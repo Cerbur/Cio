@@ -127,6 +127,9 @@ final class NativeBrowserShellController: NSViewController {
     shellView.onLayout = { [weak self] in self?.browserToolbar.browserGeometryDidChange() }
     runtime.workspaceStore.sessionManager.onSelectedSurfaceFrameChange = { [weak self] host, frame in
       guard let self else { return }
+      // A split commit replaces the shell controls with pane controls before
+      // resetting the hidden shell's geometry; do not flash them at full width.
+      self.updateSplitToolbar()
       let local = frame.map { host.convert($0, to: self.browserItem.viewController.view) }
       self.browserToolbar.setBrowserViewportFrame(local)
     }
