@@ -308,6 +308,7 @@ final class BrowserToolbarController: NSObject {
     isSidebarCollapsed: @escaping () -> Bool = { true },
     onSidebarToggle: @escaping () -> Void = {},
     tabID: UUID? = nil,
+    initiallyVisible: Bool = true,
     isActivePane: (() -> Bool)? = nil,
     onActivatePane: (() -> Void)? = nil
   ) {
@@ -320,6 +321,7 @@ final class BrowserToolbarController: NSObject {
     self.isSidebarCollapsed = isSidebarCollapsed
     self.onSidebarToggle = onSidebarToggle
     super.init()
+    toolbarPresentation.setVisible(initiallyVisible, animated: false)
     browserView.postsFrameChangedNotifications = true
     browserFrameObservation = NotificationCenter.default.publisher(
       for: NSView.frameDidChangeNotification,

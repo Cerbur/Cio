@@ -283,8 +283,7 @@ final class NativeBrowserShellController: NSViewController {
 
   private func updateSplitToolbar() {
     browserToolbar.setPageControlsVisible(
-      runtime.presentedInternalPanel == nil && runtime.workspaceStore.activeSplit == nil,
-      animated: false)
+      runtime.presentedInternalPanel == nil && runtime.workspaceStore.activeSplit == nil)
   }
 
   private func observeSidebarCollapse() {

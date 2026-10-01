@@ -109,14 +109,19 @@ final class BrowserSurfaceHostView: NSView {
   func setPresentationCovered(_ covered: Bool) {
     guard isCovered != covered else { return }
     isCovered = covered
-    for toolbar in toolbars.values { toolbar.setSpaceControlsVisible(!covered, animated: false) }
-    for button in unsplitButtons.values { button.isHidden = covered }
+    for id in toolbars.keys {
+      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: toolbarFrames[id] != nil)
+    }
   }
 
   func present(containers: [UUID: ChromiumContainerView], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
     self.containers = containers
     self.selectedTabID = selectedTabID
     let pairChanged = self.split?.tabIDs != split?.tabIDs
+    if self.split != nil, split == nil, let selectedTabID,
+       let frame = toolbarFrames[selectedTabID] {
+      selectedToolbarFrame = frame
+    }
     self.split = split
     for (tabID, container) in containers {
       if container.superview !== self { addSubview(container, positioned: .below, relativeTo: divider) }
@@ -127,7 +132,7 @@ final class BrowserSurfaceHostView: NSView {
       if !containers.values.contains(where: { $0 === container }) { container.removeFromSuperview() }
     }
     if pairChanged { rebuildToolbars() }
-    applySurfaceLayout(animatedPresentation: isCommittingSplitPreview)
+    applySurfaceLayout(animatedPresentation: isCommittingSplitPreview || pairChanged)
   }
 
   override func layout() {
@@ -238,9 +243,6 @@ final class BrowserSurfaceHostView: NSView {
     surfaceTargets = surfaces
     presentationAnimationTimer?.invalidate()
     presentationAnimationTimer = nil
-    for id in toolbars.keys where panes[id] == nil {
-      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: false)
-    }
     guard animated, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
       applySurfacePlacements(surfaces)
       applyToolbarLayout(panes: panes, selectedFrame: selectedFrame)
@@ -256,7 +258,8 @@ final class BrowserSurfaceHostView: NSView {
     // New panes adopt their committed size immediately. Existing panes retain
     // their live viewport while their visible crop moves toward its destination.
     applySurfacePlacements(interpolatedSurfaces(from: startSurfaces, to: surfaces, amount: 0))
-    applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: initialFrames), selectedFrame: startSelected)
+    applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: initialFrames), selectedFrame: startSelected,
+                       animatedVisibility: true)
     let startTime = ProcessInfo.processInfo.systemUptime
     let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
@@ -311,13 +314,16 @@ final class BrowserSurfaceHostView: NSView {
     }
   }
 
-  private func applyToolbarLayout(panes: [UUID: CGRect], selectedFrame: CGRect?) {
+  private func applyToolbarLayout(panes: [UUID: CGRect], selectedFrame: CGRect?, animatedVisibility: Bool = false) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
+    for id in toolbars.keys {
+      layoutToolbar(for: id, in: panes[id] ?? toolbarFrames[id] ?? bounds,
+                    visible: panes[id] != nil, animatedVisibility: animatedVisibility)
+    }
     toolbarFrames = panes
     selectedToolbarFrame = selectedFrame
-    for (id, frame) in panes { layoutToolbar(for: id, in: frame, visible: true) }
     onSelectedSurfaceFrameChange?(selectedFrame)
   }
 
@@ -328,10 +334,12 @@ final class BrowserSurfaceHostView: NSView {
            height: start.height + (end.height - start.height) * amount)
   }
 
-  private func layoutToolbar(for id: UUID, in frame: CGRect, visible: Bool) {
+  private func layoutToolbar(for id: UUID, in frame: CGRect, visible: Bool, animatedVisibility: Bool = false) {
     guard let toolbar = toolbars[id] else { return }
-    toolbar.setSpaceControlsVisible(visible && !isCovered, animated: false)
-    unsplitButtons[id]?.isHidden = !visible || isCovered
+    toolbar.setSpaceControlsVisible(visible && !isCovered, animated: animatedVisibility)
+    if let button = unsplitButtons[id] {
+      setUnsplitButtonVisible(button, visible && !isCovered, animated: animatedVisibility)
+    }
     if toolbarGuides[id]?.frame != frame { toolbarGuides[id]?.frame = frame }
     guard visible, let contentView = chromeOverlayHost else { return }
     if toolbar.view.superview !== contentView {
@@ -374,24 +382,58 @@ final class BrowserSurfaceHostView: NSView {
     container.layer?.mask = mask
   }
 
+  private func setUnsplitButtonVisible(_ button: NSButton, _ visible: Bool, animated: Bool) {
+    guard button.isEnabled != visible else { return }
+    button.isEnabled = visible
+    guard animated, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+      button.alphaValue = visible ? 1 : 0
+      button.isHidden = !visible
+      return
+    }
+    if visible { button.isHidden = false }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.25
+      button.animator().alphaValue = visible ? 1 : 0
+    } completionHandler: { [weak button] in
+      MainActor.assumeIsolated {
+        if let button, !button.isEnabled { button.isHidden = true }
+      }
+    }
+  }
+
   private func rebuildToolbars() {
-    for toolbar in toolbars.values { toolbar.removeFromPresentation() }
-    for guide in toolbarGuides.values { guide.removeFromSuperview() }
-    for button in unsplitButtons.values { button.removeFromSuperview() }
-    toolbars.removeAll()
-    toolbarGuides.removeAll()
-    unsplitButtons.removeAll()
+    let desiredIDs = Set(split?.tabIDs ?? [])
+    let animates = window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    for id in Array(toolbars.keys) where !desiredIDs.contains(id) {
+      guard let toolbar = toolbars.removeValue(forKey: id) else { continue }
+      let guide = toolbarGuides.removeValue(forKey: id)
+      let button = unsplitButtons.removeValue(forKey: id)
+      toolbar.setSpaceControlsVisible(false, animated: animates)
+      if let button { setUnsplitButtonVisible(button, false, animated: animates) }
+      // Keep the glass and address overlay mounted until their exit finishes.
+      if animates {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+          toolbar.dispose()
+          guide?.removeFromSuperview()
+          button?.removeFromSuperview()
+        }
+      } else {
+        toolbar.dispose()
+        guide?.removeFromSuperview()
+        button?.removeFromSuperview()
+      }
+    }
     guard let split, let workspace, let history else { return }
-    for id in split.tabIDs {
+    for id in split.tabIDs where toolbars[id] == nil {
       let guide = NSView()
       guide.isHidden = true
       addSubview(guide)
       toolbarGuides[id] = guide
       let toolbar = BrowserToolbarController(workspace: workspace, history: history, browserView: guide,
-        isSidebarCollapsed: { true }, onSidebarToggle: {}, tabID: id)
+        isSidebarCollapsed: { true }, onSidebarToggle: {}, tabID: id, initiallyVisible: false)
       if let contentView = chromeOverlayHost { contentView.addSubview(toolbar.view, positioned: .above, relativeTo: nil) }
       toolbars[id] = toolbar
-      if let window { toolbar.install(in: window, showsSpaceToolbar: !isCovered) }
+      if let window { toolbar.install(in: window, showsSpaceToolbar: false) }
       let button = NSButton(image: NSImage(systemSymbolName: "rectangle", accessibilityDescription: "Exit Split View")!,
                             target: self, action: #selector(exitSplit(_:)))
       button.bezelStyle = .inline
@@ -399,7 +441,9 @@ final class BrowserSurfaceHostView: NSView {
       button.identifier = NSUserInterfaceItemIdentifier(id.uuidString)
       button.toolTip = "Exit Split View"
       button.setAccessibilityLabel("Exit Split View")
-      button.isHidden = isCovered
+      button.isEnabled = false
+      button.isHidden = true
+      button.alphaValue = 0
       if let contentView = chromeOverlayHost { contentView.addSubview(button, positioned: .above, relativeTo: nil) }
       unsplitButtons[id] = button
     }
