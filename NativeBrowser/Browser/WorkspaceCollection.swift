@@ -243,7 +243,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   var activeSplit: BrowserSplitLayout? {
-    selectedSpace?.splitGroups.first { $0.contains(selectedTabID) }
+    selectedTabID.flatMap { splitGroup(containing: $0) }
   }
 
   func splitGroup(containing tabID: UUID) -> BrowserSplitLayout? {
@@ -251,40 +251,55 @@ struct WorkspaceCollection: Equatable, Sendable {
     return space(withID: spaceID)?.splitGroups.first { $0.contains(tabID) }
   }
 
+  func canSplit(with tabID: UUID) -> Bool {
+    guard let selectedTabID, selectedTabID != tabID,
+          tabsByID[tabID] != nil,
+          globalPinnedTabIDs.contains(tabID) || selectedSpace?.tabIDs.contains(tabID) == true,
+          splitGroup(containing: tabID) == nil else { return false }
+    return activeSplit?.contains(tabID) != true
+  }
+
   @discardableResult
   mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
-    guard let selectedTabID, selectedTabID != tabID,
-          let spaceIndex = index(of: selectedSpaceID),
-          spaces[spaceIndex].tabIDs.contains(tabID),
-          !globalPinnedTabIDs.contains(selectedTabID), !globalPinnedTabIDs.contains(tabID),
-          activeSplit?.contains(tabID) != true else { return false }
-    let prior = activeSplit
+    guard canSplit(with: tabID), let selectedTabID,
+          let spaceIndex = index(of: selectedSpaceID) else { return false }
+    let pinnedIDs = Set(globalPinnedTabIDs + spaces[spaceIndex].pinnedTabIDs)
+    let selectedIsPinned = pinnedIDs.contains(selectedTabID)
+    let incomingIsPinned = pinnedIDs.contains(tabID)
+    // Pin pages get independent identities/runtimes. Existing pins and their
+    // groups remain untouched; a temporary member supplies the combined row.
+    let survivorID = selectedIsPinned ? duplicateForSplit(selectedTabID) : selectedTabID
+    let incomingID = incomingIsPinned ? duplicateForSplit(tabID) : tabID
+    let anchorID = selectedIsPinned ? incomingID : survivorID
+    let prior = splitGroup(containing: anchorID)
     let group = BrowserSplitLayout(id: prior?.id ?? UUID(),
-      leftTabID: side == .left ? tabID : selectedTabID,
-      rightTabID: side == .right ? tabID : selectedTabID,
-      focusedTabID: tabID)
+      leftTabID: side == .left ? incomingID : survivorID,
+      rightTabID: side == .right ? incomingID : survivorID,
+      focusedTabID: incomingID)
     let space = spaces[spaceIndex]
-    let oldIndex = space.tabIDs.firstIndex(of: selectedTabID)!
+    let oldIndex = space.tabIDs.firstIndex(of: anchorID)!
     let insertAt = space.tabIDs.prefix(oldIndex).filter { !group.contains($0) }.count
-    spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) || $0.contains(selectedTabID) }
+    spaces[spaceIndex].splitGroups.removeAll { $0.contains(incomingID) || $0.contains(survivorID) }
     spaces[spaceIndex].tabIDs.removeAll { group.contains($0) }
     spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs, at: insertAt)
-    // A combined row belongs to the survivor's tier, never straddling pins and
-    // temporary tabs. All other tabs retain their tier and relative order.
-    let pinned = Set(space.pinnedTabIDs)
-    let pinnedGroup = pinned.contains(selectedTabID)
-    spaces[spaceIndex].pinnedTabIDs = spaces[spaceIndex].tabIDs.filter {
-      group.contains($0) ? pinnedGroup : pinned.contains($0)
-    }
     spaces[spaceIndex].splitGroups.append(group)
-    _ = selectTab(id: tabID)
+    _ = selectTab(id: incomingID)
     validateInvariants()
     return true
   }
 
+  private mutating func duplicateForSplit(_ tabID: UUID) -> UUID {
+    let source = tabsByID[tabID]!
+    let copy = BrowserTab(title: source.title, url: source.url)
+    _ = insertTab(copy, in: selectedSpaceID,
+      at: newTabInsertionIndex(in: selectedSpaceID), select: false)
+    return copy.id
+  }
+
   @discardableResult
   mutating func setSplitFraction(_ fraction: CGFloat) -> Bool {
-    guard fraction.isFinite, let spaceIndex = index(of: selectedSpaceID),
+    guard fraction.isFinite, let selectedTabID,
+          let owner = spaceID(containing: selectedTabID), let spaceIndex = index(of: owner),
           let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(selectedTabID) }) else { return false }
     spaces[spaceIndex].splitGroups[groupIndex].fraction = min(max(fraction, 0.01), 0.99)
     return true
@@ -305,7 +320,11 @@ struct WorkspaceCollection: Equatable, Sendable {
     guard let group = splitGroup(containing: tabID),
           let owner = spaceID(containing: group.leftTabID) else { return false }
     _ = endSplit(keeping: group.leftTabID)
-    _ = select(spaceID: owner, tabID: group.leftTabID)
+    if globalPinnedTabIDs.contains(group.leftTabID) {
+      _ = selectTab(id: group.leftTabID)
+    } else {
+      _ = select(spaceID: owner, tabID: group.leftTabID)
+    }
     return true
   }
 
@@ -327,7 +346,11 @@ struct WorkspaceCollection: Equatable, Sendable {
     guard let group = splitGroup(containing: tabID), !group.contains(targetID) else { return false }
     let destination: UUID
     switch tier {
-    case .global: return false
+    case .global:
+      guard globalPinnedTabIDs.count + group.tabIDs.filter({ !globalPinnedTabIDs.contains($0) }).count
+        <= Self.globalPinnedTabLimit,
+        let owner = spaceID(containing: group.leftTabID) else { return false }
+      destination = owner
     case .space(let id), .temporary(let id): destination = id
     }
     guard index(of: destination) != nil,
@@ -427,6 +450,13 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   // MARK: - Tab lifecycle
+
+  /// New tabs go at the front unless a popup supplies a source tab.
+  func newTabInsertionIndex(in spaceID: UUID, after sourceTabID: UUID? = nil) -> Int {
+    sourceTabID
+      .flatMap { index(of: $0, in: spaceID) }
+      .map { $0 + 1 } ?? 0
+  }
 
   /// Inserts a new tab into a specific Space. Selecting is allowed only for the
   /// currently selected Space; callers that need a cross-Space selection must
@@ -817,7 +847,8 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   private static func validGroup(_ group: BrowserSplitLayout, in space: BrowserSpace, globals: [UUID]) -> Bool {
     group.leftTabID != group.rightTabID && group.fraction.isFinite && group.fraction > 0 && group.fraction < 1
-      && group.tabIDs.allSatisfy({ space.tabIDs.contains($0) && !globals.contains($0) })
+      && group.tabIDs.allSatisfy({ space.tabIDs.contains($0) })
+      && globals.contains(group.leftTabID) == globals.contains(group.rightTabID)
       && space.pinnedTabIDs.contains(group.leftTabID) == space.pinnedTabIDs.contains(group.rightTabID)
       && (group.focusedTabID.map { group.contains($0) } ?? true)
   }

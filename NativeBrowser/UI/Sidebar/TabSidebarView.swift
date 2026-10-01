@@ -330,8 +330,9 @@ struct TabSidebarView: View {
               withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
             }
             .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
-          case .group:
-            EmptyView() // Groups are Space-local and cannot occupy global pins.
+          case .group(let group):
+            splitRow(group, tier: .global)
+              .frame(height: topPinHeight)
           case .gap:
             Color.clear.frame(height: topPinHeight)
           }
@@ -424,8 +425,9 @@ struct TabSidebarView: View {
         drag: tabDrag, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
         onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
         onSwap: { workspace.swapSplitSides(containing: focusedID) },
-        onPin: { workspace.moveSplitGroup(containing: focusedID, to: .space(owner)) },
-        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(owner)) })
+        onPinGlobally: { workspace.moveSplitGroup(containing: focusedID, to: .global) },
+        onPin: { workspace.moveSplitGroup(containing: focusedID, to: .space(tier == .global ? workspace.selectedSpaceID : owner)) },
+        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(tier == .global ? workspace.selectedSpaceID : owner)) })
     }
   }
 
@@ -490,12 +492,15 @@ struct TabSidebarView: View {
   private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
     let space = workspace.spaces.first { $0.id == workspace.selectedSpaceID }
     let globalIDs = workspace.globalPinnedTabs.map(\.id)
+    let globalRightIDs = Set(globalIDs.compactMap { workspace.splitGroup(containing: $0)?.rightTabID })
     let groupedRightIDs = Set(space?.splitGroups.map(\.rightTabID) ?? [])
     let pinIDs = (space?.pinnedTabIDs ?? []).filter { !groupedRightIDs.contains($0) }
     let columns = CGFloat(columns(for: width))
     return SidebarTabDragLayout(
       spaceID: workspace.selectedSpaceID,
-      globalTabIDs: globalIDs,
+      globalTabIDs: globalIDs.filter { !globalRightIDs.contains($0) },
+      globalPinnedTabCount: globalIDs.count,
+      groupedTabIDs: Set(workspace.spaces.flatMap { $0.splitGroups.flatMap(\.tabIDs) }),
       spacePinTabIDs: pinIDs,
       temporaryTabIDs: (space?.tabIDs ?? []).filter {
         !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0) && !groupedRightIDs.contains($0)
@@ -741,6 +746,7 @@ private struct SidebarSplitTabRow: View {
   let onClose: (UUID) -> Void
   let onUngroup: () -> Void
   let onSwap: () -> Void
+  let onPinGlobally: () -> Void
   let onPin: () -> Void
   let onMakeTemporary: () -> Void
   @State private var isHovered = false
@@ -768,6 +774,7 @@ private struct SidebarSplitTabRow: View {
     .contextMenu {
       Button("Ungroup Tabs", action: onUngroup)
       Button("Swap Sides", action: onSwap)
+      Button("Pin Group for All Spaces", action: onPinGlobally)
       Button("Pin Group in This Space", action: onPin)
       Button("Make Group Temporary", action: onMakeTemporary)
     }
@@ -798,7 +805,7 @@ private struct SidebarSplitTabRow: View {
 
   private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
     let focused = selected && selectedTabID == tab.id
-    let showsClose = showsHover
+    let showsClose = showsHover && tier != .global
     return HStack(spacing: 0) {
       Button {
         guard !drag.suppressesClick(on: group.leftTabID) else { return }
@@ -807,27 +814,31 @@ private struct SidebarSplitTabRow: View {
         HStack(spacing: 4) {
           TabFaviconView(pageURL: tab.url, session: session, size: 16)
             .frame(width: 18)
-          Text(tab.displayTitle)
-            .font(.system(size: 12))
-            .lineLimit(1)
-          Spacer(minLength: 0)
+          if tier != .global {
+            Text(tab.displayTitle)
+              .font(.system(size: 12))
+              .lineLimit(1)
+            Spacer(minLength: 0)
+          }
         }
-        .padding(.leading, 5)
+        .padding(.leading, tier == .global ? 0 : 5)
         .frame(maxWidth: .infinity, minHeight: 30)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel(tab.displayTitle)
       .accessibilityAddTraits(focused ? [.isSelected] : [])
-      Button { onClose(tab.id) } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 8, weight: .semibold))
-          .frame(width: 18, height: 30)
+      if tier != .global {
+        Button { onClose(tab.id) } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 8, weight: .semibold))
+            .frame(width: 18, height: 30)
+        }
+        .buttonStyle(.plain)
+        .opacity(showsClose ? 0.65 : 0)
+        .allowsHitTesting(showsClose)
+        .accessibilityLabel("Close \(tab.displayTitle)")
       }
-      .buttonStyle(.plain)
-      .opacity(showsClose ? 0.65 : 0)
-      .allowsHitTesting(showsClose)
-      .accessibilityLabel("Close \(tab.displayTitle)")
     }
     .frame(maxWidth: .infinity)
     .background(RoundedRectangle(cornerRadius: 10, style: .continuous)

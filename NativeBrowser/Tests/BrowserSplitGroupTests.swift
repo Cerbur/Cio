@@ -122,18 +122,131 @@ final class BrowserSplitGroupTests: XCTestCase {
     XCTAssertEqual(workspace.allTabs.count, tabs.count)
   }
 
-  func testCreatingFromASpacePinAndPinningWholeGroupKeepASingleTier() throws {
+  func testPinnedSplitCombinationsPreservePinsAndReuseTemporaryPosition() throws {
+    for selectedTier in 0...2 {
+      for incomingTier in 0...2 where selectedTier != 0 || incomingTier != 0 {
+        for side in [BrowserSplitLayout.Side.left, .right] {
+          var (workspace, tabs) = fixture()
+          let spaceID = workspace.selectedSpaceID
+          let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+          if selectedTier != 0 { _ = workspace.moveTab(tabs[0].id, to: tiers[selectedTier]) }
+          if incomingTier != 0 { _ = workspace.moveTab(tabs[1].id, to: tiers[incomingTier]) }
+          _ = workspace.selectTab(id: tabs[0].id)
+          let globals = workspace.globalPinnedTabIDs
+          let pins = workspace.selectedSpace!.pinnedTabIDs
+          let temporary = workspace.tabIDs(in: .temporary(spaceID))
+          let anchor = selectedTier == 0 ? tabs[0].id : (incomingTier == 0 ? tabs[1].id : nil)
+          XCTAssertTrue(workspace.canSplit(with: tabs[1].id))
+          XCTAssertTrue(workspace.createSplit(with: tabs[1].id, on: side))
+          let group = try XCTUnwrap(workspace.activeSplit)
+          let selectedMember = side == .left ? group.rightTabID : group.leftTabID
+          let incomingMember = side == .left ? group.leftTabID : group.rightTabID
+          XCTAssertEqual(workspace.tab(withID: selectedMember)?.url, tabs[0].url)
+          XCTAssertEqual(workspace.tab(withID: incomingMember)?.url, tabs[1].url)
+          XCTAssertEqual(selectedMember == tabs[0].id, selectedTier == 0)
+          XCTAssertEqual(incomingMember == tabs[1].id, incomingTier == 0)
+          XCTAssertEqual(workspace.globalPinnedTabIDs, globals)
+          XCTAssertEqual(workspace.selectedSpace?.pinnedTabIDs, pins)
+          for id in globals + pins { XCTAssertNil(workspace.splitGroup(containing: id)) }
+          XCTAssertEqual(workspace.allTabs.count, tabs.count + (selectedTier == 0 ? 0 : 1) + (incomingTier == 0 ? 0 : 1))
+          let combinedOrder = workspace.tabIDs(in: .temporary(spaceID)).filter { $0 != group.rightTabID }
+          let expectedOrder = anchor.map { anchor in temporary.map { $0 == anchor ? group.leftTabID : $0 } }
+            ?? ([group.leftTabID] + temporary)
+          XCTAssertEqual(combinedOrder, expectedOrder)
+          XCTAssertTrue(workspace.validateInvariants())
+          let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+          XCTAssertEqual(restored.activeSplit, group)
+        }
+      }
+    }
+  }
+
+  func testSpacePinnedAndTemporaryGroupsCanMoveToTopPinsAndRestoreAcrossSpaces() throws {
+    for pinnedInSpace in [false, true] {
+      var (workspace, tabs) = fixture()
+      _ = workspace.createSplit(with: tabs[1].id, on: .right)
+      _ = workspace.setSplitFraction(0.35)
+      if pinnedInSpace { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .space(workspace.selectedSpaceID)) }
+      let group = try XCTUnwrap(workspace.activeSplit)
+      XCTAssertTrue(workspace.moveSplitGroup(containing: tabs[1].id, to: .global))
+      XCTAssertEqual(workspace.globalPinnedTabIDs, group.tabIDs)
+      XCTAssertEqual(workspace.activeSplit, group)
+      let other = try XCTUnwrap(workspace.createSpace(initialTab: BrowserTab(), select: false))
+      _ = workspace.selectSpace(id: other)
+      XCTAssertEqual(workspace.activeSplit, group)
+      XCTAssertTrue(workspace.setSplitFraction(0.6))
+      let updated = workspace.activeSplit
+      var restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+      XCTAssertEqual(restored.activeSplit, updated)
+      XCTAssertEqual(restored.selectedSpaceID, other)
+      XCTAssertTrue(restored.moveSplitGroup(containing: tabs[0].id, to: .temporary(other)))
+      XCTAssertEqual(restored.activeSplit, updated)
+      XCTAssertTrue(restored.globalPinnedTabIDs.isEmpty)
+      XCTAssertTrue(restored.validateInvariants())
+    }
+  }
+
+  func testTopPinCapacityRejectsWholeGroupWithoutPartialMutation() throws {
     var (workspace, tabs) = fixture()
-    let spaceID = workspace.selectedSpaceID
-    _ = workspace.moveTab(tabs[0].id, to: .space(spaceID))
     _ = workspace.createSplit(with: tabs[1].id, on: .left)
-    let group = try XCTUnwrap(workspace.activeSplit)
-    XCTAssertTrue(group.tabIDs.allSatisfy { workspace.selectedSpace!.pinnedTabIDs.contains($0) })
-    _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .temporary(spaceID))
+    for _ in 0..<(WorkspaceCollection.globalPinnedTabLimit - 1) {
+      let tab = BrowserTab()
+      _ = workspace.appendTab(tab, in: workspace.selectedSpaceID, select: false)
+      _ = workspace.moveTab(tab.id, to: .global)
+    }
+    let before = workspace
+    XCTAssertFalse(workspace.moveSplitGroup(containing: tabs[0].id, to: .global))
+    XCTAssertEqual(workspace, before)
+  }
+
+  func testSplittingSelectedPinnedGroupPreservesTheOriginalGroup() throws {
+    for global in [false, true] {
+      var (workspace, tabs) = fixture()
+      _ = workspace.createSplit(with: tabs[1].id, on: .right)
+      _ = workspace.moveSplitGroup(containing: tabs[0].id,
+        to: global ? .global : .space(workspace.selectedSpaceID))
+      let original = try XCTUnwrap(workspace.activeSplit)
+      XCTAssertTrue(workspace.createSplit(with: tabs[2].id, on: .left))
+      XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original)
+      XCTAssertNotEqual(workspace.activeSplit?.id, original.id)
+      XCTAssertTrue(workspace.activeSplit!.contains(tabs[2].id))
+      XCTAssertEqual(workspace.allTabs.count, tabs.count + 1)
+      XCTAssertTrue(workspace.validateInvariants())
+    }
+  }
+
+  func testTopPinnedGroupCanReorderAndUngroupWhileAnotherSpaceIsSelected() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.createSplit(with: tabs[1].id, on: .right)
+    _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .global)
+    _ = workspace.moveTab(tabs[2].id, to: .global)
+    let group = workspace.activeSplit
+    XCTAssertTrue(workspace.moveSplitGroup(containing: tabs[0].id, to: .global))
+    XCTAssertEqual(workspace.globalPinnedTabIDs, [tabs[2].id, tabs[0].id, tabs[1].id])
+    XCTAssertTrue(workspace.moveSplitGroup(containing: tabs[1].id, to: .global, before: tabs[2].id))
+    XCTAssertEqual(workspace.globalPinnedTabIDs, [tabs[0].id, tabs[1].id, tabs[2].id])
     XCTAssertEqual(workspace.activeSplit, group)
-    XCTAssertTrue(workspace.selectedSpace!.pinnedTabIDs.isEmpty)
-    _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .space(spaceID))
-    XCTAssertEqual(workspace.activeSplit, group)
+    let other = try XCTUnwrap(workspace.createSpace(initialTab: BrowserTab(), select: false))
+    _ = workspace.selectSpace(id: other)
+    XCTAssertTrue(workspace.ungroupSplit(containing: tabs[1].id))
+    XCTAssertEqual(workspace.selectedSpaceID, other)
+    XCTAssertEqual(workspace.selectedTabID, tabs[0].id)
+    XCTAssertNil(workspace.activeSplit)
+    XCTAssertEqual(workspace.globalPinnedTabIDs, [tabs[0].id, tabs[1].id, tabs[2].id])
+    XCTAssertTrue(workspace.validateInvariants())
+  }
+
+  func testTopPinFromAnotherSpaceCanSplitWithCurrentSpacePin() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.moveTab(tabs[0].id, to: .global)
+    let otherTab = BrowserTab(title: "Other", url: URL(string: "https://example.com/other"))
+    let other = try XCTUnwrap(workspace.createSpace(initialTab: otherTab))
+    _ = workspace.moveTab(otherTab.id, to: .space(other))
+    XCTAssertTrue(workspace.createSplit(with: tabs[0].id, on: .right))
+    XCTAssertEqual(workspace.selectedSpaceID, other)
+    XCTAssertEqual(workspace.globalPinnedTabIDs, [tabs[0].id])
+    XCTAssertEqual(workspace.selectedSpace?.pinnedTabIDs, [otherTab.id])
+    XCTAssertEqual(workspace.tabIDs(in: .temporary(other)), workspace.activeSplit?.tabIDs)
     XCTAssertTrue(workspace.validateInvariants())
   }
 

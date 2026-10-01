@@ -157,9 +157,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   func canSplit(with tabID: UUID) -> Bool {
     guard !isTerminating, !isSpotlightPresented, let selectedTabID,
-          tabID != selectedTabID, !workspace.globalPinnedTabIDs.contains(selectedTabID),
-          temporaryTabs.contains(where: { $0.id == tabID }),
-          splitGroup(containing: tabID) == nil,
+          workspace.canSplit(with: tabID),
           !sessionManager.isClosing(tabID: tabID),
           !sessionManager.isClosing(tabID: selectedTabID) else { return false }
     return activeSplit?.contains(tabID) != true
@@ -292,9 +290,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       !select || workspace.selectedSpaceID == spaceID
     else { return nil }
 
-    let insertionIndex = sourceTabID
-      .flatMap { workspace.space(withID: spaceID)?.tabIDs.firstIndex(of: $0) }
-      .map { $0 + 1 } ?? 0
+    let insertionIndex = workspace.newTabInsertionIndex(in: spaceID, after: sourceTabID)
     let tab = BrowserTab(title: title, url: url)
     let initialURL = url ?? homeURL
     var inserted = false

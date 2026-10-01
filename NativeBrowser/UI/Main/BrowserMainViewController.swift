@@ -101,11 +101,11 @@ final class BrowserMainViewController: NSViewController {
       guard let self else { return .zero }
       return self.sidebarItem.viewController.view.convert(self.view.bounds, from: self.view)
     }
-    drag.onPointerMove = { [weak self] id, point, isTemporary in
+    drag.onPointerMove = { [weak self] id, point in
       guard let self else { return }
       let browser = self.browserItem.viewController.view
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
-      let canSplit = isTemporary && self.runtime.presentedInternalPanel == nil
+      let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
       self.splitDropSide = canSplit ? (local.x < browser.bounds.midX ? .left : .right) : nil
       self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide)

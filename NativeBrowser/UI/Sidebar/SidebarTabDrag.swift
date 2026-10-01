@@ -26,6 +26,8 @@ struct SidebarTabDropTarget: Equatable {
 struct SidebarTabDragLayout {
   var spaceID: UUID
   var globalTabIDs: [UUID]
+  var globalPinnedTabCount: Int
+  var groupedTabIDs: Set<UUID>
   var spacePinTabIDs: [UUID]
   var temporaryTabIDs: [UUID]
   var tileSize: CGSize
@@ -78,7 +80,7 @@ final class SidebarTabDrag {
   var isDragging: Bool { liftedTabID != nil }
 
   @ObservationIgnored var externalBounds: (() -> CGRect)?
-  @ObservationIgnored var onPointerMove: ((UUID, CGPoint, Bool) -> Void)?
+  @ObservationIgnored var onPointerMove: ((UUID, CGPoint) -> Void)?
   @ObservationIgnored var onSplitDrop: ((UUID) -> Bool)?
   @ObservationIgnored var onPreviewEnd: (() -> Void)?
   @ObservationIgnored var bounds = CGRect.zero
@@ -194,7 +196,7 @@ final class SidebarTabDrag {
     resolveTarget()
     anchor = clampedAnchor(pointer)
     updateAutoscroll()
-    if let tabID { onPointerMove?(tabID, location, sourceTier == .temporary(layout.spaceID)) }
+    if let tabID { onPointerMove?(tabID, location) }
   }
 
   func drop(_ move: (UUID, SidebarTabDropTarget) -> Bool) {
@@ -404,7 +406,8 @@ final class SidebarTabDrag {
 
   private func topPinTarget(for id: UUID, in layout: SidebarTabDragLayout) -> SidebarTabDropTarget? {
     let ids = layout.globalTabIDs
-    guard ids.contains(id) || ids.count < WorkspaceCollection.globalPinnedTabLimit else {
+    let requiredPins = layout.groupedTabIDs.contains(id) ? 2 : 1
+    guard ids.contains(id) || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
       return nil
     }
     let tiles = ids.filter { $0 != id }.compactMap { tileID in
