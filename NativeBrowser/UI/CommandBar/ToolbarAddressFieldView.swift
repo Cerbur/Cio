@@ -268,6 +268,7 @@ private struct AddressFaviconButton: View {
 private struct AddressReloadButton: View {
   @ObservedObject var session: BrowserSession
   var onReloadOrStop: () -> Void
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var rotationStart = Date()
   @State private var isHovered = false
@@ -301,9 +302,10 @@ private struct AddressReloadButton: View {
 
   private var reloadSymbol: some View {
     let highlightsHover = isHovered && !session.isLoading
+    let hoverColor = colorScheme == .dark ? Color.white : Color.black
     return Image(systemName: "arrow.triangle.2.circlepath")
       .font(.system(size: 14, weight: .semibold))
-      .foregroundStyle(highlightsHover ? Color.black : Color.secondary)
+      .foregroundStyle(highlightsHover ? hoverColor : Color.secondary)
       .scaleEffect(highlightsHover ? 16.0 / 14.0 : 1)
       .animation(reduceMotion ? nil : .easeInOut(duration: 0.15),
                  value: highlightsHover)
