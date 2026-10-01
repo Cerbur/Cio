@@ -144,6 +144,14 @@ struct ToolbarAddressFieldView: View {
       )
       .frame(width: max(0, width - textInset - AddressCapsuleLayout.endControlWidth),
              height: AddressCapsuleLayout.textIdealHeight)
+      // Keep the native editor mounted, but hide its idle text immediately so
+      // it cannot appear underneath the compact domain's fade-in.
+      .animation(nil) { content in
+        content.opacity(interaction.isFocused ? 1 : 0)
+      }
+      .overlay {
+        AddressCompactText(model: session.addressField, isFocused: interaction.isFocused)
+      }
       .padding(.leading, textInset)
       .accessibilityIdentifier("address-input")
 
@@ -237,6 +245,35 @@ struct ToolbarAddressFieldView: View {
     session.focusPage()
   }
 
+}
+
+/// The idle domain leaves to the left and returns moving right from that same
+/// offset, while the native field retains ownership of editing and selection.
+private struct AddressCompactText: View {
+  @ObservedObject var model: AddressFieldModel
+  var isFocused: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    let domain = model.compactDisplayText(for: model.committedURL)
+    ZStack {
+      if !isFocused {
+        Text(domain.isEmpty ? AddressFieldModel.placeholder : domain)
+          .font(.system(size: 13))
+          .foregroundStyle(domain.isEmpty ? Color.secondary : Color.primary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .padding(.horizontal, 2)
+          .transition(reduceMotion ? .opacity
+            : .offset(x: -12).combined(with: .opacity))
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .clipped()
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isFocused)
+    .allowsHitTesting(false)
+    .accessibilityHidden(true)
+  }
 }
 
 /// Matches the reload control's hover timing and scale, keeping the circular
