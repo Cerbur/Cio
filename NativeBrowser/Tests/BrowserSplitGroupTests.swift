@@ -93,6 +93,103 @@ final class BrowserSplitGroupTests: XCTestCase {
     XCTAssertEqual(workspace.allTabs.count, tabs.count)
   }
 
+  func testTemporaryReplacementUsesDropSideAndPlacesDisplacedPageAfterGroup() throws {
+    for focusedIndex in 0...1 {
+      for side in [BrowserSplitLayout.Side.left, .right] {
+        for incomingTier in 0...2 {
+          for incomingBeforeGroup in [false, true] {
+            var (workspace, tabs) = fixture()
+            let spaceID = workspace.selectedSpaceID
+            _ = workspace.createSplit(with: tabs[1].id, on: .right)
+            _ = workspace.setSplitFraction(0.3)
+            if incomingBeforeGroup {
+              _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .temporary(spaceID), before: tabs[4].id)
+            }
+            let incoming = tabs[2]
+            let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+            if incomingTier != 0 { _ = workspace.moveTab(incoming.id, to: tiers[incomingTier]) }
+            _ = workspace.selectTab(id: tabs[focusedIndex].id)
+            let prior = try XCTUnwrap(workspace.activeSplit)
+            let beforeOrder = workspace.tabIDs(in: .temporary(spaceID))
+            let beforeRows = beforeOrder.filter { $0 != prior.rightTabID && $0 != incoming.id }
+            let globals = workspace.globalPinnedTabIDs
+            let pins = workspace.selectedSpace!.pinnedTabIDs
+            XCTAssertTrue(workspace.createSplit(with: incoming.id, on: side))
+            let group = try XCTUnwrap(workspace.activeSplit)
+            let displacedID = side == .left ? prior.leftTabID : prior.rightTabID
+            let retainedID = side == .left ? prior.rightTabID : prior.leftTabID
+            let incomingID = side == .left ? group.leftTabID : group.rightTabID
+            XCTAssertEqual(side == .left ? group.rightTabID : group.leftTabID, retainedID)
+            XCTAssertEqual(workspace.tab(withID: incomingID)?.url, incoming.url)
+            XCTAssertEqual(incomingID == incoming.id, incomingTier == 0)
+            XCTAssertEqual(group.id, prior.id)
+            XCTAssertEqual(group.fraction, prior.fraction)
+            XCTAssertEqual(group.focusedTabID, incomingID)
+            XCTAssertEqual(workspace.selectedTabID, incomingID)
+            let expected = beforeRows.flatMap { $0 == prior.leftTabID ? group.tabIDs + [displacedID] : [$0] }
+            XCTAssertEqual(workspace.tabIDs(in: .temporary(spaceID)), expected)
+            XCTAssertNil(workspace.splitGroup(containing: displacedID))
+            XCTAssertEqual(workspace.globalPinnedTabIDs, globals)
+            XCTAssertEqual(workspace.selectedSpace?.pinnedTabIDs, pins)
+            XCTAssertEqual(workspace.allTabs.count, tabs.count + (incomingTier == 0 ? 0 : 1))
+            XCTAssertTrue(workspace.validateInvariants())
+            let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+            XCTAssertEqual(restored.activeSplit, group)
+            XCTAssertEqual(restored.tabIDs(in: .temporary(spaceID)), expected)
+          }
+        }
+      }
+    }
+  }
+
+  func testPinnedReplacementCreatesNewTemporaryGroupAtFrontAndPreservesOriginal() throws {
+    for global in [false, true] {
+      for focusedIndex in 0...1 {
+        for side in [BrowserSplitLayout.Side.left, .right] {
+          for incomingTier in 0...2 {
+            var (workspace, tabs) = fixture()
+            let owner = workspace.selectedSpaceID
+            _ = workspace.createSplit(with: tabs[1].id, on: .right)
+            _ = workspace.setSplitFraction(0.65)
+            _ = workspace.moveSplitGroup(containing: tabs[0].id, to: global ? .global : .space(owner))
+            if global {
+              _ = workspace.createSpace(initialTab: BrowserTab(title: "Other"))
+              _ = workspace.moveTab(tabs[2].id, to: .temporary(workspace.selectedSpaceID))
+            }
+            let spaceID = workspace.selectedSpaceID
+            let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+            if incomingTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[incomingTier]) }
+            _ = workspace.selectTab(id: tabs[focusedIndex].id)
+            let original = try XCTUnwrap(workspace.activeSplit)
+            let temporary = workspace.tabIDs(in: .temporary(spaceID))
+            let count = workspace.allTabs.count
+            let globals = workspace.globalPinnedTabIDs
+            let pins = workspace.space(withID: owner)!.pinnedTabIDs
+            XCTAssertTrue(workspace.createSplit(with: tabs[2].id, on: side))
+            let group = try XCTUnwrap(workspace.activeSplit)
+            XCTAssertNotEqual(group.id, original.id)
+            XCTAssertEqual(group.fraction, original.fraction)
+            let survivorID = side == .left ? group.rightTabID : group.leftTabID
+            let originalSurvivor = side == .left ? original.rightTabID : original.leftTabID
+            XCTAssertNotEqual(survivorID, originalSurvivor)
+            XCTAssertEqual(workspace.tab(withID: survivorID)?.url, workspace.tab(withID: originalSurvivor)?.url)
+            let incomingID = side == .left ? group.leftTabID : group.rightTabID
+            XCTAssertEqual(workspace.tab(withID: incomingID)?.url, tabs[2].url)
+            XCTAssertEqual(workspace.tabIDs(in: .temporary(spaceID)), group.tabIDs + temporary.filter { $0 != incomingID })
+            XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original)
+            XCTAssertEqual(workspace.globalPinnedTabIDs, globals)
+            XCTAssertEqual(workspace.space(withID: owner)?.pinnedTabIDs, pins)
+            XCTAssertEqual(workspace.allTabs.count, count + 1 + (incomingTier == 0 ? 0 : 1))
+            XCTAssertTrue(workspace.validateInvariants())
+            let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+            XCTAssertEqual(restored.activeSplit, group)
+            XCTAssertEqual(restored.splitGroup(containing: tabs[0].id), original)
+          }
+        }
+      }
+    }
+  }
+
   func testClosingOrMovingOneMemberDissolvesTheGroupWithoutLosingTheOtherTab() {
     var (workspace, tabs) = fixture()
     _ = workspace.createSplit(with: tabs[1].id, on: .right)

@@ -332,7 +332,6 @@ struct TabSidebarView: View {
             .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
           case .group(let group):
             splitRow(group, tier: .global)
-              .frame(height: topPinHeight)
           case .gap:
             Color.clear.frame(height: topPinHeight)
           }
@@ -422,7 +421,7 @@ struct TabSidebarView: View {
       SidebarSplitTabRow(group: group, left: left, right: right,
         leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
         selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
-        drag: tabDrag, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
+        drag: tabDrag, tier: tier, height: tier == .global ? topPinHeight : nil, onSelect: select, onClose: { workspace.closeTab(id: $0) },
         onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
         onSwap: { workspace.swapSplitSides(containing: focusedID) },
         onPinGlobally: { workspace.moveSplitGroup(containing: focusedID, to: .global) },
@@ -742,6 +741,7 @@ private struct SidebarSplitTabRow: View {
   let selectedTabID: UUID?
   let drag: SidebarTabDrag
   let tier: WorkspaceCollection.TabTier
+  let height: CGFloat?
   let onSelect: (UUID) -> Void
   let onClose: (UUID) -> Void
   let onUngroup: () -> Void
@@ -761,16 +761,19 @@ private struct SidebarSplitTabRow: View {
       member(right, session: rightSession)
     }
     .padding(3)
+    .frame(maxWidth: .infinity)
+    .frame(height: height)
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
       } else {
-        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : 0.035))
+        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : (tier == .global ? 0.04 : 0.035)))
       }
     }
     .overlay {
       if selected { SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1) }
     }
+    .scaleEffect(tier == .global && selected ? 1.02 : 1)
     .contextMenu {
       Button("Ungroup Tabs", action: onUngroup)
       Button("Swap Sides", action: onSwap)
@@ -812,7 +815,8 @@ private struct SidebarSplitTabRow: View {
         onSelect(tab.id)
       } label: {
         HStack(spacing: 4) {
-          TabFaviconView(pageURL: tab.url, session: session, size: 16)
+          TabFaviconView(pageURL: tab.url, session: session, size: tier == .global ? SidebarTabAppearance.faviconSize : 16,
+                         fallbackLetter: tier == .global ? tab.pinFallbackLetter : nil)
             .frame(width: 18)
           if tier != .global {
             Text(tab.displayTitle)

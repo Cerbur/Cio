@@ -146,7 +146,7 @@ final class BrowserSurfaceHostView: NSView {
   /// workspace publishes the committed pair synchronously inside this closure.
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {
     let hadPreview = previewSide != nil
-    if hadPreview, let selectedTabID {
+    if hadPreview, split == nil, let selectedTabID {
       // Transfer the shell's current animated frame to the surviving pane's
       // toolbar, including a drop before the preview animation has finished.
       toolbarFrames[selectedTabID] = selectedToolbarFrame ?? bounds
@@ -165,7 +165,20 @@ final class BrowserSurfaceHostView: NSView {
     defer { CATransaction.commit() }
     preview.isHidden = previewSide == nil
     var surfaces: [UUID: SurfacePlacement] = [:]
-    if let side = previewSide {
+    if let side = previewSide, let split {
+      let frames = split.frames(in: bounds)
+      let survivorID = side == .left ? split.rightTabID : split.leftTabID
+      let survivorFrame = side == .left ? frames.right : frames.left
+      preview.frame = side == .left ? frames.left : frames.right
+      divider.frame = frames.divider
+      divider.isHidden = false
+      for (id, container) in containers where container.isSurfaceVisible {
+        surfaces[id] = SurfacePlacement(frame: id == survivorID ? survivorFrame : collapsedSurfaceFrame(for: id, container: container),
+          cropOnly: true, roundedEdge: side)
+      }
+      updatePresentationLayout(panes: [survivorID: survivorFrame], selectedFrame: nil,
+                               surfaces: surfaces, animated: animatedPresentation)
+    } else if let side = previewSide {
       let currentWidth = selectedTabID.flatMap { containers[$0]?.frame.width } ?? bounds.width
       let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
                                                    maximumSurvivorWidth: currentWidth)
@@ -173,7 +186,7 @@ final class BrowserSurfaceHostView: NSView {
       divider.isHidden = true
       for (id, container) in containers where container.isSurfaceVisible {
         // Keep every Chromium surface at its committed size during tab placement.
-        surfaces[id] = SurfacePlacement(frame: id == selectedTabID ? frames.survivor : .zero,
+        surfaces[id] = SurfacePlacement(frame: id == selectedTabID ? frames.survivor : collapsedSurfaceFrame(for: id, container: container),
                                         cropOnly: true, roundedEdge: side)
       }
       let paneFrames = toolbars.keys.filter { $0 == selectedTabID }
@@ -268,6 +281,12 @@ final class BrowserSurfaceHostView: NSView {
     RunLoop.main.add(timer, forMode: .common)
   }
 
+  private func collapsedSurfaceFrame(for id: UUID, container: ChromiumContainerView) -> CGRect {
+    // Collapse within the visible Chromium pane, including an interrupted preview.
+    let frame = surfacePlacements[id]?.frame ?? container.frame
+    return CGRect(x: frame.midX, y: frame.midY, width: 0, height: 0)
+  }
+
   private func interpolatedSurfaces(from start: [UUID: SurfacePlacement],
                                     to end: [UUID: SurfacePlacement], amount: CGFloat) -> [UUID: SurfacePlacement] {
     end.reduce(into: [:]) { result, entry in
@@ -344,7 +363,9 @@ final class BrowserSurfaceHostView: NSView {
     // ownership of its outer corners, and preview masks do not resize Chromium.
     let mask = container.layer?.mask ?? CALayer()
     mask.backgroundColor = NSColor.black.cgColor
-    mask.frame = CGRect(origin: .zero, size: frame.size)
+    // The host is flipped, while Chromium's container uses bottom-up coordinates.
+    // Convert the visible rect so shrinking height keeps the mask at the pane's top.
+    mask.frame = container.convert(frame, from: self)
     mask.cornerRadius = roundedEdge == nil ? 0 : BrowserLayout.contentCornerRadius
     mask.cornerCurve = .continuous
     mask.maskedCorners = roundedEdge == .right

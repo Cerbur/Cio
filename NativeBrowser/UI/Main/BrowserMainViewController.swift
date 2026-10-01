@@ -107,7 +107,9 @@ final class BrowserMainViewController: NSViewController {
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
-      self.splitDropSide = canSplit ? (local.x < browser.bounds.midX ? .left : .right) : nil
+      let boundary = self.runtime.workspaceStore.activeSplit?.frames(in: browser.bounds).divider.midX
+        ?? browser.bounds.midX
+      self.splitDropSide = canSplit ? (local.x < boundary ? .left : .right) : nil
       self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide)
     }
     drag.onSplitDrop = { [weak self] id in

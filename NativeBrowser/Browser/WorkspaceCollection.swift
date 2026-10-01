@@ -263,6 +263,9 @@ struct WorkspaceCollection: Equatable, Sendable {
   mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
     guard canSplit(with: tabID), let selectedTabID,
           let spaceIndex = index(of: selectedSpaceID) else { return false }
+    if let prior = activeSplit {
+      return replaceSplit(prior, with: tabID, on: side, in: spaceIndex)
+    }
     let pinnedIDs = Set(globalPinnedTabIDs + spaces[spaceIndex].pinnedTabIDs)
     let selectedIsPinned = pinnedIDs.contains(selectedTabID)
     let incomingIsPinned = pinnedIDs.contains(tabID)
@@ -282,6 +285,33 @@ struct WorkspaceCollection: Equatable, Sendable {
     spaces[spaceIndex].splitGroups.removeAll { $0.contains(incomingID) || $0.contains(survivorID) }
     spaces[spaceIndex].tabIDs.removeAll { group.contains($0) }
     spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs, at: insertAt)
+    spaces[spaceIndex].splitGroups.append(group)
+    _ = selectTab(id: incomingID)
+    validateInvariants()
+    return true
+  }
+
+  private mutating func replaceSplit(_ prior: BrowserSplitLayout, with tabID: UUID,
+                                    on side: BrowserSplitLayout.Side, in spaceIndex: Int) -> Bool {
+    let pinnedIDs = Set(globalPinnedTabIDs + spaces[spaceIndex].pinnedTabIDs)
+    let pinnedGroup = pinnedIDs.contains(prior.leftTabID)
+    let incomingID = pinnedIDs.contains(tabID) ? duplicateForSplit(tabID) : tabID
+    let retainedID = side == .left ? prior.rightTabID : prior.leftTabID
+    let displacedID = side == .left ? prior.leftTabID : prior.rightTabID
+    let survivorID = pinnedGroup ? duplicateForSplit(retainedID) : retainedID
+    let group = BrowserSplitLayout(id: pinnedGroup ? UUID() : prior.id,
+      leftTabID: side == .left ? incomingID : survivorID,
+      rightTabID: side == .right ? incomingID : survivorID,
+      fraction: prior.fraction, focusedTabID: incomingID)
+    let space = spaces[spaceIndex]
+    let removedIDs = Set(pinnedGroup ? group.tabIDs : prior.tabIDs + [incomingID])
+    let anchorIndex = pinnedGroup ? newTabInsertionIndex(in: space.id)
+      : space.tabIDs.firstIndex(where: { prior.contains($0) })!
+    let insertAt = space.tabIDs.prefix(anchorIndex).filter { !removedIDs.contains($0) }.count
+    if !pinnedGroup { spaces[spaceIndex].splitGroups.removeAll { $0.id == prior.id } }
+    spaces[spaceIndex].tabIDs.removeAll { removedIDs.contains($0) }
+    // The displaced temporary page follows the updated combined row.
+    spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs + (pinnedGroup ? [] : [displacedID]), at: insertAt)
     spaces[spaceIndex].splitGroups.append(group)
     _ = selectTab(id: incomingID)
     validateInvariants()
