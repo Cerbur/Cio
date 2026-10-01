@@ -74,7 +74,9 @@ final class ChromiumContainerView: NSView {
   }
 
   override func setFrameSize(_ newSize: NSSize) {
+    let changed = frame.size != newSize
     super.setFrameSize(newSize)
+    guard changed else { return }
     delegate?.containerViewDidResize(self)
   }
 

@@ -2,7 +2,7 @@
 //  BrowserToolbarController.swift
 //  NativeBrowser
 //
-//  Shell-owned toolbar with native window buttons and page controls. Its
+//  Shell and tab-bound pane toolbars with native page controls. Their
 //  height comes from the same metric as the navigation rail; AppKit no longer
 //  adds an independent toolbar safe area above the Main View.
 //
@@ -52,6 +52,8 @@ private final class ToolbarChromeView: NSView {
   private let forwardButton: NSButton
   private let addressView: AddressOverlayHostingView
   private let presentation: ToolbarPresentationState
+  private let showsWindowControls: Bool
+  private let sidebarPresentation = ToolbarPresentationState()
   private var trafficLights: [NSButton] = []
   private weak var trafficLightsWindow: NSWindow?
 
@@ -60,18 +62,20 @@ private final class ToolbarChromeView: NSView {
     backButton: NSButton,
     forwardButton: NSButton,
     addressView: AddressOverlayHostingView,
-    presentation: ToolbarPresentationState
+    presentation: ToolbarPresentationState,
+    showsWindowControls: Bool
   ) {
     self.sidebarButton = sidebarButton
     self.backButton = backButton
     self.forwardButton = forwardButton
     self.addressView = addressView
     self.presentation = presentation
+    self.showsWindowControls = showsWindowControls
     let height = AddressCapsuleLayout.height
     let navigationContent = NSView(frame: NSRect(x: 0, y: 0,
                                                 width: 2 + 2 * height, height: height))
     sidebarGlass = NSHostingView(rootView: ToolbarGlassControlView(
-      content: sidebarButton, presentation: presentation,
+      content: sidebarButton, presentation: sidebarPresentation,
       size: NSSize(width: height, height: height)))
     navigationGroup = NSHostingView(rootView: ToolbarGlassControlView(
       content: navigationContent, presentation: presentation,
@@ -86,7 +90,7 @@ private final class ToolbarChromeView: NSView {
     sidebarButton.autoresizingMask = [.width, .height]
     navigationContent.autoresizingMask = [.width, .height]
 
-    addSubview(sidebarGlass)
+    if showsWindowControls { addSubview(sidebarGlass) }
     addSubview(navigationGroup)
     navigationContent.addSubview(backButton)
     navigationContent.addSubview(forwardButton)
@@ -107,21 +111,25 @@ private final class ToolbarChromeView: NSView {
   }
 
   override var isFlipped: Bool { true }
-  override var mouseDownCanMoveWindow: Bool { true }
+  override var mouseDownCanMoveWindow: Bool { showsWindowControls }
 
-  override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+  override func mouseDown(with event: NSEvent) {
+    if showsWindowControls { window?.performDrag(with: event) }
+    else { super.mouseDown(with: event) }
+  }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
-    if !presentation.isVisible, let hit,
-       hit.isDescendant(of: sidebarGlass) || hit.isDescendant(of: navigationGroup) {
-      return self
+    if let hit {
+      if !sidebarPresentation.isVisible, hit.isDescendant(of: sidebarGlass) { return self }
+      if !presentation.isVisible, hit.isDescendant(of: navigationGroup) { return self }
     }
     return hit
   }
 
   func installTrafficLights(in window: NSWindow) {
-    guard trafficLightsWindow !== window else { return }
+    guard showsWindowControls, trafficLightsWindow !== window else { return }
+    trafficLights.forEach { $0.removeFromSuperview() }
     trafficLightsWindow = window
     let controls: [(NSWindow.ButtonType, Selector, String)] = [
       (.closeButton, #selector(NSWindow.performClose(_:)), "Close"),
@@ -148,6 +156,7 @@ private final class ToolbarChromeView: NSView {
   }
 
   private func layoutTrafficLights() {
+    guard showsWindowControls else { return }
     for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
       window?.standardWindowButton(type)?.isHidden = true
     }
@@ -161,6 +170,11 @@ private final class ToolbarChromeView: NSView {
   }
 
   func setAddressVisible(_ visible: Bool, animated: Bool) {
+    sidebarPresentation.setVisible(visible, animated: animated && window != nil)
+    setPageControlsVisible(visible, animated: animated)
+  }
+
+  func setPageControlsVisible(_ visible: Bool, animated: Bool) {
     presentation.setVisible(visible, animated: animated && window != nil)
   }
 
@@ -180,19 +194,21 @@ private final class ToolbarChromeView: NSView {
   }
 
   func applyLayout(
-    browserRect: NSRect
+    browserRect: NSRect, sidebarAnchor: NSRect
   ) {
     guard browserRect.width > 0 else { return }
     layoutTrafficLights()
     let trafficLightsRight = trafficLights.last?.frame.maxX ?? 0
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
-    let sidebarLeft = max(trafficLightsRight + 10, browserRect.minX - height - 10)
-    let navigationLeft = max(browserRect.minX + 7, sidebarLeft + height + 10)
+    let sidebarLeft = max(trafficLightsRight + 10, sidebarAnchor.minX - height - 10)
+    let navigationLeft = showsWindowControls
+      ? max(browserRect.minX + 7, sidebarLeft + height + 10) : browserRect.minX + 7
     // Keep the host at its maximum width. SwiftUI animates the capsule inside
     // it so the native glass is never clipped by the host's rectangular bounds.
     let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
-    let addressLeft = browserRect.midX - addressWidth / 2
+    let addressLeft = max(browserRect.midX - addressWidth / 2,
+                          navigationLeft + 2 + 2 * height + 7)
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
              on: sidebarGlass)
@@ -227,10 +243,17 @@ final class BrowserToolbarController: NSObject {
   private let workspace: BrowserWorkspaceStore
   private let addressAutocomplete: AddressAutocompleteModel
   private let browserView: NSView
+  private var browserViewportFrame: CGRect?
+  /// Nil follows selection (shell); a UUID binds every control to that tab.
+  let tabID: UUID?
+  var isPaneToolbar: Bool { tabID != nil }
+  private let isActivePane: (() -> Bool)?
+  private let onActivatePane: (() -> Void)?
+  private var isDisposed = false
   private let isSidebarCollapsed: () -> Bool
   private let onSidebarToggle: () -> Void
   private weak var window: NSWindow?
-  private var chromeView: ToolbarChromeView?
+  nonisolated(unsafe) private var chromeView: ToolbarChromeView?
   private var browserFrameObservation: AnyCancellable?
   private var windowObservations = Set<AnyCancellable>()
   private var workspaceObservation: AnyCancellable?
@@ -239,21 +262,34 @@ final class BrowserToolbarController: NSObject {
   private let addressPresentation = BrowserInteractionState()
   private let toolbarPresentation = ToolbarPresentationState()
   private let siteInformation = AddressSiteInformationState()
-  private weak var addressOverlay: AddressOverlayHostingView?
+  nonisolated(unsafe) private var addressOverlay: AddressOverlayHostingView?
   nonisolated(unsafe) private var siteInformationEventMonitor: Any?
   private var certificatePanel: SFCertificatePanel?
   private var addressFocusRequestObservation: AnyCancellable?
 
+  /// Omit `tabID` for the existing shell toolbar, including window/sidebar controls.
+  /// Supply `tabID` and that pane's `browserView` for an independent pane toolbar.
+  /// `isActivePane` optionally adds the host's active-pane check to selected-session
+  /// command routing; `onActivatePane` selects the pane on address interaction
+  /// (by default this calls `workspace.selectTab(id:)`). Mount `view`, then call
+  /// `install(in:showsSpaceToolbar:)`; call `removeFromPresentation()` when hidden
+  /// (it can be mounted and installed again), or `dispose()` to end its lifetime.
   init(
     workspace: BrowserWorkspaceStore,
     history: HistoryService,
     browserView: NSView,
-    isSidebarCollapsed: @escaping () -> Bool,
-    onSidebarToggle: @escaping () -> Void
+    isSidebarCollapsed: @escaping () -> Bool = { true },
+    onSidebarToggle: @escaping () -> Void = {},
+    tabID: UUID? = nil,
+    isActivePane: (() -> Bool)? = nil,
+    onActivatePane: (() -> Void)? = nil
   ) {
     self.workspace = workspace
     self.addressAutocomplete = AddressAutocompleteModel(history: history)
     self.browserView = browserView
+    self.tabID = tabID
+    self.isActivePane = isActivePane
+    self.onActivatePane = onActivatePane
     self.isSidebarCollapsed = isSidebarCollapsed
     self.onSidebarToggle = onSidebarToggle
     super.init()
@@ -273,10 +309,26 @@ final class BrowserToolbarController: NSObject {
         self?.handle(.addressFocusRequested(session))
       }
     }
-    bindSelectedSession(workspace.selectedSession)
+    bindSession(boundSession)
   }
 
-  /// Mounted as a sibling of Main View and navigation rail by the shell.
+  private var boundSession: BrowserSession? {
+    if let tabID { return workspace.session(for: tabID) }
+    return workspace.selectedSession
+  }
+
+  private func isActive(_ session: BrowserSession) -> Bool {
+    boundSession === session && workspace.selectedSession === session
+      && (isActivePane?() ?? true)
+  }
+
+  private func activatePane(for session: BrowserSession) {
+    guard tabID != nil, boundSession === session, !isActive(session) else { return }
+    if let onActivatePane { onActivatePane() }
+    else { workspace.selectTab(id: session.tabID) }
+  }
+
+  /// Mount as a sibling of the supplied browser view, above its page surface.
   var view: NSView {
     if let chromeView { return chromeView }
     return makeChromeView()
@@ -284,18 +336,81 @@ final class BrowserToolbarController: NSObject {
 
   deinit {
     if let siteInformationEventMonitor { NSEvent.removeMonitor(siteInformationEventMonitor) }
+    // A window retains overlays independently of the toolbar's chrome. Capture
+    // the view, never self, and remove it on AppKit's thread even on implicit disposal.
+    DispatchQueue.main.async { [overlay = addressOverlay, chrome = chromeView] in
+      overlay?.removeFromSuperview()
+      chrome?.removeFromSuperview()
+    }
+  }
+
+  /// Removes the window overlay, chrome, field editor and local event monitors.
+  /// The host may later mount `view` and call `install` again on this controller.
+  func removeFromPresentation() {
+    releaseAddressFocus()
+    siteInformation.dismiss()
+    addressAutocomplete.end()
+    windowObservations.removeAll()
+    if let siteInformationEventMonitor {
+      NSEvent.removeMonitor(siteInformationEventMonitor)
+      self.siteInformationEventMonitor = nil
+    }
+    if let panel = certificatePanel {
+      window?.endSheet(panel)
+      panel.orderOut(nil)
+      certificatePanel = nil
+    }
+    toolbarPresentation.setVisible(false, animated: false)
+    addressOverlay?.removeFromSuperview()
+    addressOverlay = nil
+    chromeView?.removeFromSuperview()
+    chromeView = nil
+    window = nil
+  }
+
+  /// Idempotent final cleanup; a disposed controller must not be installed again.
+  func dispose() {
+    guard !isDisposed else { return }
+    isDisposed = true
+    removeFromPresentation()
+    browserFrameObservation = nil
+    workspaceObservation = nil
+    addressFocusRequestObservation = nil
+    selectedSessionObservations.removeAll()
+    observedSession = nil
+  }
+
+  private func releaseAddressFocus() {
+    guard addressPresentation.isFocused else { return }
+    addressPresentation.isFocused = false
+    addressAutocomplete.end()
+    // The window's field editor may already belong to another pane.
+    if let overlay = addressOverlay, let window {
+      func containsResponder(in view: NSView) -> Bool {
+        if window.firstResponder === view { return true }
+        if let field = view as? NSTextField, let editor = field.currentEditor(),
+           window.firstResponder === editor { return true }
+        return view.subviews.contains { containsResponder(in: $0) }
+      }
+      if containsResponder(in: overlay) { window.makeFirstResponder(nil) }
+    }
+    observedSession?.addressFieldFocusChanged(false)
   }
 
   func install(in window: NSWindow, showsSpaceToolbar: Bool) {
+    guard !isDisposed else { return }
     self.window = window
-    window.styleMask.insert(.fullSizeContentView)
-    window.isOpaque = false
-    window.backgroundColor = .clear
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.toolbar = nil
-    window.initialFirstResponder = browserView
+    if tabID == nil {
+      window.styleMask.insert(.fullSizeContentView)
+      window.isOpaque = false
+      window.backgroundColor = .clear
+      window.titleVisibility = .hidden
+      window.titlebarAppearsTransparent = true
+      window.toolbar = nil
+      window.initialFirstResponder = browserView
+    }
     _ = view
+    installSiteInformationEventMonitor()
     chromeView?.installTrafficLights(in: window)
 
     windowObservations.removeAll()
@@ -313,19 +428,29 @@ final class BrowserToolbarController: NSObject {
       }
       .store(in: &windowObservations)
     setSpaceControlsVisible(showsSpaceToolbar, animated: false)
-    bindSelectedSession(workspace.selectedSession)
+    bindSession(boundSession)
     updateSidebarState()
   }
 
   func setSpaceControlsVisible(_ visible: Bool, animated: Bool = true) {
+    guard !isDisposed else { return }
     if !visible { siteInformation.dismiss() }
     if !visible, addressPresentation.isFocused {
-      addressAutocomplete.end()
-      addressPresentation.isFocused = false
-      window?.makeFirstResponder(nil)
-      observedSession?.addressFieldFocusChanged(false)
+      releaseAddressFocus()
     }
     chromeView?.setAddressVisible(visible, animated: animated)
+    handle(.geometryChanged)
+  }
+
+  /// Shows/hides only navigation and address controls. The shell keeps its
+  /// traffic lights and sidebar button while split panes provide page controls.
+  func setPageControlsVisible(_ visible: Bool, animated: Bool = true) {
+    guard !isDisposed else { return }
+    if !visible {
+      siteInformation.dismiss()
+      releaseAddressFocus()
+    }
+    chromeView?.setPageControlsVisible(visible, animated: animated)
     handle(.geometryChanged)
   }
 
@@ -333,39 +458,55 @@ final class BrowserToolbarController: NSObject {
     handle(.sidebarChanged)
   }
 
+  /// Match the tab-placement crop while the browser's real frame stays unchanged.
+  func setBrowserViewportFrame(_ frame: CGRect?) {
+    guard browserViewportFrame != frame else { return }
+    browserViewportFrame = frame
+    handle(.geometryChanged)
+  }
+
   func browserGeometryDidChange() {
     handle(.geometryChanged)
   }
 
   private func handle(_ event: ToolbarEvent) {
+    guard !isDisposed else { return }
     switch event {
     case .sidebarChanged:
       chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
-      if observedSession !== workspace.selectedSession { siteInformation.dismiss() }
-      if observedSession !== workspace.selectedSession, addressPresentation.isFocused {
-        addressAutocomplete.end()
-        addressPresentation.isFocused = false
-        window?.makeFirstResponder(nil)
-        observedSession?.addressFieldFocusChanged(false)
-        workspace.selectedSession?.focusPage()
+      let session = boundSession
+      let changed = observedSession !== session
+      let hadAddressFocus = addressPresentation.isFocused
+      if changed || (session.map { !isActive($0) } ?? true) {
+        siteInformation.dismiss()
+        releaseAddressFocus()
+        if changed, hadAddressFocus, !isPaneToolbar { session?.focusPage() }
       }
-      bindSelectedSession(workspace.selectedSession)
+      bindSession(session)
     case .addressFocusChanged(let session, let focused):
-      guard workspace.selectedSession === session,
+      guard boundSession === session,
             !focused || toolbarPresentation.isVisible else { return }
+      if focused { activatePane(for: session) }
       addressPresentation.isFocused = focused
       if focused { siteInformation.dismiss() }
       session.addressFieldFocusChanged(focused)
     case .addressFocusRequested(let session):
-      guard workspace.selectedSession === session, toolbarPresentation.isVisible else { return }
+      guard isActive(session), toolbarPresentation.isVisible,
+            let window, chromeView?.window === window else { return }
       siteInformation.dismiss()
-      NotificationCenter.default.post(
-        name: .browserAddressFieldShouldFocus,
-        object: session.addressField)
+      // Focus only this overlay's editor. Broadcasting its model would also
+      // reach the hidden shell editor bound to the same selected session.
+      DispatchQueue.main.async { [weak self, weak session] in
+        guard let self, let session, self.isActive(session),
+              self.toolbarPresentation.isVisible, let overlay = self.addressOverlay,
+              overlay.window === self.window else { return }
+        self.addressField(in: overlay)?.focusAndSelectAll()
+      }
     case .addressReloadOrStop(let session):
-      guard workspace.selectedSession === session else { return }
+      guard boundSession === session, toolbarPresentation.isVisible else { return }
       siteInformation.dismiss()
+      activatePane(for: session)
       session.reloadOrStop()
     case .geometryChanged:
       break
@@ -373,11 +514,20 @@ final class BrowserToolbarController: NSObject {
     applyCurrentLayout()
   }
 
+  private func addressField(in view: NSView) -> NativeBrowserAddressField? {
+    if let field = view as? NativeBrowserAddressField { return field }
+    for subview in view.subviews {
+      if let field = addressField(in: subview) { return field }
+    }
+    return nil
+  }
+
   private func applyCurrentLayout() {
     guard let window, let chromeView,
           chromeView.window === window, browserView.window === window else { return }
-    let browserRect = browserView.convert(browserView.bounds, to: chromeView)
-    chromeView.applyLayout(browserRect: browserRect)
+    let browserRect = browserView.convert(browserViewportFrame ?? browserView.bounds, to: chromeView)
+    let sidebarAnchor = browserView.convert(browserView.bounds, to: chromeView)
+    chromeView.applyLayout(browserRect: browserRect, sidebarAnchor: sidebarAnchor)
   }
 
   private func observeWorkspace() {
@@ -394,7 +544,13 @@ final class BrowserToolbarController: NSObject {
     handle(.sessionChanged)
   }
 
-  private func bindSelectedSession(_ session: BrowserSession?) {
+  private func bindSession(_ session: BrowserSession?) {
+    // Explicitly update the mounted address view when selection changes. A
+    // hidden shell toolbar must not retain the pane that just closed.
+    let addressTabID = tabID ?? session?.tabID
+    if let overlay = addressOverlay, overlay.rootView.tabID != addressTabID {
+      overlay.rootView.tabID = addressTabID
+    }
     guard let session else {
       selectedSessionObservations.removeAll()
       observedSession = nil
@@ -500,6 +656,7 @@ final class BrowserToolbarController: NSObject {
       label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)))
     let addressView = AddressOverlayHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
+      tabID: tabID ?? boundSession?.tabID,
       interaction: addressPresentation,
       autocomplete: addressAutocomplete,
       presentation: toolbarPresentation,
@@ -519,35 +676,51 @@ final class BrowserToolbarController: NSObject {
     addressView.safeAreaRegions = []
     addressView.clipsToBounds = false
     addressOverlay = addressView
-    installSiteInformationEventMonitor()
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,
       forwardButton: forwardButton,
       addressView: addressView,
-      presentation: toolbarPresentation)
+      presentation: toolbarPresentation,
+      showsWindowControls: !isPaneToolbar)
     view.setAccessibilityRole(.toolbar)
-    view.setAccessibilityLabel("Toolbar")
+    view.setAccessibilityLabel(tabID == nil ? "Toolbar" : "Pane Toolbar")
     chromeView = view
+    if let session = boundSession {
+      applyNavigationToolbarState(canGoBack: session.canGoBack,
+                                  canGoForward: session.canGoForward, hasSession: true)
+    } else {
+      applyNavigationToolbarState(canGoBack: false, canGoForward: false, hasSession: false)
+    }
     return view
   }
 
   @objc private func handleSidebarToggle(_ sender: NSButton) {
+    guard !isDisposed, tabID == nil else { return }
     onSidebarToggle()
   }
 
   @objc private func goBack(_ sender: NSButton) {
+    guard !isDisposed, toolbarPresentation.isVisible else { return }
     siteInformation.dismiss()
-    workspace.selectedSession?.goBack()
+    if let session = boundSession {
+      activatePane(for: session)
+      session.goBack()
+    }
   }
 
   @objc private func goForward(_ sender: NSButton) {
+    guard !isDisposed, toolbarPresentation.isVisible else { return }
     siteInformation.dismiss()
-    workspace.selectedSession?.goForward()
+    if let session = boundSession {
+      activatePane(for: session)
+      session.goForward()
+    }
   }
 
   private func toggleSiteInformation(for session: BrowserSession) {
-    guard workspace.selectedSession === session, toolbarPresentation.isVisible else { return }
+    guard !isDisposed, boundSession === session, toolbarPresentation.isVisible else { return }
+    activatePane(for: session)
     if siteInformation.isPresented { closeSiteInformation(); return }
     addressAutocomplete.end()
     addressPresentation.isFocused = false
@@ -556,13 +729,18 @@ final class BrowserToolbarController: NSObject {
     siteInformation.present(session.siteInformation)
   }
 
+  private func focusBoundPageIfActive() {
+    guard !isDisposed, let session = boundSession, isActive(session) else { return }
+    session.focusPage()
+  }
+
   private func closeSiteInformation() {
     siteInformation.dismiss()
-    workspace.selectedSession?.focusPage()
+    focusBoundPageIfActive()
   }
 
   private func showCertificate(_ information: SiteInformation) {
-    guard let window, let session = workspace.selectedSession,
+    guard let window, let session = boundSession,
           session.url == information.url, !session.isLoading, !session.rendererCrashed,
           window.attachedSheet == nil else { return }
     let certificates = information.certificateChain.compactMap {
@@ -583,7 +761,7 @@ final class BrowserToolbarController: NSObject {
   @objc private func certificatePanelDidEnd(_ panel: NSWindow, returnCode: Int,
                                             contextInfo: UnsafeMutableRawPointer?) {
     certificatePanel = nil
-    if !addressPresentation.isFocused { workspace.selectedSession?.focusPage() }
+    if !addressPresentation.isFocused { focusBoundPageIfActive() }
   }
 
   private func installSiteInformationEventMonitor() {
@@ -612,7 +790,7 @@ final class BrowserToolbarController: NSObject {
       if !rect.contains(point) {
         self.siteInformation.dismiss()
         // Hand focus back for the same click to reach the Chromium page.
-        if !self.addressPresentation.isFocused { self.workspace.selectedSession?.focusPage() }
+        if !self.addressPresentation.isFocused { self.focusBoundPageIfActive() }
       }
       return event
     }

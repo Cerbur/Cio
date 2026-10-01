@@ -19,6 +19,12 @@ final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
   weak var splitView: NSSplitView?
   weak var tabDrag: SidebarTabDrag?
+  var onTabDragAvailable: ((SidebarTabDrag) -> Void)?
+
+  func attachTabDrag(_ drag: SidebarTabDrag) {
+    tabDrag = drag
+    onTabDragAvailable?(drag)
+  }
 
   func update(topInset: CGFloat) {
     guard abs(self.topInset - topInset) > 0.5 else { return }
@@ -169,15 +175,10 @@ struct TabSidebarView: View {
           .frame(width: 10)
           .accessibilityLabel("Resize Sidebar")
       }
-      .overlay {
-        SidebarTabDragOverlay(drag: tabDrag) { id, style in
-          tabDragLabel(id, style: style)
-        }
-      }
       .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
-      .onAppear { chromeLayout.tabDrag = tabDrag }
+      .onAppear { chromeLayout.attachTabDrag(tabDrag) }
       .onChange(of: isTabDragGestureActive) { _, isActive in
         guard !isActive else { return }
         // Runs after `onEnded`, so only a cancelled gesture is still dragging.
@@ -461,25 +462,6 @@ struct TabSidebarView: View {
       topInset: chromeLayout.topInset)
   }
 
-  @ViewBuilder
-  private func tabDragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
-    if let tab = workspace.tab(withID: id) {
-      HStack(spacing: 9) {
-        TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
-                       size: SidebarTabAppearance.faviconSize,
-                       fallbackLetter: style == .tile ? tab.pinFallbackLetter : nil)
-          .frame(width: 20)
-        if style == .row {
-          Text(tab.displayTitle)
-            .font(.callout.weight(.medium))
-            .lineLimit(1)
-          Spacer(minLength: 0)
-        }
-      }
-      .padding(.horizontal, style == .row ? 11 : 0)
-    }
-  }
-
   private var footer: some View {
     VStack(spacing: 7) {
       HStack(spacing: 0) {
@@ -685,7 +667,7 @@ private enum SidebarSlot: Identifiable {
   }
 }
 
-private extension BrowserTab {
+extension BrowserTab {
   /// Top pin shows a site's initial when it has no favicon.
   var pinFallbackLetter: String {
     String((url?.host ?? displayTitle)

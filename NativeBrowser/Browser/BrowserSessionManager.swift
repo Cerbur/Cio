@@ -61,6 +61,9 @@ final class BrowserSessionManager: ObservableObject {
   /// its status bar without becoming a second runtime registry.
   var onRuntimeStateChanged: (() -> Void)?
 
+  /// Presentation-only geometry for shell chrome; this never resizes Chromium.
+  var onSelectedSurfaceFrameChange: ((BrowserSurfaceHostView, CGRect?) -> Void)?
+
   // MARK: - Runtime registry
 
   private var sessions: [UUID: BrowserSession] = [:]
@@ -74,6 +77,7 @@ final class BrowserSessionManager: ObservableObject {
   private var containers: [UUID: ChromiumContainerView] = [:]
   private weak var surfaceHost: BrowserSurfaceHostView?
   private var selectedSurfaceTabID: UUID?
+  private var splitLayout: BrowserSplitLayout?
 
   private(set) var isTerminating = false
 
@@ -234,10 +238,15 @@ final class BrowserSessionManager: ObservableObject {
   func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
     if surfaceHost !== host {
       surfaceHost?.onDarkAppearanceChange = nil
+      surfaceHost?.onSelectedSurfaceFrameChange = nil
     }
     surfaceHost = host
     host.onDarkAppearanceChange = { [weak self] dark in
       self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
+    }
+    host.onSelectedSurfaceFrameChange = { [weak self, weak host] frame in
+      guard let self, let host, self.surfaceHost === host else { return }
+      self.onSelectedSurfaceFrameChange?(host, frame)
     }
     syncSurface()
     host.syncChromiumAppearance()
@@ -249,6 +258,16 @@ final class BrowserSessionManager: ObservableObject {
   func setSelectedSurfaceTabID(_ tabID: UUID?) {
     selectedSurfaceTabID = tabID
     syncSurface()
+  }
+
+  func setSurfacePresentation(selectedTabID: UUID?, split: BrowserSplitLayout?) {
+    selectedSurfaceTabID = selectedTabID
+    splitLayout = split
+    syncSurface()
+  }
+
+  func previewSplit(on side: BrowserSplitLayout.Side?) {
+    surfaceHost?.previewSplit(on: side)
   }
 
   /// Keeps one container for every live session and makes only the workspace's
@@ -276,7 +295,7 @@ final class BrowserSessionManager: ObservableObject {
       containers.removeValue(forKey: tabID)
     }
 
-    host.present(containers: live, selectedTabID: selectedSurfaceTabID)
+    host.present(containers: live, selectedTabID: selectedSurfaceTabID, split: splitLayout)
 
     // Attach after the containers are subviews. BrowserSession creates its CEF
     // browser only once the container has a window, and never on a visibility

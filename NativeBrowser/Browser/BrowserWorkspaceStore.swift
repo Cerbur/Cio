@@ -22,6 +22,7 @@ final class BrowserWorkspaceStore: ObservableObject {
   let sessionStore: SessionStore
 
   private var workspace: WorkspaceCollection
+  private var splitLayouts: [UUID: BrowserSplitLayout] = [:]
   private var lastSavedSnapshot: WorkspaceSessionSnapshot?
 
   /// A shell-level command surface. Opening it does not create a tab.
@@ -151,6 +152,51 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// call when no live sessions exist.
   func flushSessionPersistence() {
     persistIfNeeded()
+  }
+
+  /// A pair is visible whenever either member is selected in its owning Space.
+  var activeSplit: BrowserSplitLayout? {
+    guard let split = splitLayouts[selectedSpaceID], split.contains(selectedTabID),
+          split.tabIDs.allSatisfy({ currentTabIDs.contains($0) }) else { return nil }
+    return split
+  }
+
+  func canSplit(with tabID: UUID) -> Bool {
+    guard !isTerminating, !isSpotlightPresented, let selectedTabID,
+          tabID != selectedTabID, temporaryTabs.contains(where: { $0.id == tabID }),
+          !sessionManager.isClosing(tabID: tabID),
+          !sessionManager.isClosing(tabID: selectedTabID) else { return false }
+    return activeSplit?.contains(tabID) != true
+  }
+
+  @discardableResult
+  func splitTab(_ tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
+    guard canSplit(with: tabID), let selectedTabID, let tab = tab(withID: tabID),
+          ensureSession(for: tab) != nil else { return false }
+    let split = BrowserSplitLayout(
+      leftTabID: side == .left ? tabID : selectedTabID,
+      rightTabID: side == .right ? tabID : selectedTabID)
+    splitLayouts[selectedSpaceID] = split
+    selectTab(id: tabID)
+    publishWorkspace()
+    selectedSession?.focusPage()
+    emit("split:committed")
+    return true
+  }
+
+  func setSplitFraction(_ fraction: CGFloat) {
+    guard var split = activeSplit else { return }
+    split.fraction = fraction
+    splitLayouts[selectedSpaceID] = split
+    publishWorkspace()
+  }
+
+  func endSplit(keeping tabID: UUID) {
+    guard activeSplit?.contains(tabID) == true else { return }
+    splitLayouts[selectedSpaceID] = nil
+    selectTab(id: tabID)
+    publishWorkspace()
+    selectedSession?.focusPage()
   }
 
   // MARK: - Space lifecycle
@@ -376,7 +422,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
     sessionManager.attachSurfaceHost(host)
-    sessionManager.setSelectedSurfaceTabID(selectedTabID)
+    sessionManager.setSurfacePresentation(selectedTabID: selectedTabID, split: activeSplit)
   }
 
   func requestCloseAllForTermination() {
@@ -486,10 +532,16 @@ final class BrowserWorkspaceStore: ObservableObject {
       sessionManager.session(for: id)?.releaseFocusBeforeTabRemoval()
     }
 
+    let closingSplit = activeSplit.flatMap { $0.contains(id) ? $0 : nil }
+
     var result: WorkspaceTabCloseResult?
     withSelectionTransition(
       pageHeldKeyboardOverride: selectedCloseHeldPageKeyboard ? true : nil
     ) {
+      if let split = closingSplit {
+        splitLayouts[selectedSpaceID] = nil
+        workspace.selectTab(id: split.leftTabID == id ? split.rightTabID : split.leftTabID)
+      }
       let closeResult = workspace.close(id, reason: reason)
       guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
         result = closeResult
@@ -565,7 +617,11 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   private func publishWorkspace() {
     objectWillChange.send()
-    sessionManager.setSelectedSurfaceTabID(workspace.selectedTabID)
+    splitLayouts = splitLayouts.filter { spaceID, split in
+      let ids = workspace.tabs(in: spaceID).map(\.id)
+      return split.tabIDs.allSatisfy { ids.contains($0) }
+    }
+    sessionManager.setSurfacePresentation(selectedTabID: workspace.selectedTabID, split: activeSplit)
   }
 
   /// Ensures exactly one runtime for a selected domain tab. This is the only

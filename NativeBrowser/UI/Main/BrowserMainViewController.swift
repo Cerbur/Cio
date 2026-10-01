@@ -15,6 +15,11 @@ final class SeamlessSplitView: NSSplitView {
 
 @MainActor
 final class BrowserMainViewController: NSViewController {
+  private let runtime: ApplicationRuntime
+  private let sidebarChromeLayout: SidebarChromeLayout
+  private var dragOverlay: NSView?
+  private weak var overlayDrag: SidebarTabDrag?
+  private var splitDropSide: BrowserSplitLayout.Side?
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
   let spaceSplitController: NSSplitViewController
@@ -22,6 +27,8 @@ final class BrowserMainViewController: NSViewController {
   var spaceSplitView: NSSplitView { spaceSplitController.splitView }
 
   init(runtime: ApplicationRuntime, sidebarChromeLayout: SidebarChromeLayout) {
+    self.runtime = runtime
+    self.sidebarChromeLayout = sidebarChromeLayout
     let sidebarRootView = AnyView(
       TabSidebarView(workspace: runtime.workspaceStore)
         .environmentObject(sidebarChromeLayout)
@@ -68,6 +75,7 @@ final class BrowserMainViewController: NSViewController {
     addChild(spaceSplitController)
     container.addSubview(spaceSplitController.view)
     spaceSplitController.view.translatesAutoresizingMaskIntoConstraints = false
+    sidebarChromeLayout.onTabDragAvailable = { [weak self] drag in self?.installDragOverlay(drag) }
     NSLayoutConstraint.activate([
       spaceSplitController.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
       spaceSplitController.view.topAnchor.constraint(equalTo: container.topAnchor),
@@ -77,6 +85,43 @@ final class BrowserMainViewController: NSViewController {
         equalTo: container.bottomAnchor),
     ])
   }
+  private func installDragOverlay(_ drag: SidebarTabDrag) {
+    // Sidebar reattachment during tier changes must preserve the glass namespace.
+    if overlayDrag === drag, dragOverlay != nil { return }
+    dragOverlay?.removeFromSuperview()
+    let overlay = BrowserTabDragHostingView(rootView: BrowserTabDragPresentation(
+      drag: drag, workspace: runtime.workspaceStore))
+    overlay.safeAreaRegions = []
+    overlay.frame = view.bounds
+    overlay.autoresizingMask = [.width, .height]
+    view.addSubview(overlay, positioned: .above, relativeTo: nil)
+    dragOverlay = overlay
+    overlayDrag = drag
+    drag.externalBounds = { [weak self] in
+      guard let self else { return .zero }
+      return self.sidebarItem.viewController.view.convert(self.view.bounds, from: self.view)
+    }
+    drag.onPointerMove = { [weak self] id, point, isTemporary in
+      guard let self else { return }
+      let browser = self.browserItem.viewController.view
+      let local = browser.convert(point, from: self.sidebarItem.viewController.view)
+      let canSplit = isTemporary && self.runtime.presentedInternalPanel == nil
+        && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
+      self.splitDropSide = canSplit ? (local.x < browser.bounds.midX ? .left : .right) : nil
+      self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide)
+    }
+    drag.onSplitDrop = { [weak self] id in
+      guard let self, let side = self.splitDropSide else { return false }
+      self.runtime.workspaceStore.sessionManager.previewSplit(on: nil)
+      self.splitDropSide = nil
+      return self.runtime.workspaceStore.splitTab(id, on: side)
+    }
+    drag.onPreviewEnd = { [weak self] in
+      self?.splitDropSide = nil
+      self?.runtime.workspaceStore.sessionManager.previewSplit(on: nil)
+    }
+  }
+
 }
 
 /// Keeps the Chromium surface mounted across library section changes.
@@ -86,7 +131,7 @@ private struct BrowserShellContentView: View {
 
   var body: some View {
     ZStack {
-      BrowserSurfaceView(manager: workspace.sessionManager)
+      BrowserSurfaceView(manager: workspace.sessionManager, workspace: workspace, history: runtime.historyService, isCovered: runtime.presentedInternalPanel != nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
       if let panel = runtime.presentedInternalPanel {
@@ -126,5 +171,78 @@ private struct BrowserShellContentView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Color(nsColor: .underPageBackgroundColor))
+  }
+}
+
+/// Draw the block over the full Main View so leaving the sidebar never clips it.
+private final class BrowserTabDragHostingView: NSHostingView<BrowserTabDragPresentation> {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private struct BrowserTabDragPresentation: View {
+  let drag: SidebarTabDrag
+  @ObservedObject var workspace: BrowserWorkspaceStore
+
+  var body: some View {
+    SidebarTabDragOverlay(drag: drag) { id, style in
+      if let tab = workspace.tab(withID: id) {
+        DragContent(
+          pageURL: tab.url, session: workspace.session(for: id),
+          title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
+          rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
+      }
+    }
+  }
+
+  /// All styles share one favicon and two permanently mounted title layouts.
+  /// Interpolating layout values keeps the icon's size and position continuous;
+  /// title opacity can change without replacing either text view.
+  private struct DragContent: View, Animatable {
+    let pageURL: URL?
+    let session: BrowserSession?
+    let title: String
+    let fallbackLetter: String?
+    nonisolated var rowAmount: CGFloat
+    nonisolated var cardAmount: CGFloat
+
+    nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+      get { AnimatablePair(rowAmount, cardAmount) }
+      set {
+        rowAmount = newValue.first
+        cardAmount = newValue.second
+      }
+    }
+
+    var body: some View {
+      GeometryReader { geometry in
+        let width = geometry.size.width
+        let height = geometry.size.height
+        let iconSize = SidebarTabAppearance.faviconSize + 22 * cardAmount
+        let rowTitleWidth = max(width - 51, 1)
+        ZStack(alignment: .topLeading) {
+          TabFaviconView(
+            pageURL: pageURL, session: session, size: iconSize,
+            fallbackLetter: fallbackLetter)
+            .position(
+              x: width / 2 + (21 - width / 2) * rowAmount,
+              y: height / 2)
+
+          Text(title)
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+            .frame(width: rowTitleWidth, alignment: .leading)
+            .position(x: 40 + rowTitleWidth / 2, y: height / 2)
+            .opacity(Double(min(max(rowAmount, 0), 1)))
+
+          Text(title)
+            .font(.callout.weight(.medium))
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .frame(width: max(width - 24, 1), height: max(height * 0.3, 1))
+            .position(x: width / 2, y: height * 0.79)
+            .opacity(Double(min(max(cardAmount, 0), 1)))
+        }
+      }
+    }
   }
 }

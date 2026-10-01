@@ -47,6 +47,9 @@ enum AddressCapsuleLayout {
 
 struct ToolbarAddressFieldView: View {
   @ObservedObject var workspace: BrowserWorkspaceStore
+  /// Nil follows workspace selection; a UUID keeps every address action bound
+  /// to that pane's tab, even while another pane is selected.
+  var tabID: UUID? = nil
   @ObservedObject var interaction: BrowserInteractionState
   @ObservedObject var autocomplete: AddressAutocompleteModel
   @ObservedObject var presentation: ToolbarPresentationState
@@ -58,6 +61,11 @@ struct ToolbarAddressFieldView: View {
   var onCertificate: (SiteInformation) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  private var session: BrowserSession? {
+    if let tabID { return workspace.session(for: tabID) }
+    return workspace.selectedSession
+  }
+
   private var rowCount: Int { interaction.isFocused ? autocomplete.suggestions.count : 0 }
 
   var body: some View {
@@ -66,7 +74,7 @@ struct ToolbarAddressFieldView: View {
       let height = siteInformation.height(rowCount: rowCount)
       let radius: CGFloat = siteInformation.isPresented ? 24
         : rowCount > 0 ? 20 : AddressCapsuleLayout.cornerRadius
-      if let session = workspace.selectedSession {
+      if let session {
         VStack(spacing: 0) {
           addressField(for: session, width: width)
           if siteInformation.isPresented {
@@ -113,11 +121,11 @@ struct ToolbarAddressFieldView: View {
     .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.82),
                value: siteInformation.isPresented)
     .onChange(of: interaction.isFocused) { _, focused in
-      if focused, let session = workspace.selectedSession { autocomplete.begin(session.addressField.editText) }
+      if focused, let session { autocomplete.begin(session.addressField.editText) }
       else { autocomplete.end() }
       hoverGate.reset(to: NSEvent.mouseLocation)
     }
-    .onChange(of: workspace.selectedSession?.id) { _, _ in autocomplete.end() }
+    .onChange(of: session?.id) { _, _ in autocomplete.end() }
   }
 
   private func addressField(for session: BrowserSession, width: CGFloat) -> some View {

@@ -36,6 +36,7 @@ private final class BrowserShellView: NSView {
     self.railView = railView
     self.mainView = mainView
     super.init(frame: .zero)
+    identifier = NSUserInterfaceItemIdentifier("browser-shell-chrome-host")
     addSubview(mainView)
     addSubview(railView)
     addSubview(toolbarView)
@@ -89,6 +90,7 @@ final class NativeBrowserShellController: NSViewController {
   private var browserItem: NSSplitViewItem { mainViewController.browserItem }
   private var spaceSplitView: NSSplitView { mainViewController.spaceSplitView }
 
+  private var splitObservation: AnyCancellable?
   private var panelObservation: AnyCancellable?
   private var spotlightObservation: AnyCancellable?
   private var spotlightHostingView: SpotlightHostingView?
@@ -123,6 +125,11 @@ final class NativeBrowserShellController: NSViewController {
       railView: railController.view,
       mainView: mainViewController.view)
     shellView.onLayout = { [weak self] in self?.browserToolbar.browserGeometryDidChange() }
+    runtime.workspaceStore.sessionManager.onSelectedSurfaceFrameChange = { [weak self] host, frame in
+      guard let self else { return }
+      let local = frame.map { host.convert($0, to: self.browserItem.viewController.view) }
+      self.browserToolbar.setBrowserViewportFrame(local)
+    }
     view = shellView
   }
 
@@ -131,6 +138,9 @@ final class NativeBrowserShellController: NSViewController {
     observeSidebarCollapse()
     observePanelSelection()
     observeSpotlight()
+    splitObservation = runtime.workspaceStore.objectWillChange.sink { [weak self] _ in
+      DispatchQueue.main.async { [weak self] in self?.updateSplitToolbar() }
+    }
   }
 
   override func viewWillAppear() {
@@ -164,6 +174,7 @@ final class NativeBrowserShellController: NSViewController {
       browserToolbar.install(in: window, showsSpaceToolbar: runtime.presentedInternalPanel == nil)
     }
     updateSidebarChromeLayout()
+    updateSplitToolbar()
     updateSpotlightPresentation(runtime.workspaceStore.isSpotlightPresented)
     if !runtime.workspaceStore.isSpotlightPresented {
       runtime.workspaceStore.selectedSession?.focusPage()
@@ -264,6 +275,13 @@ final class NativeBrowserShellController: NSViewController {
     }
     browserToolbar.setSpaceControlsVisible(panel == nil)
     browserToolbar.updateSidebarState()
+    updateSplitToolbar()
+  }
+
+  private func updateSplitToolbar() {
+    browserToolbar.setPageControlsVisible(
+      runtime.presentedInternalPanel == nil && runtime.workspaceStore.activeSplit == nil,
+      animated: false)
   }
 
   private func observeSidebarCollapse() {

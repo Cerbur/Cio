@@ -25,9 +25,14 @@ import SwiftUI
 struct BrowserSurfaceView: NSViewRepresentable {
   /// The runtime owner of the tabs and of the containers.
   @ObservedObject var manager: BrowserSessionManager
+  let workspace: BrowserWorkspaceStore
+  let history: HistoryService
+  var isCovered = false
 
   func makeNSView(context: Context) -> BrowserSurfaceHostView {
     let hostView = BrowserSurfaceHostView()
+    hostView.configure(workspace: workspace, history: history)
+    hostView.setPresentationCovered(isCovered)
     manager.attachSurfaceHost(hostView)
     return hostView
   }
@@ -36,6 +41,7 @@ struct BrowserSurfaceView: NSViewRepresentable {
     // Idempotent: it re-adopts the same host, creates a container for any session
     // that does not have one yet, and never removes a container whose session is
     // still alive.
+    nsView.setPresentationCovered(isCovered)
     manager.attachSurfaceHost(nsView)
   }
 }

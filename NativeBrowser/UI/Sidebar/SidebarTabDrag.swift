@@ -46,6 +46,7 @@ final class SidebarTabDrag {
   enum Style: Equatable {
     case row
     case tile
+    case card
 
     init(_ tier: WorkspaceCollection.TabTier) {
       self = tier == .global ? .tile : .row
@@ -76,6 +77,10 @@ final class SidebarTabDrag {
   var liftedTabID: UUID? { phase == .lifted ? tabID : nil }
   var isDragging: Bool { liftedTabID != nil }
 
+  @ObservationIgnored var externalBounds: (() -> CGRect)?
+  @ObservationIgnored var onPointerMove: ((UUID, CGPoint, Bool) -> Void)?
+  @ObservationIgnored var onSplitDrop: ((UUID) -> Bool)?
+  @ObservationIgnored var onPreviewEnd: (() -> Void)?
   @ObservationIgnored var bounds = CGRect.zero
   @ObservationIgnored var topPinFrame = CGRect.zero
   @ObservationIgnored var spaceFrame = CGRect.zero
@@ -101,6 +106,8 @@ final class SidebarTabDrag {
   @ObservationIgnored private var pointer = CGPoint.zero
   @ObservationIgnored private var sourceTier = WorkspaceCollection.TabTier.global
   @ObservationIgnored private var sourceSize = CGSize.zero
+  @ObservationIgnored private var isOutsideSidebar = false
+  @ObservationIgnored private var isOverTopPins = false
   /// Dropping here leaves the tab where it was.
   @ObservationIgnored private var homeTarget: SidebarTabDropTarget?
   @ObservationIgnored private var landingTier: WorkspaceCollection.TabTier?
@@ -186,11 +193,18 @@ final class SidebarTabDrag {
     resolveTarget()
     anchor = clampedAnchor(pointer)
     updateAutoscroll()
+    if let tabID { onPointerMove?(tabID, location, sourceTier == .temporary(layout.spaceID)) }
   }
 
   func drop(_ move: (UUID, SidebarTabDropTarget) -> Bool) {
     defer { ignoresGesture = false }
     guard !ignoresGesture, isDragging, let id = tabID else { return }
+    if onSplitDrop?(id) == true {
+      lastDrop = (id, ProcessInfo.processInfo.systemUptime)
+      finish(animated: false)
+      return
+    }
+    onPreviewEnd?()
     let target = target
     setAutoscroll(0)
     lastDrop = (id, ProcessInfo.processInfo.systemUptime)
@@ -204,6 +218,7 @@ final class SidebarTabDrag {
 
   /// A cancelled gesture never reaches `drop`.
   func gestureDidEnd() {
+    onPreviewEnd?()
     if isDragging, let id = tabID {
       setAutoscroll(0)
       returnToSource(id)
@@ -235,6 +250,8 @@ final class SidebarTabDrag {
     homeTarget = SidebarTabDropTarget(tier: key.tier, before: next)
     sourceTier = key.tier
     sourceSize = item.frame.size
+    isOutsideSidebar = false
+    isOverTopPins = key.tier == .global
     style = Style(key.tier)
     size = item.frame.size
     grab = CGPoint(
@@ -307,6 +324,7 @@ final class SidebarTabDrag {
 
   private func finish(animated: Bool) {
     guard tabID != nil else { return }
+    onPreviewEnd?()
     landingTier = nil
     landingFlight += 1
     setAutoscroll(0)
@@ -334,11 +352,29 @@ final class SidebarTabDrag {
   /// gap and the target cannot flicker between two slots.
   private func resolveTarget() {
     guard let id = tabID, let layout else { return }
+    // Separate exit and entry thresholds keep the card stable at the edge.
+    let boundarySlop: CGFloat = 8
+    if isOutsideSidebar {
+      if pointer.x >= bounds.minX + boundarySlop,
+         pointer.x <= bounds.maxX - boundarySlop {
+        isOutsideSidebar = false
+      }
+    } else if pointer.x < bounds.minX - boundarySlop || pointer.x > bounds.maxX + boundarySlop {
+      isOutsideSidebar = true
+    }
+    // Keep the tile/row morph stable when the top-pin gap changes geometry.
+    if !isOutsideSidebar {
+      if isOverTopPins {
+        if pointer.y > topPinFrame.maxY + boundarySlop { isOverTopPins = false }
+      } else if pointer.y < topPinFrame.maxY - boundarySlop {
+        isOverTopPins = true
+      }
+    }
     let resolved: SidebarTabDropTarget?
     // Leaving the sidebar sideways puts the tab back where it started.
-    if pointer.x < bounds.minX - 8 || pointer.x > bounds.maxX + 8 {
+    if isOutsideSidebar {
       resolved = nil
-    } else if pointer.y < topPinFrame.maxY {
+    } else if isOverTopPins {
       resolved = topPinTarget(for: id, in: layout)
     } else {
       resolved = spaceTarget(for: id, in: layout)
@@ -347,8 +383,8 @@ final class SidebarTabDrag {
       withAnimation(reduceMotion ? nil : .smooth(duration: 0.26)) { target = resolved }
     }
 
-    // Over top pin the block takes a tile's shape; over a list, a row's.
-    let nextStyle = Style(target?.tier ?? sourceTier)
+    // Presentation follows the region even when that tier cannot accept a drop.
+    let nextStyle: Style = isOutsideSidebar ? .card : (isOverTopPins ? .tile : .row)
     guard nextStyle != style else { return }
     withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.78)) {
       style = nextStyle
@@ -361,6 +397,7 @@ final class SidebarTabDrag {
     switch style {
     case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: 36)
     case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 40.5)
+    case .card: return CGSize(width: 140, height: 140 * 1.4)
     }
   }
 
@@ -397,12 +434,13 @@ final class SidebarTabDrag {
   }
 
   private func clampedAnchor(_ point: CGPoint) -> CGPoint {
-    // Leave room for the lifted block's scale.
-    let margin = CGSize(width: 4 + size.width * 0.03, height: 2 + size.height * 0.03)
-    let minX = bounds.minX + margin.width + grab.x * size.width
-    let maxX = bounds.maxX - margin.width - (1 - grab.x) * size.width
-    let minY = (layout?.topInset ?? 0) + margin.height + grab.y * size.height
-    let maxY = bounds.maxY - margin.height - (1 - grab.y) * size.height
+    // Clamp only the pointer. Size-dependent clamping would jump to the new
+    // card's bounds before the glass has finished morphing to that size.
+    let dragBounds = externalBounds?() ?? bounds
+    let minX = dragBounds.minX
+    let maxX = dragBounds.maxX
+    let minY = max(dragBounds.minY, layout?.topInset ?? 0)
+    let maxY = dragBounds.maxY
     return CGPoint(
       x: min(max(point.x, minX), max(minX, maxX)),
       y: min(max(point.y, minY), max(minY, maxY)))
@@ -517,42 +555,63 @@ struct SidebarTabDragOverlay<Label: View>: View {
   let drag: SidebarTabDrag
   @ViewBuilder let label: (UUID, SidebarTabDrag.Style) -> Label
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Namespace private var glassNamespace
 
   var body: some View {
     GlassEffectContainer {
       if let id = drag.tabID {
-        SidebarTabGlassBlock(style: drag.style, isLifted: drag.isLifted) {
+        SidebarTabGlassBlock(
+          size: drag.size, grab: drag.grab, isLifted: drag.isLifted && !reduceMotion,
+          glassID: id, namespace: glassNamespace
+        ) {
           label(id, drag.style)
         }
-        .frame(width: drag.size.width, height: drag.size.height)
-        .offset(
-          x: (0.5 - drag.grab.x) * drag.size.width,
-          y: (0.5 - drag.grab.y) * drag.size.height)
         .glassEffectTransition(reduceMotion ? .identity : .materialize)
+        // Pointer updates have no implicit animation. Only the model's explicit
+        // morph/lift/landing transactions animate the block.
         .position(drag.anchor)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .transaction { transaction in
+      if reduceMotion {
+        transaction.animation = nil
+        transaction.disablesAnimations = true
+      }
+    }
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
 }
 
 /// A lifted tab: the same favicon and title on a free-floating glass block.
-private struct SidebarTabGlassBlock<Content: View>: View {
-  let style: SidebarTabDrag.Style
+private struct SidebarTabGlassBlock<Content: View>: View, Animatable {
+  nonisolated var size: CGSize
+  let grab: CGPoint
   let isLifted: Bool
+  let glassID: UUID
+  let namespace: Namespace.ID
   @ViewBuilder let content: Content
+
+  nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+    get { AnimatablePair(size.width, size.height) }
+    set { size = CGSize(width: newValue.first, height: newValue.second) }
+  }
 
   var body: some View {
     let shape = SidebarTabAppearance.glassShape
     content
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: style == .tile ? .center : .leading)
+      // The material sees the interpolated frame, not an intrinsic-size switch.
+      .frame(width: size.width, height: size.height)
+      .clipShape(shape)
       .glassEffect(.regular, in: shape)
-      .scaleEffect(isLifted ? 1.04 : 1)
+      .glassEffectID(glassID, in: namespace)
+      .scaleEffect(isLifted ? 1.04 : 1, anchor: UnitPoint(x: grab.x, y: grab.y))
       .shadow(
         color: .black.opacity(isLifted ? 0.2 : 0.06),
         radius: isLifted ? 16 : 5,
         y: isLifted ? 9 : 2)
+      // Use the same interpolated size for the frame and fractional grab.
+      .offset(x: (0.5 - grab.x) * size.width, y: (0.5 - grab.y) * size.height)
   }
 }
