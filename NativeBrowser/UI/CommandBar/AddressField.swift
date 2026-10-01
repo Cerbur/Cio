@@ -46,6 +46,9 @@ struct AddressField: NSViewRepresentable {
   /// Routed through the toolbar so both reload controls use one command path.
   var onReloadOrStop: () -> Void
 
+  /// The favicon is a peer of the reload control above the native field.
+  var onSiteInformationToggle: () -> Void
+
   /// Called when the field gains or loses keyboard focus.
   var onFocusChange: (Bool) -> Void
 
@@ -222,16 +225,19 @@ struct AddressField: NSViewRepresentable {
         if event.window === window,
            capsuleRect.contains(event.locationInWindow) {
           if event.type == .leftMouseDown {
-            let reloadRect = NSRect(
-              x: capsuleRect.maxX - AddressCapsuleLayout.cornerRadius
-                - AddressCapsuleLayout.reloadHitDiameter / 2,
-              y: capsuleRect.midY - AddressCapsuleLayout.reloadHitDiameter / 2,
-              width: AddressCapsuleLayout.reloadHitDiameter,
-              height: AddressCapsuleLayout.reloadHitDiameter)
-            if NSBezierPath(ovalIn: reloadRect).contains(event.locationInWindow) {
+            switch AddressCapsuleInteraction.target(
+              at: event.locationInWindow, in: capsuleRect,
+              hasSuggestions: self.parent.dropdownHeight > 0
+            ) {
+            case .siteInformation:
+              self.parent.onSiteInformationToggle()
+              return nil
+            case .reloadOrStop:
               self.parent.onReloadOrStop()
               if self.isFocused { field.focusAndSelectAll() }
               return nil
+            case .address:
+              break
             }
             if !fieldRect.contains(event.locationInWindow) || !self.isFocused {
               // Handle the full capsule before SwiftUI's host can take the

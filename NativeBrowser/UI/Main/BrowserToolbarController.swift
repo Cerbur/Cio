@@ -10,6 +10,8 @@
 import AppKit
 import Combine
 import SwiftUI
+import Security
+import SecurityInterface
 
 /// Keep native button tracking and symbol rendering, but give the hover and
 /// pressed backgrounds a circular outline instead of the toolbar bezel.
@@ -32,9 +34,8 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
     let local = convert(point, from: superview)
     let focused = rootView.interaction.isFocused
     let rows = focused ? rootView.autocomplete.suggestions.count : 0
-    let width = bounds.width * (focused ? 1
-      : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio)
-    let height = AddressCapsuleLayout.panelHeight(rowCount: rows)
+    let width = rootView.siteInformation.width(in: bounds.width, focused: focused)
+    let height = rootView.siteInformation.height(rowCount: rows)
     let rect = NSRect(x: (bounds.width - width) / 2,
                       y: isFlipped ? 0 : bounds.height - height, width: width, height: height)
     guard rect.contains(local) else { return nil }
@@ -200,7 +201,8 @@ private final class ToolbarChromeView: NSView {
     if let contentView = superview {
       if addressView.superview !== contentView { contentView.addSubview(addressView, positioned: .above, relativeTo: nil) }
       let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
-      let panelHeight = AddressCapsuleLayout.maximumHeight
+      let panelHeight = max(AddressCapsuleLayout.maximumHeight,
+                            AddressCapsuleLayout.height + AddressSiteInformationState.contentHeight)
       let originY = contentView.isFlipped ? anchor.minY : anchor.maxY - panelHeight
       setFrame(NSRect(x: anchor.minX, y: originY, width: addressWidth, height: panelHeight), on: addressView)
     }
@@ -236,6 +238,10 @@ final class BrowserToolbarController: NSObject {
   private weak var observedSession: BrowserSession?
   private let addressPresentation = BrowserInteractionState()
   private let toolbarPresentation = ToolbarPresentationState()
+  private let siteInformation = AddressSiteInformationState()
+  private weak var addressOverlay: AddressOverlayHostingView?
+  nonisolated(unsafe) private var siteInformationEventMonitor: Any?
+  private var certificatePanel: SFCertificatePanel?
   private var addressFocusRequestObservation: AnyCancellable?
 
   init(
@@ -276,6 +282,10 @@ final class BrowserToolbarController: NSObject {
     return makeChromeView()
   }
 
+  deinit {
+    if let siteInformationEventMonitor { NSEvent.removeMonitor(siteInformationEventMonitor) }
+  }
+
   func install(in window: NSWindow, showsSpaceToolbar: Bool) {
     self.window = window
     window.styleMask.insert(.fullSizeContentView)
@@ -297,12 +307,18 @@ final class BrowserToolbarController: NSObject {
         }
         .store(in: &windowObservations)
     }
+    NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification, object: window)
+      .sink { [weak self] _ in
+        MainActor.assumeIsolated { self?.siteInformation.dismiss() }
+      }
+      .store(in: &windowObservations)
     setSpaceControlsVisible(showsSpaceToolbar, animated: false)
     bindSelectedSession(workspace.selectedSession)
     updateSidebarState()
   }
 
   func setSpaceControlsVisible(_ visible: Bool, animated: Bool = true) {
+    if !visible { siteInformation.dismiss() }
     if !visible, addressPresentation.isFocused {
       addressAutocomplete.end()
       addressPresentation.isFocused = false
@@ -326,6 +342,7 @@ final class BrowserToolbarController: NSObject {
     case .sidebarChanged:
       chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
+      if observedSession !== workspace.selectedSession { siteInformation.dismiss() }
       if observedSession !== workspace.selectedSession, addressPresentation.isFocused {
         addressAutocomplete.end()
         addressPresentation.isFocused = false
@@ -338,14 +355,17 @@ final class BrowserToolbarController: NSObject {
       guard workspace.selectedSession === session,
             !focused || toolbarPresentation.isVisible else { return }
       addressPresentation.isFocused = focused
+      if focused { siteInformation.dismiss() }
       session.addressFieldFocusChanged(focused)
     case .addressFocusRequested(let session):
       guard workspace.selectedSession === session, toolbarPresentation.isVisible else { return }
+      siteInformation.dismiss()
       NotificationCenter.default.post(
         name: .browserAddressFieldShouldFocus,
         object: session.addressField)
     case .addressReloadOrStop(let session):
       guard workspace.selectedSession === session else { return }
+      siteInformation.dismiss()
       session.reloadOrStop()
     case .geometryChanged:
       break
@@ -401,6 +421,28 @@ final class BrowserToolbarController: NSObject {
         }
       }
       .store(in: &selectedSessionObservations)
+
+      session.$url.removeDuplicates().dropFirst()
+        .sink { [weak self] _ in self?.siteInformation.dismiss() }
+        .store(in: &selectedSessionObservations)
+      session.$isLoading.removeDuplicates().dropFirst()
+        .sink { [weak self, weak session] loading in
+          guard let self, let session else { return }
+          if loading { self.siteInformation.dismiss() }
+          else {
+            // @Published fires before the new value has reached the session.
+            DispatchQueue.main.async { [weak self, weak session] in
+              guard let self, let session, self.observedSession === session else { return }
+              self.siteInformation.refresh(session.siteInformation)
+            }
+          }
+        }
+        .store(in: &selectedSessionObservations)
+      Publishers.CombineLatest(session.$lastErrorCode, session.$rendererCrashed)
+        .sink { [weak self] error, crashed in
+          if error != nil || crashed { self?.siteInformation.dismiss() }
+        }
+        .store(in: &selectedSessionObservations)
     }
 
     applyNavigationToolbarState(
@@ -461,14 +503,23 @@ final class BrowserToolbarController: NSObject {
       interaction: addressPresentation,
       autocomplete: addressAutocomplete,
       presentation: toolbarPresentation,
+      siteInformation: siteInformation,
       onFocusChange: { [weak self] session, focused in
         self?.handle(.addressFocusChanged(session, focused))
       },
       onReloadOrStop: { [weak self] session in
         self?.handle(.addressReloadOrStop(session))
+      },
+      onSiteInformationToggle: { [weak self] session in
+        self?.toggleSiteInformation(for: session)
+      },
+      onCertificate: { [weak self] information in
+        self?.showCertificate(information)
       }))
     addressView.safeAreaRegions = []
     addressView.clipsToBounds = false
+    addressOverlay = addressView
+    installSiteInformationEventMonitor()
     let view = ToolbarChromeView(
       sidebarButton: sidebarButton,
       backButton: backButton,
@@ -486,11 +537,85 @@ final class BrowserToolbarController: NSObject {
   }
 
   @objc private func goBack(_ sender: NSButton) {
+    siteInformation.dismiss()
     workspace.selectedSession?.goBack()
   }
 
   @objc private func goForward(_ sender: NSButton) {
+    siteInformation.dismiss()
     workspace.selectedSession?.goForward()
+  }
+
+  private func toggleSiteInformation(for session: BrowserSession) {
+    guard workspace.selectedSession === session, toolbarPresentation.isVisible else { return }
+    if siteInformation.isPresented { closeSiteInformation(); return }
+    addressAutocomplete.end()
+    addressPresentation.isFocused = false
+    session.addressFieldFocusChanged(false)
+    session.blur()
+    siteInformation.present(session.siteInformation)
+  }
+
+  private func closeSiteInformation() {
+    siteInformation.dismiss()
+    workspace.selectedSession?.focusPage()
+  }
+
+  private func showCertificate(_ information: SiteInformation) {
+    guard let window, let session = workspace.selectedSession,
+          session.url == information.url, !session.isLoading, !session.rendererCrashed,
+          window.attachedSheet == nil else { return }
+    let certificates = information.certificateChain.compactMap {
+      SecCertificateCreateWithData(nil, $0 as CFData)
+    }
+    guard !certificates.isEmpty else { return }
+    // The panel displays the exact chain used by Chromium. Its own trust
+    // evaluation is omitted because macOS and Chromium can use different roots.
+    siteInformation.dismiss()
+    let panel = SFCertificatePanel()
+    certificatePanel = panel
+    panel.title = "网站证书 — \(information.host)"
+    panel.beginSheet(for: window, modalDelegate: self,
+                     didEnd: #selector(certificatePanelDidEnd(_:returnCode:contextInfo:)),
+                     contextInfo: nil, certificates: certificates, showGroup: true)
+  }
+
+  @objc private func certificatePanelDidEnd(_ panel: NSWindow, returnCode: Int,
+                                            contextInfo: UnsafeMutableRawPointer?) {
+    certificatePanel = nil
+    if !addressPresentation.isFocused { workspace.selectedSession?.focusPage() }
+  }
+
+  private func installSiteInformationEventMonitor() {
+    guard siteInformationEventMonitor == nil else { return }
+    siteInformationEventMonitor = NSEvent.addLocalMonitorForEvents(
+      matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
+    ) { [weak self] event in
+      guard let self, self.siteInformation.isPresented else { return event }
+      if event.type == .keyDown {
+        if event.keyCode == 53 { self.closeSiteInformation(); return nil }
+        // Allow keyboard navigation and app shortcuts; dismiss before a
+        // shortcut can focus the address editor or navigate to another page.
+        if event.modifierFlags.contains(.command) { self.siteInformation.dismiss() }
+        return event
+      }
+      guard event.window === self.window, let overlay = self.addressOverlay else {
+        self.siteInformation.dismiss()
+        return event
+      }
+      let point = overlay.convert(event.locationInWindow, from: nil)
+      let width = self.siteInformation.width(in: overlay.bounds.width, focused: false)
+      let height = self.siteInformation.height(rowCount: 0)
+      let rect = NSRect(x: (overlay.bounds.width - width) / 2,
+                        y: overlay.isFlipped ? 0 : overlay.bounds.height - height,
+                        width: width, height: height)
+      if !rect.contains(point) {
+        self.siteInformation.dismiss()
+        // Hand focus back for the same click to reach the Chromium page.
+        if !self.addressPresentation.isFocused { self.workspace.selectedSession?.focusPage() }
+      }
+      return event
+    }
   }
 
 }

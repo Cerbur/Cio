@@ -15,6 +15,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 @class BrowserBridge;
 
+/// Value-only security information for Chromium's visible navigation entry.
+NS_SWIFT_UI_ACTOR
+@interface BrowserConnectionInfo : NSObject
+@property(nonatomic, readonly, copy) NSString *url;
+@property(nonatomic, readonly) BOOL usesTLS;
+@property(nonatomic, readonly) BOOL certificateValid;
+@property(nonatomic, readonly) BOOL hasInsecureContent;
+@property(nonatomic, readonly, copy) NSArray<NSData *> *certificateChain;
+@end
+
 /// Events produced by a Chromium browser instance.
 ///
 /// Every method is called on the main thread: the Objective-C++ side marshals
@@ -139,6 +149,10 @@ NS_SWIFT_UI_ACTOR
 - (void)goForward;
 - (void)reload;
 - (void)stopLoading;
+
+/// Reads the visible entry on CEF's UI thread. Certificates are DER bytes;
+/// no CEF objects escape the bridge and no second network request is made.
+- (nullable BrowserConnectionInfo *)connectionInfo;
 
 /// Starts a download through the browser's real CEF download pipeline. The
 /// verification harness uses this to avoid making download correctness depend

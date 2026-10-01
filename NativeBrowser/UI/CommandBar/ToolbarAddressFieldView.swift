@@ -34,12 +34,12 @@ enum AddressCapsuleLayout {
       ? 1 + 2 * listInset + CGFloat(rowCount) * rowHeight + CGFloat(rowCount - 1) * rowSpacing : 0)
   }
   static var maximumHeight: CGFloat { panelHeight(rowCount: AddressAutocompleteModel.rowLimit) }
-  static let height: CGFloat = 36
+  static let height = AddressCapsuleInteraction.controlDiameter
   static let cornerRadius = height / 2
   static let unfocusedWidthRatio: CGFloat = 0.38
   static let focusedWidthRatio: CGFloat = 0.45
   static let faviconSize: CGFloat = 16
-  static let reloadHitDiameter = height
+  static let endControlHitDiameter = AddressCapsuleInteraction.controlDiameter
   static let textIdealHeight: CGFloat = 22
   /// Reserve matching space at both ends so idle text is centred in the pill.
   static let endControlWidth: CGFloat = 40
@@ -50,24 +50,31 @@ struct ToolbarAddressFieldView: View {
   @ObservedObject var interaction: BrowserInteractionState
   @ObservedObject var autocomplete: AddressAutocompleteModel
   @ObservedObject var presentation: ToolbarPresentationState
+  @ObservedObject var siteInformation: AddressSiteInformationState
   @State private var hoverGate = SpotlightHoverGate()
   var onFocusChange: (BrowserSession, Bool) -> Void
   var onReloadOrStop: (BrowserSession) -> Void
+  var onSiteInformationToggle: (BrowserSession) -> Void
+  var onCertificate: (SiteInformation) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var rowCount: Int { interaction.isFocused ? autocomplete.suggestions.count : 0 }
 
   var body: some View {
     GeometryReader { geometry in
-      let widthRatio = interaction.isFocused
-        ? 1 : AddressCapsuleLayout.unfocusedWidthRatio / AddressCapsuleLayout.focusedWidthRatio
-      let width = geometry.size.width * widthRatio
-      let height = AddressCapsuleLayout.panelHeight(rowCount: rowCount)
-      let radius: CGFloat = rowCount > 0 ? 20 : AddressCapsuleLayout.cornerRadius
+      let width = siteInformation.width(in: geometry.size.width, focused: interaction.isFocused)
+      let height = siteInformation.height(rowCount: rowCount)
+      let radius: CGFloat = siteInformation.isPresented ? 24
+        : rowCount > 0 ? 20 : AddressCapsuleLayout.cornerRadius
       if let session = workspace.selectedSession {
         VStack(spacing: 0) {
           addressField(for: session, width: width)
-          if rowCount > 0 {
+          if siteInformation.isPresented {
+            AddressSiteInformationView(state: siteInformation,
+                                       onCertificate: onCertificate)
+              .transition(reduceMotion ? .opacity
+                : .scale(scale: 0.92, anchor: .topLeading).combined(with: .opacity))
+          } else if rowCount > 0 {
             Divider().padding(.horizontal, 16)
             VStack(spacing: AddressCapsuleLayout.rowSpacing) {
               ForEach(Array(autocomplete.suggestions.enumerated()), id: \.element.id) { index, suggestion in
@@ -85,7 +92,8 @@ struct ToolbarAddressFieldView: View {
           ToolbarGlassSurface(presentation: presentation, cornerRadius: radius)
         }
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .shadow(color: .black.opacity(rowCount > 0 ? 0.18 : 0), radius: 16, y: 8)
+        .shadow(color: .black.opacity(rowCount > 0 || siteInformation.isPresented ? 0.18 : 0),
+                radius: 16, y: 8)
         .overlay {
           NativeAddressFocusRing(isFocused: interaction.isFocused, cornerRadius: radius)
             .padding(-NativeAddressFocusRing.inset)
@@ -94,13 +102,16 @@ struct ToolbarAddressFieldView: View {
         .frame(width: geometry.size.width, alignment: .top)
       }
     }
-    .frame(height: AddressCapsuleLayout.maximumHeight, alignment: .top)
+    .frame(height: max(AddressCapsuleLayout.maximumHeight,
+                       AddressCapsuleLayout.height + AddressSiteInformationState.contentHeight), alignment: .top)
     .allowsHitTesting(presentation.isVisible)
     .accessibilityHidden(!presentation.isVisible)
     .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
                value: interaction.isFocused)
     .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
                value: rowCount)
+    .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.82),
+               value: siteInformation.isPresented)
     .onChange(of: interaction.isFocused) { _, focused in
       if focused, let session = workspace.selectedSession { autocomplete.begin(session.addressField.editText) }
       else { autocomplete.end() }
@@ -128,6 +139,7 @@ struct ToolbarAddressFieldView: View {
         onSubmit: { submit(session: session) },
         onEscape: { autocomplete.end(); session.cancelAddressEditing() },
         onReloadOrStop: { onReloadOrStop(session) },
+        onSiteInformationToggle: { onSiteInformationToggle(session) },
         onFocusChange: { onFocusChange(session, $0) }
       )
       .frame(width: max(0, width - textInset - AddressCapsuleLayout.endControlWidth),
@@ -139,21 +151,31 @@ struct ToolbarAddressFieldView: View {
         if isExpanded, let suggestion = autocomplete.selectedSuggestion {
           suggestionIcon(suggestion, size: AddressCapsuleLayout.faviconSize)
         } else {
-          TabFaviconView(pageURL: session.url ?? workspace.selectedTab?.url,
-                         session: session, size: AddressCapsuleLayout.faviconSize)
+          AddressFaviconButton(session: session) { onSiteInformationToggle(session) }
+            .id(session.id)
         }
       }
-        .frame(width: AddressCapsuleLayout.endControlWidth,
-               height: AddressCapsuleLayout.height)
-        .contentShape(Rectangle())
-        .accessibilityHidden(true)
+        .frame(width: AddressCapsuleLayout.endControlHitDiameter,
+               height: AddressCapsuleLayout.endControlHitDiameter)
+        .contentShape(Circle())
+        .zIndex(1)
+        .accessibilityHidden(isExpanded)
         .position(x: isExpanded ? AddressCapsuleLayout.suggestionIconCenter : AddressCapsuleLayout.cornerRadius,
                   y: AddressCapsuleLayout.height / 2)
 
-      AddressReloadButton(session: session, onReloadOrStop: { onReloadOrStop(session) })
-        .id(session.id)
-        .frame(width: AddressCapsuleLayout.reloadHitDiameter,
-               height: AddressCapsuleLayout.reloadHitDiameter)
+      ZStack {
+        if !isExpanded {
+          AddressReloadButton(session: session, onReloadOrStop: { onReloadOrStop(session) })
+            .id(session.id)
+            .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+        }
+      }
+        .frame(width: AddressCapsuleLayout.endControlHitDiameter,
+               height: AddressCapsuleLayout.endControlHitDiameter)
+        .contentShape(Circle())
+        .zIndex(1)
+        .allowsHitTesting(!isExpanded)
+        .accessibilityHidden(isExpanded)
         .position(x: width - AddressCapsuleLayout.cornerRadius,
                   y: AddressCapsuleLayout.height / 2)
     }
@@ -217,6 +239,31 @@ struct ToolbarAddressFieldView: View {
 
 }
 
+/// Matches the reload control's hover timing and scale, keeping the circular
+/// hit area fixed while only the favicon gently grows and settles back.
+private struct AddressFaviconButton: View {
+  @ObservedObject var session: BrowserSession
+  var onSiteInformationToggle: () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: onSiteInformationToggle) {
+      TabFaviconView(pageURL: session.url, session: session, size: AddressCapsuleLayout.faviconSize)
+        .scaleEffect(isHovered ? 16.0 / 14.0 : 1)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isHovered)
+        .frame(width: AddressCapsuleLayout.endControlHitDiameter,
+               height: AddressCapsuleLayout.endControlHitDiameter)
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
+    .help("网站信息")
+    .accessibilityLabel("网站信息")
+    .accessibilityIdentifier("address-site-information-button")
+  }
+}
+
 /// Loading state comes from the selected session; the idle symbol rests upright.
 private struct AddressReloadButton: View {
   @ObservedObject var session: BrowserSession
@@ -238,8 +285,8 @@ private struct AddressReloadButton: View {
           reloadSymbol
         }
       }
-      .frame(width: AddressCapsuleLayout.reloadHitDiameter,
-             height: AddressCapsuleLayout.reloadHitDiameter)
+      .frame(width: AddressCapsuleLayout.endControlHitDiameter,
+             height: AddressCapsuleLayout.endControlHitDiameter)
       .contentShape(Circle())
     }
     .buttonStyle(.plain)

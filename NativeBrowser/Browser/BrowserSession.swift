@@ -233,6 +233,18 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       canGoForward: canGoForward)
   }
 
+  var siteInformation: SiteInformation {
+    let info = rendererCrashed ? nil : bridge?.connectionInfo()
+    return SiteInformation(
+      url: url, title: title, isLoading: isLoading,
+      loadFailed: lastErrorCode != nil || rendererCrashed,
+      entryURL: info.flatMap { URL(string: $0.url) },
+      usesTLS: info?.usesTLS ?? false,
+      certificateValid: info?.certificateValid ?? false,
+      hasInsecureContent: info?.hasInsecureContent ?? false,
+      certificateChain: info?.certificateChain ?? [])
+  }
+
   // MARK: - View attachment
 
   /// Binds the session to the AppKit container that will host the Chromium

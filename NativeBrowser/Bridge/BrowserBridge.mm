@@ -15,6 +15,7 @@
 
 #include "include/cef_browser.h"
 #include "include/cef_frame.h"
+#include "include/cef_ssl_info.h"
 #include "include/cef_values.h"
 #include "include/internal/cef_mac.h"
 
@@ -41,6 +42,17 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 }
 
 }  // namespace
+
+@interface BrowserConnectionInfo ()
+@property(nonatomic, readwrite, copy) NSString *url;
+@property(nonatomic, readwrite) BOOL usesTLS;
+@property(nonatomic, readwrite) BOOL certificateValid;
+@property(nonatomic, readwrite) BOOL hasInsecureContent;
+@property(nonatomic, readwrite, copy) NSArray<NSData *> *certificateChain;
+@end
+
+@implementation BrowserConnectionInfo
+@end
 
 @implementation BrowserBridge {
   CefRefPtr<CEFClientHandler> _client;
@@ -132,6 +144,40 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   if (CefRefPtr<CefBrowser> browser = _client->browser()) {
     browser->StopLoad();
   }
+}
+
+- (BrowserConnectionInfo *)connectionInfo {
+  if (_closed || _closeRequested) return nil;
+  CefRefPtr<CefBrowser> browser = _client->browser();
+  if (!browser) return nil;
+  CefRefPtr<CefNavigationEntry> entry = browser->GetHost()->GetVisibleNavigationEntry();
+  if (!entry || !entry->IsValid()) return nil;
+
+  BrowserConnectionInfo *info = [[BrowserConnectionInfo alloc] init];
+  info.url = [NSString stringWithUTF8String:entry->GetURL().ToString().c_str()] ?: @"";
+  info.certificateChain = @[];
+  CefRefPtr<CefSSLStatus> ssl = entry->GetSSLStatus();
+  if (!ssl) return info;
+  info.usesTLS = ssl->IsSecureConnection();
+  info.hasInsecureContent = ssl->GetContentStatus() != SSL_CONTENT_NORMAL_CONTENT;
+  CefRefPtr<CefX509Certificate> certificate = ssl->GetX509Certificate();
+  info.certificateValid = certificate && !CefIsCertStatusError(ssl->GetCertStatus());
+  if (certificate) {
+    NSMutableArray<NSData *> *chain = [NSMutableArray array];
+    auto appendDER = [&](CefRefPtr<CefBinaryValue> value) {
+      if (!value || value->GetSize() == 0) return;
+      NSMutableData *data = [NSMutableData dataWithLength:value->GetSize()];
+      if (value->GetData(data.mutableBytes, data.length, 0) == data.length) {
+        [chain addObject:[data copy]];
+      }
+    };
+    appendDER(certificate->GetDEREncoded());
+    CefX509Certificate::IssuerChainBinaryList issuers;
+    certificate->GetDEREncodedIssuerChain(issuers);
+    for (auto issuer : issuers) appendDER(issuer);
+    info.certificateChain = chain;
+  }
+  return info;
 }
 
 - (void)startDownloadURL:(NSString *)url {
