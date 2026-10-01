@@ -97,6 +97,7 @@ final class SidebarTabDrag {
   private struct Item {
     var frame: CGRect
     var token: UUID
+    var closeWidth: CGFloat
   }
 
   @ObservationIgnored private var items: [ItemKey: Item] = [:]
@@ -126,10 +127,10 @@ final class SidebarTabDrag {
   func probeTierFrame(_ tier: WorkspaceCollection.TabTier) -> CGRect? { tierFrames[tier] }
   // PROBE-END
 
-  func register(_ id: UUID, in tier: WorkspaceCollection.TabTier, frame: CGRect, token: UUID) {
+  func register(_ id: UUID, in tier: WorkspaceCollection.TabTier, frame: CGRect, token: UUID, isCompact: Bool = false) {
     Self.probeInstance = self // PROBE-LINE
-    items[ItemKey(id: id, tier: tier)] = Item(frame: frame, token: token)
-    if tier != .global { rowSize = frame.size }
+    items[ItemKey(id: id, tier: tier)] = Item(frame: frame, token: token, closeWidth: isCompact ? 18 : 32)
+    if tier != .global && !isCompact { rowSize = frame.size }
     // Frames arrive while the tier is still animating; each one re-aims the
     // landing so the block meets the slot where it comes to rest.
     if id == tabID, phase == .landing, tier == landingTier { land(in: frame, style: Style(tier)) }
@@ -163,7 +164,7 @@ final class SidebarTabDrag {
       (key.tier == .space(selectedSpaceID) || key.tier == .temporary(selectedSpaceID))
         && item.frame.contains(point)
         // The trailing close control is not part of the tab selection button.
-        && point.x < item.frame.maxX - 32
+        && point.x < item.frame.maxX - item.closeWidth
     })?.key.id
   }
 
@@ -485,6 +486,7 @@ struct SidebarTabDragItem: ViewModifier {
   let drag: SidebarTabDrag
   let tabID: UUID
   let tier: WorkspaceCollection.TabTier
+  var isCompact = false
   @State private var token = UUID()
   @State private var lastFrame = LastFrame()
 
@@ -500,10 +502,10 @@ struct SidebarTabDragItem: ViewModifier {
       .opacity(drag.sourceOpacity(of: tabID))
       .onSidebarFrameChange { frame in
         lastFrame.value = frame
-        drag.register(tabID, in: tier, frame: frame, token: token)
+        drag.register(tabID, in: tier, frame: frame, token: token, isCompact: isCompact)
       }
       .onAppear {
-        if let frame = lastFrame.value { drag.register(tabID, in: tier, frame: frame, token: token) }
+        if let frame = lastFrame.value { drag.register(tabID, in: tier, frame: frame, token: token, isCompact: isCompact) }
       }
       .onDisappear { drag.unregister(tabID, in: tier, token: token) }
   }

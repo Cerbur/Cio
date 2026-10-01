@@ -139,7 +139,8 @@ struct WorkspaceCollection: Equatable, Sendable {
           tabIDs: orderedTabIDs,
           pinnedTabIDs: persistedSpace.pinnedTabIDs,
           selectedTabID: selectedTabID,
-          stableTabStack: persistedSpace.stableTabStack))
+          stableTabStack: persistedSpace.stableTabStack,
+          splitGroups: persistedSpace.splitGroups))
     }
 
     guard spaceIDs.contains(snapshot.selectedSpaceID) else {
@@ -168,6 +169,21 @@ struct WorkspaceCollection: Equatable, Sendable {
       selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true,
       restoredSpaces.allSatisfy({ Set($0.pinnedTabIDs).isDisjoint(with: globalPinnedTabIDs) })
     else { throw WorkspaceSessionSnapshotError.invalidPinnedTabs }
+
+    // Layout records are soft links. Repair bad or overlapping groups without
+    // losing the valid tab graph, including snapshots written before groups.
+    var seenGroupIDs = Set<UUID>()
+    for index in spaces.indices {
+      var groupedTabs = Set<UUID>()
+      let space = spaces[index]
+      spaces[index].splitGroups = space.splitGroups.filter { group in
+        guard Self.validGroup(group, in: space, globals: globalPinnedTabIDs),
+              !seenGroupIDs.contains(group.id), groupedTabs.isDisjoint(with: group.tabIDs) else { return false }
+        seenGroupIDs.insert(group.id)
+        groupedTabs.formUnion(group.tabIDs)
+        return true
+      }
+    }
 
     guard validateInvariants() else {
       // The explicit checks above cover the serialized graph. Keep this final
@@ -224,6 +240,103 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   var currentTabIDs: [UUID] {
     selectedSpace?.tabIDs ?? []
+  }
+
+  var activeSplit: BrowserSplitLayout? {
+    selectedSpace?.splitGroups.first { $0.contains(selectedTabID) }
+  }
+
+  func splitGroup(containing tabID: UUID) -> BrowserSplitLayout? {
+    guard let spaceID = spaceID(containing: tabID) else { return nil }
+    return space(withID: spaceID)?.splitGroups.first { $0.contains(tabID) }
+  }
+
+  @discardableResult
+  mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
+    guard let selectedTabID, selectedTabID != tabID,
+          let spaceIndex = index(of: selectedSpaceID),
+          spaces[spaceIndex].tabIDs.contains(tabID),
+          !globalPinnedTabIDs.contains(selectedTabID), !globalPinnedTabIDs.contains(tabID),
+          activeSplit?.contains(tabID) != true else { return false }
+    let prior = activeSplit
+    let group = BrowserSplitLayout(id: prior?.id ?? UUID(),
+      leftTabID: side == .left ? tabID : selectedTabID,
+      rightTabID: side == .right ? tabID : selectedTabID,
+      focusedTabID: tabID)
+    let space = spaces[spaceIndex]
+    let oldIndex = space.tabIDs.firstIndex(of: selectedTabID)!
+    let insertAt = space.tabIDs.prefix(oldIndex).filter { !group.contains($0) }.count
+    spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) || $0.contains(selectedTabID) }
+    spaces[spaceIndex].tabIDs.removeAll { group.contains($0) }
+    spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs, at: insertAt)
+    // A combined row belongs to the survivor's tier, never straddling pins and
+    // temporary tabs. All other tabs retain their tier and relative order.
+    let pinned = Set(space.pinnedTabIDs)
+    let pinnedGroup = pinned.contains(selectedTabID)
+    spaces[spaceIndex].pinnedTabIDs = spaces[spaceIndex].tabIDs.filter {
+      group.contains($0) ? pinnedGroup : pinned.contains($0)
+    }
+    spaces[spaceIndex].splitGroups.append(group)
+    _ = selectTab(id: tabID)
+    validateInvariants()
+    return true
+  }
+
+  @discardableResult
+  mutating func setSplitFraction(_ fraction: CGFloat) -> Bool {
+    guard fraction.isFinite, let spaceIndex = index(of: selectedSpaceID),
+          let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(selectedTabID) }) else { return false }
+    spaces[spaceIndex].splitGroups[groupIndex].fraction = min(max(fraction, 0.01), 0.99)
+    return true
+  }
+
+  @discardableResult
+  mutating func endSplit(keeping tabID: UUID) -> Bool {
+    guard let owner = spaceID(containing: tabID), let spaceIndex = index(of: owner),
+          spaces[spaceIndex].splitGroups.contains(where: { $0.contains(tabID) }) else { return false }
+    spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) }
+    return true
+  }
+
+  /// The sidebar's ungroup action makes the left pane the stable selection,
+  /// even when the right pane (or another Space) was active before the click.
+  @discardableResult
+  mutating func ungroupSplit(containing tabID: UUID) -> Bool {
+    guard let group = splitGroup(containing: tabID),
+          let owner = spaceID(containing: group.leftTabID) else { return false }
+    _ = endSplit(keeping: group.leftTabID)
+    _ = select(spaceID: owner, tabID: group.leftTabID)
+    return true
+  }
+
+  @discardableResult
+  mutating func swapSplitSides(containing tabID: UUID) -> Bool {
+    guard let owner = spaceID(containing: tabID), let spaceIndex = index(of: owner),
+          let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(tabID) }) else { return false }
+    var group = spaces[spaceIndex].splitGroups[groupIndex]
+    let left = group.leftTabID
+    group.leftTabID = group.rightTabID
+    group.rightTabID = left
+    group.fraction = 1 - group.fraction
+    spaces[spaceIndex].splitGroups[groupIndex] = group
+    return true
+  }
+
+  @discardableResult
+  mutating func moveSplitGroup(containing tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+    guard let group = splitGroup(containing: tabID), !group.contains(targetID) else { return false }
+    let destination: UUID
+    switch tier {
+    case .global: return false
+    case .space(let id), .temporary(let id): destination = id
+    }
+    guard index(of: destination) != nil,
+          targetID.map({ tabIDs(in: tier).contains($0) }) ?? true else { return false }
+    _ = endSplit(keeping: tabID)
+    for id in group.tabIDs { _ = moveTab(id, to: tier, before: targetID) }
+    spaces[index(of: destination)!].splitGroups.append(group)
+    validateInvariants()
+    return true
   }
 
   var canReopenClosedTab: Bool { !recentlyClosed.isEmpty }
@@ -446,6 +559,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     }
 
     spaces[spaceIndex].tabIDs.remove(at: tabIndex)
+    spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) }
     spaces[spaceIndex].pinnedTabIDs.removeAll { $0 == tabID }
     globalPinnedTabIDs.removeAll { $0 == tabID }
     if selectedGlobalTabID == tabID { selectedGlobalTabID = nil }
@@ -561,6 +675,7 @@ struct WorkspaceCollection: Equatable, Sendable {
     }
 
     let wasSelected = selectedTabID == tabID
+    spaces[ownerIndex].splitGroups.removeAll { $0.contains(tabID) }
     spaces[ownerIndex].tabIDs.removeAll { $0 == tabID }
     spaces[ownerIndex].pinnedTabIDs.removeAll { $0 == tabID }
     globalPinnedTabIDs.removeAll { $0 == tabID }
@@ -662,7 +777,14 @@ struct WorkspaceCollection: Equatable, Sendable {
       Set(globalPinnedTabIDs).count == globalPinnedTabIDs.count,
       selectedGlobalTabID.map({ globalPinnedTabIDs.contains($0) }) ?? true
     else { return false }
+    var groupIDs = Set<UUID>()
     for space in spaces {
+      var groupedTabs = Set<UUID>()
+      for group in space.splitGroups {
+        guard Self.validGroup(group, in: space, globals: globalPinnedTabIDs),
+              groupIDs.insert(group.id).inserted, groupedTabs.isDisjoint(with: group.tabIDs) else { return false }
+        groupedTabs.formUnion(group.tabIDs)
+      }
       guard Set(space.tabIDs).count == space.tabIDs.count else { return false }
       guard Set(space.pinnedTabIDs).count == space.pinnedTabIDs.count,
         space.pinnedTabIDs.allSatisfy({ space.tabIDs.contains($0) && !globalPinnedTabIDs.contains($0) })
@@ -688,6 +810,16 @@ struct WorkspaceCollection: Equatable, Sendable {
   private mutating func recordStableTab(_ tabID: UUID, in spaceIndex: Int) {
     spaces[spaceIndex].stableTabStack.removeAll { $0 == tabID }
     spaces[spaceIndex].stableTabStack.append(tabID)
+    if let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(tabID) }) {
+      spaces[spaceIndex].splitGroups[groupIndex].focusedTabID = tabID
+    }
+  }
+
+  private static func validGroup(_ group: BrowserSplitLayout, in space: BrowserSpace, globals: [UUID]) -> Bool {
+    group.leftTabID != group.rightTabID && group.fraction.isFinite && group.fraction > 0 && group.fraction < 1
+      && group.tabIDs.allSatisfy({ space.tabIDs.contains($0) && !globals.contains($0) })
+      && space.pinnedTabIDs.contains(group.leftTabID) == space.pinnedTabIDs.contains(group.rightTabID)
+      && (group.focusedTabID.map { group.contains($0) } ?? true)
   }
 
   private static func safeSpaceName(_ name: String, fallback: String) -> String {

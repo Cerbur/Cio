@@ -47,7 +47,8 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
         selectedTabID: space.selectedTabID,
         tabs: tabs,
         pinnedTabIDs: space.pinnedTabIDs,
-        stableTabStack: space.stableTabStack)
+        stableTabStack: space.stableTabStack,
+        splitGroups: space.splitGroups)
     }
   }
 
@@ -74,18 +75,20 @@ struct PersistedSpace: Codable, Equatable, Sendable {
   let tabs: [PersistedTab]
   var pinnedTabIDs: [UUID] = []
   var stableTabStack: [UUID] = []
+  var splitGroups: [BrowserSplitLayout] = []
 
-  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = []) {
+  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = [], splitGroups: [BrowserSplitLayout] = []) {
     self.id = id
     self.name = name
     self.selectedTabID = selectedTabID
     self.tabs = tabs
     self.pinnedTabIDs = pinnedTabIDs
     self.stableTabStack = stableTabStack
+    self.splitGroups = splitGroups
   }
 
   private enum CodingKeys: String, CodingKey {
-    case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack
+    case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack, splitGroups
   }
 
   init(from decoder: Decoder) throws {
@@ -97,6 +100,8 @@ struct PersistedSpace: Codable, Equatable, Sendable {
     pinnedTabIDs = try values.decodeIfPresent([UUID].self, forKey: .pinnedTabIDs) ?? []
     // A malformed advisory stack never invalidates the durable tab graph.
     stableTabStack = (try? values.decode([UUID].self, forKey: .stableTabStack)) ?? []
+    // Optional layout metadata must never discard otherwise valid open tabs.
+    splitGroups = (try? values.decode([BrowserSplitLayout].self, forKey: .splitGroups)) ?? []
   }
 }
 

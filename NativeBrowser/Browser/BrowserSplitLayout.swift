@@ -1,11 +1,13 @@
 import Foundation
 
-/// Window-local split presentation. The tabs and Chromium sessions keep their identities.
-struct BrowserSplitLayout: Equatable {
+/// A durable two-tab group. Runtime views and Chromium sessions are separate.
+struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
   enum Side { case left, right }
+  var id: UUID = UUID()
   var leftTabID: UUID
   var rightTabID: UUID
   var fraction: CGFloat = 0.5
+  var focusedTabID: UUID? = nil
 
   var tabIDs: [UUID] { [leftTabID, rightTabID] }
   func contains(_ id: UUID?) -> Bool { id == leftTabID || id == rightTabID }

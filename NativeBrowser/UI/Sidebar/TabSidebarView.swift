@@ -330,6 +330,8 @@ struct TabSidebarView: View {
               withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
             }
             .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
+          case .group:
+            EmptyView() // Groups are Space-local and cannot occupy global pins.
           case .gap:
             Color.clear.frame(height: topPinHeight)
           }
@@ -369,13 +371,28 @@ struct TabSidebarView: View {
   /// While a tab is lifted it leaves its tier, and the tier it would land in
   /// opens a gap at that place.
   private func slots(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> [SidebarSlot] {
-    guard let lifted = tabDrag.liftedTabID else { return tabs.map(SidebarSlot.tab) }
-    var slots = tabs.filter { $0.id != lifted }.map(SidebarSlot.tab)
-    if let target = tabDrag.target, target.tier == tier {
-      let index = target.before.flatMap { before in slots.firstIndex { $0.id == before } }
-      slots.insert(.gap, at: index ?? slots.count)
+    let available = tabs.filter {
+      guard let lifted = tabDrag.liftedTabID else { return true }
+      return $0.id != lifted && workspace.splitGroup(containing: $0.id)?.leftTabID != lifted
     }
-    return slots
+    let ids = Set(available.map(\.id))
+    var emitted = Set<UUID>()
+    var result: [SidebarSlot] = []
+    for tab in available {
+      guard !emitted.contains(tab.id) else { continue }
+      if let group = workspace.splitGroup(containing: tab.id), group.tabIDs.allSatisfy({ ids.contains($0) }) {
+        result.append(.group(group))
+        emitted.formUnion(group.tabIDs)
+      } else {
+        result.append(.tab(tab))
+        emitted.insert(tab.id)
+      }
+    }
+    if tabDrag.liftedTabID != nil, let target = tabDrag.target, target.tier == tier {
+      let index = target.before.flatMap { before in result.firstIndex { $0.contains(before) } }
+      result.insert(.gap, at: index ?? result.count)
+    }
+    return result
   }
 
   private func tierRows(_ slots: [SidebarSlot], tier: WorkspaceCollection.TabTier) -> some View {
@@ -384,6 +401,8 @@ struct TabSidebarView: View {
         switch slot {
         case .tab(let tab):
           row(tab, tier: tier)
+        case .group(let group):
+          splitRow(group, tier: tier)
         case .gap:
           Color.clear.frame(height: 36)
         }
@@ -392,6 +411,22 @@ struct TabSidebarView: View {
     }
     .onSidebarFrameChange { tabDrag.register(tier, frame: $0) }
     .animation(.smooth(duration: 0.28), value: slots.map(\.id))
+  }
+
+  @ViewBuilder
+  private func splitRow(_ group: BrowserSplitLayout, tier: WorkspaceCollection.TabTier) -> some View {
+    if let left = workspace.tab(withID: group.leftTabID), let right = workspace.tab(withID: group.rightTabID) {
+      let focusedID = group.focusedTabID ?? group.leftTabID
+      let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
+      SidebarSplitTabRow(group: group, left: left, right: right,
+        leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
+        selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
+        drag: tabDrag, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
+        onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
+        onSwap: { workspace.swapSplitSides(containing: focusedID) },
+        onPin: { workspace.moveSplitGroup(containing: focusedID, to: .space(owner)) },
+        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(owner)) })
+    }
   }
 
   private func row(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
@@ -431,7 +466,11 @@ struct TabSidebarView: View {
   private func move(_ id: UUID, to target: SidebarTabDropTarget) -> Bool {
     var moved = false
     withAnimation(.smooth(duration: 0.28)) {
-      moved = workspace.moveTab(id, to: target.tier, before: target.before)
+      if workspace.splitGroup(containing: id) != nil {
+        moved = workspace.moveSplitGroup(containing: id, to: target.tier, before: target.before)
+      } else {
+        moved = workspace.moveTab(id, to: target.tier, before: target.before)
+      }
     }
     return moved
   }
@@ -451,13 +490,16 @@ struct TabSidebarView: View {
   private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
     let space = workspace.spaces.first { $0.id == workspace.selectedSpaceID }
     let globalIDs = workspace.globalPinnedTabs.map(\.id)
-    let pinIDs = space?.pinnedTabIDs ?? []
+    let groupedRightIDs = Set(space?.splitGroups.map(\.rightTabID) ?? [])
+    let pinIDs = (space?.pinnedTabIDs ?? []).filter { !groupedRightIDs.contains($0) }
     let columns = CGFloat(columns(for: width))
     return SidebarTabDragLayout(
       spaceID: workspace.selectedSpaceID,
       globalTabIDs: globalIDs,
       spacePinTabIDs: pinIDs,
-      temporaryTabIDs: (space?.tabIDs ?? []).filter { !pinIDs.contains($0) && !globalIDs.contains($0) },
+      temporaryTabIDs: (space?.tabIDs ?? []).filter {
+        !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0) && !groupedRightIDs.contains($0)
+      },
       tileSize: CGSize(width: (width - 24 - 9 * (columns - 1)) / columns, height: topPinHeight),
       topInset: chromeLayout.topInset)
   }
@@ -655,6 +697,7 @@ private struct PinnedTile: View {
 /// A tab, or the gap a lifted tab would land in.
 private enum SidebarSlot: Identifiable {
   case tab(BrowserTab)
+  case group(BrowserSplitLayout)
   case gap
 
   private static let gapID = UUID()
@@ -662,7 +705,16 @@ private enum SidebarSlot: Identifiable {
   var id: UUID {
     switch self {
     case .tab(let tab): return tab.id
+    case .group(let group): return group.id
     case .gap: return Self.gapID
+    }
+  }
+
+  func contains(_ tabID: UUID) -> Bool {
+    switch self {
+    case .tab(let tab): return tab.id == tabID
+    case .group(let group): return group.contains(tabID)
+    case .gap: return false
     }
   }
 }
@@ -672,6 +724,115 @@ extension BrowserTab {
   var pinFallbackLetter: String {
     String((url?.host ?? displayTitle)
       .replacingOccurrences(of: "www.", with: "").prefix(1)).uppercased()
+  }
+}
+
+/// A single sidebar row containing independently selectable split panes.
+private struct SidebarSplitTabRow: View {
+  let group: BrowserSplitLayout
+  let left: BrowserTab
+  let right: BrowserTab
+  let leftSession: BrowserSession?
+  let rightSession: BrowserSession?
+  let selectedTabID: UUID?
+  let drag: SidebarTabDrag
+  let tier: WorkspaceCollection.TabTier
+  let onSelect: (UUID) -> Void
+  let onClose: (UUID) -> Void
+  let onUngroup: () -> Void
+  let onSwap: () -> Void
+  let onPin: () -> Void
+  let onMakeTemporary: () -> Void
+  @State private var isHovered = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private var selected: Bool { group.contains(selectedTabID) }
+  private var showsHover: Bool { isHovered && drag.tabID == nil }
+
+  var body: some View {
+    HStack(spacing: 2) {
+      member(left, session: leftSession)
+      member(right, session: rightSession)
+    }
+    .padding(3)
+    .background {
+      if selected {
+        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+      } else {
+        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : 0.035))
+      }
+    }
+    .overlay {
+      if selected { SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1) }
+    }
+    .contextMenu {
+      Button("Ungroup Tabs", action: onUngroup)
+      Button("Swap Sides", action: onSwap)
+      Button("Pin Group in This Space", action: onPin)
+      Button("Make Group Temporary", action: onMakeTemporary)
+    }
+    .overlay(alignment: .topLeading) {
+      Button(action: onUngroup) {
+        Image(systemName: "arrow.down.right.and.arrow.up.left")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.gray)
+          .frame(width: 21, height: 21)
+          .background(.white, in: Circle())
+          .shadow(color: .black.opacity(0.16), radius: 3, y: 1)
+          .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
+      .offset(x: -5, y: -6)
+      .opacity(showsHover ? 1 : 0)
+      .allowsHitTesting(showsHover)
+      .accessibilityHidden(!showsHover)
+      .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsHover)
+      .help("Ungroup Tabs — keep the left tab active")
+      .accessibilityLabel("Ungroup Tabs")
+    }
+    .onHover { isHovered = $0 }
+    .accessibilityIdentifier("split-group-\(group.id.uuidString)")
+    .help("\(left.displayTitle) | \(right.displayTitle)")
+    .modifier(SidebarTabDragItem(drag: drag, tabID: group.leftTabID, tier: tier))
+  }
+
+  private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
+    let focused = selected && selectedTabID == tab.id
+    let showsClose = showsHover
+    return HStack(spacing: 0) {
+      Button {
+        guard !drag.suppressesClick(on: group.leftTabID) else { return }
+        onSelect(tab.id)
+      } label: {
+        HStack(spacing: 4) {
+          TabFaviconView(pageURL: tab.url, session: session, size: 16)
+            .frame(width: 18)
+          Text(tab.displayTitle)
+            .font(.system(size: 12))
+            .lineLimit(1)
+          Spacer(minLength: 0)
+        }
+        .padding(.leading, 5)
+        .frame(maxWidth: .infinity, minHeight: 30)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(tab.displayTitle)
+      .accessibilityAddTraits(focused ? [.isSelected] : [])
+      Button { onClose(tab.id) } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 8, weight: .semibold))
+          .frame(width: 18, height: 30)
+      }
+      .buttonStyle(.plain)
+      .opacity(showsClose ? 0.65 : 0)
+      .allowsHitTesting(showsClose)
+      .accessibilityLabel("Close \(tab.displayTitle)")
+    }
+    .frame(maxWidth: .infinity)
+    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+      .fill(.primary.opacity(showsHover ? 0.06 : 0.04)))
+    .help(tab.displayTitle)
   }
 }
 

@@ -171,7 +171,8 @@ private struct BrowserShellContentView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Color(nsColor: .underPageBackgroundColor))
+    // Chromium containers paint their own page background. Keep the surface
+    // between panes transparent so it exposes the same backdrop as the toolbar.
   }
 }
 
@@ -186,12 +187,24 @@ private struct BrowserTabDragPresentation: View {
 
   var body: some View {
     SidebarTabDragOverlay(drag: drag) { id, style in
-      if let tab = workspace.tab(withID: id) {
-        DragContent(
-          pageURL: tab.url, session: workspace.session(for: id),
-          title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
-          rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
+      if let group = workspace.splitGroup(containing: id) {
+        HStack(spacing: 2) {
+          dragLabel(group.leftTabID, style: style)
+          dragLabel(group.rightTabID, style: style)
+        }
+      } else {
+        dragLabel(id, style: style)
       }
+    }
+  }
+
+  @ViewBuilder
+  private func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
+    if let tab = workspace.tab(withID: id) {
+      DragContent(
+        pageURL: tab.url, session: workspace.session(for: id),
+        title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
+        rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
     }
   }
 

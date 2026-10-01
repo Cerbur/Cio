@@ -165,7 +165,8 @@ final class BrowserSurfaceHostView: NSView {
       divider.isHidden = true
       for (id, container) in containers where container.isSurfaceVisible {
         // Keep every Chromium surface at its committed size during tab placement.
-        place(container, in: id == selectedTabID ? frames.survivor : .zero, cropOnly: true)
+        place(container, in: id == selectedTabID ? frames.survivor : .zero,
+              cropOnly: true, roundedEdge: side)
       }
       let paneFrames = toolbars.keys.filter { $0 == selectedTabID }
         .reduce(into: [UUID: CGRect]()) { $0[$1] = frames.survivor }
@@ -178,7 +179,8 @@ final class BrowserSurfaceHostView: NSView {
         guard let container = containers[id] else { continue }
         // Divider drags resize Chromium immediately so responsive page layout
         // previews at the actual pane width, rather than cropping the old page.
-        place(container, in: frame, cropOnly: false)
+        place(container, in: frame, cropOnly: false,
+              roundedEdge: id == split.leftTabID ? .right : .left)
       }
       divider.frame = frames.divider
       divider.isHidden = false
@@ -281,17 +283,28 @@ final class BrowserSurfaceHostView: NSView {
     toolbar.browserGeometryDidChange()
   }
 
-  private func place(_ container: ChromiumContainerView, in frame: CGRect, cropOnly: Bool) {
+  private func place(_ container: ChromiumContainerView, in frame: CGRect, cropOnly: Bool,
+                     roundedEdge: BrowserSplitLayout.Side? = nil) {
     if cropOnly {
       container.setFrameOrigin(frame.origin)
-      let mask = CALayer()
-      mask.backgroundColor = NSColor.black.cgColor
-      mask.frame = CGRect(origin: .zero, size: frame.size)
-      container.layer?.mask = mask
     } else {
-      container.layer?.mask = nil
       if container.frame != frame { container.frame = frame }
     }
+    guard cropOnly || roundedEdge != nil else {
+      container.layer?.mask = nil
+      return
+    }
+    // Round only the edge facing the other pane. The shared Main View retains
+    // ownership of its outer corners, and preview masks do not resize Chromium.
+    let mask = container.layer?.mask ?? CALayer()
+    mask.backgroundColor = NSColor.black.cgColor
+    mask.frame = CGRect(origin: .zero, size: frame.size)
+    mask.cornerRadius = roundedEdge == nil ? 0 : BrowserLayout.contentCornerRadius
+    mask.cornerCurve = .continuous
+    mask.maskedCorners = roundedEdge == .right
+      ? [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+      : [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+    container.layer?.mask = mask
   }
 
   private func rebuildToolbars() {
