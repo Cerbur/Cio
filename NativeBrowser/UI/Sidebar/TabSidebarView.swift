@@ -418,10 +418,15 @@ struct TabSidebarView: View {
     if let left = workspace.tab(withID: group.leftTabID), let right = workspace.tab(withID: group.rightTabID) {
       let focusedID = group.focusedTabID ?? group.leftTabID
       let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
+      let height: CGFloat? = switch tier {
+      case .global: topPinHeight
+      case .space: 36
+      case .temporary: nil
+      }
       SidebarSplitTabRow(group: group, left: left, right: right,
         leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
         selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
-        drag: tabDrag, tier: tier, height: tier == .global ? topPinHeight : nil, onSelect: select, onClose: { workspace.closeTab(id: $0) },
+        drag: tabDrag, tier: tier, height: height, onSelect: select, onClose: { workspace.closeTab(id: $0) },
         onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
         onSwap: { workspace.swapSplitSides(containing: focusedID) },
         onPinGlobally: { workspace.moveSplitGroup(containing: focusedID, to: .global) },
@@ -754,15 +759,21 @@ private struct SidebarSplitTabRow: View {
 
   private var selected: Bool { group.contains(selectedTabID) }
   private var showsHover: Bool { isHovered && drag.tabID == nil }
+  private var isPinned: Bool {
+    if case .temporary = tier { return false }
+    return true
+  }
+  private var contentInset: CGFloat { isPinned ? 2 : 3 }
 
   var body: some View {
-    HStack(spacing: 2) {
+    HStack(spacing: isPinned ? 3 : 2) {
       member(left, session: leftSession)
       member(right, session: rightSession)
     }
-    .padding(3)
+    .frame(height: height.map { $0 - 2 * contentInset })
+    .padding(contentInset)
     .frame(maxWidth: .infinity)
-    .frame(height: height)
+    .containerShape(SidebarTabAppearance.glassShape)
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
@@ -826,7 +837,7 @@ private struct SidebarSplitTabRow: View {
           }
         }
         .padding(.leading, tier == .global ? 0 : 5)
-        .frame(maxWidth: .infinity, minHeight: 30)
+        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: height == nil ? nil : .infinity)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -844,9 +855,15 @@ private struct SidebarSplitTabRow: View {
         .accessibilityLabel("Close \(tab.displayTitle)")
       }
     }
-    .frame(maxWidth: .infinity)
-    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-      .fill(.primary.opacity(showsHover ? 0.06 : 0.04)))
+    .frame(maxWidth: .infinity, maxHeight: height == nil ? nil : .infinity)
+    .background {
+      if isPinned {
+        ContainerRelativeShape().fill(.primary.opacity(showsHover ? 0.06 : 0.04))
+      } else {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(.primary.opacity(showsHover ? 0.06 : 0.04))
+      }
+    }
     .help(tab.displayTitle)
   }
 }
