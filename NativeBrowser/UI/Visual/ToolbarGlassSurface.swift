@@ -41,7 +41,7 @@ struct ToolbarGlassSurface: View {
   }
 }
 
-/// AppKit buttons retain their native tracking and toolbar bezel. Their content
+/// AppKit buttons retain their native tracking and circular bezel. Their content
 /// fades independently of the material's own transition.
 struct ToolbarGlassControlView: View {
   let content: NSView

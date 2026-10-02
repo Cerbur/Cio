@@ -644,7 +644,9 @@ final class BrowserToolbarController: NSObject {
     action: Selector
   ) -> NSButton {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-    button.bezelStyle = .toolbar
+    // These icon-only controls sit inside a shared glass surface. Request the
+    // native circular bezel explicitly; .toolbar can draw a rounded rectangle.
+    button.bezelStyle = .circular
     button.isBordered = true
     button.showsBorderOnlyWhileMouseInside = true
     button.title = ""
