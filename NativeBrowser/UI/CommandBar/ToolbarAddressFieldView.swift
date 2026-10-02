@@ -95,7 +95,6 @@ struct ToolbarAddressFieldView: View {
         }
         .frame(width: width, height: height, alignment: .top)
         .mask(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .opacity(presentation.isVisible ? 1 : 0)
         .background {
           ToolbarGlassSurface(presentation: presentation, cornerRadius: radius)
         }
@@ -107,6 +106,9 @@ struct ToolbarAddressFieldView: View {
             .padding(-NativeAddressFocusRing.inset)
             .allowsHitTesting(false)
         }
+        // One visibility animation for the entire first-level capsule, after
+        // glass/content/focus-ring composition and before the overlay host frame.
+        .modifier(ToolbarComponentVisibility(presentation: presentation))
         .frame(width: geometry.size.width, alignment: .top)
       }
     }

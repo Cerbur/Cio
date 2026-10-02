@@ -1,6 +1,42 @@
 import AppKit
 import SwiftUI
 
+/// USER-REQUIRED TOOLBAR ANIMATION CONTRACT:
+/// Apply once to each first-level component (sidebar button, shared Back/Forward
+/// capsule, address capsule), including its native glass and content. Insertion
+/// fades from an enlarged, dispersed state into its resting size; removal fades
+/// while enlarging outward from the same centre. Never use a directional slide
+/// for visibility. Symbols, text, reload controls and other capsule children keep
+/// their own interaction animations; do not apply this contract recursively.
+/// Window-owned traffic lights stay mounted and retain their native behaviour.
+///
+/// Apple recommends materialize for independent glass insertion/removal and
+/// permits custom transitions alongside it:
+/// https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views
+/// The scale and duration below implement our motion direction, not an Apple
+/// prescribed numeric specification. AppKit buttons retain their own glass;
+/// SwiftUI address glass uses the native materialize transition as well.
+enum ToolbarComponentAnimation {
+  static let duration: TimeInterval = 0.25
+  static let dispersedScale: CGFloat = 1.12
+}
+
+/// Keep the native control/editor mounted so focus and native interaction state
+/// survive visibility changes. Scale the complete component around its centre,
+/// independently of layout; reduced motion uses opacity only.
+struct ToolbarComponentVisibility: ViewModifier {
+  @ObservedObject var presentation: ToolbarPresentationState
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func body(content: Content) -> some View {
+    content
+      .scaleEffect(presentation.isVisible || reduceMotion ? 1 : ToolbarComponentAnimation.dispersedScale)
+      .opacity(presentation.isVisible ? 1 : 0)
+      .allowsHitTesting(presentation.isVisible)
+      .accessibilityHidden(!presentation.isVisible)
+  }
+}
+
 /// Shared by the toolbar's separate hosts so every glass surface transitions
 /// together while native controls and the address editor stay mounted.
 @MainActor
@@ -10,7 +46,7 @@ final class ToolbarPresentationState: ObservableObject {
   func setVisible(_ visible: Bool, animated: Bool) {
     guard isVisible != visible else { return }
     let animates = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    var transaction = Transaction(animation: animates ? .smooth(duration: 0.25) : nil)
+    var transaction = Transaction(animation: animates ? .smooth(duration: ToolbarComponentAnimation.duration) : nil)
     transaction.disablesAnimations = !animates
     withTransaction(transaction) { isVisible = visible }
   }
@@ -40,7 +76,7 @@ struct ToolbarGlassSurface: View {
   }
 }
 
-/// Visibility only: standalone AppKit glass buttons and NSGlassEffectView
+/// Whole-component visibility: standalone AppKit glass buttons and NSGlassEffectView
 /// groups own their material and interaction feedback inside the native tree.
 struct ToolbarNativeControlsView: View {
   let content: NSView
@@ -50,9 +86,7 @@ struct ToolbarNativeControlsView: View {
   var body: some View {
     ToolbarNativeControl(view: content)
       .frame(width: size.width, height: size.height)
-      .opacity(presentation.isVisible ? 1 : 0)
-      .allowsHitTesting(presentation.isVisible)
-      .accessibilityHidden(!presentation.isVisible)
+      .modifier(ToolbarComponentVisibility(presentation: presentation))
   }
 }
 

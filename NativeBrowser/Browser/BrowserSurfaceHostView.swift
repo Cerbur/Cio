@@ -109,7 +109,8 @@ final class BrowserSurfaceHostView: NSView {
     guard isCovered != covered else { return }
     isCovered = covered
     for id in toolbars.keys {
-      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: toolbarFrames[id] != nil)
+      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: toolbarFrames[id] != nil,
+                    animatedVisibility: true)
     }
   }
 
@@ -117,9 +118,10 @@ final class BrowserSurfaceHostView: NSView {
     self.containers = containers
     self.selectedTabID = selectedTabID
     let pairChanged = self.split?.tabIDs != split?.tabIDs
-    if self.split != nil, split == nil, let selectedTabID,
-       let frame = toolbarFrames[selectedTabID] {
-      selectedToolbarFrame = frame
+    if self.split != nil, split == nil {
+      // The restored shell materializes at full width instead of entering from
+      // the surviving pane. Preview cancellation still reflows a visible shell.
+      selectedToolbarFrame = nil
     }
     self.split = split
     for (tabID, container) in containers {
@@ -150,11 +152,6 @@ final class BrowserSurfaceHostView: NSView {
   /// workspace publishes the committed pair synchronously inside this closure.
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {
     let hadPreview = previewSide != nil
-    if hadPreview, split == nil, let selectedTabID {
-      // Transfer the shell's current animated frame to the surviving pane's
-      // toolbar, including a drop before the preview animation has finished.
-      toolbarFrames[selectedTabID] = selectedToolbarFrame ?? bounds
-    }
     previewSide = nil
     isCommittingSplitPreview = hadPreview
     defer { isCommittingSplitPreview = false }
@@ -247,12 +244,14 @@ final class BrowserSurfaceHostView: NSView {
       applyToolbarLayout(panes: panes, selectedFrame: selectedFrame)
       return
     }
-    let startFrames = toolbarFrames
+    // Only controls that remain visible follow pane geometry. Newly created or
+    // restored controls materialize at their destination, never slide in from
+    // an old pane or split-preview frame.
+    let startFrames = toolbarFrames.filter { toolbars[$0.key]?.arePageControlsVisible == true }
     let startSurfaces = surfacePlacements
     let startSelected = selectedToolbarFrame ?? bounds
     let endSelected = selectedFrame ?? bounds
-    // Newly mounted pane controls must start at the transferred preview frame
-    // immediately, rather than drawing their default frame until the first tick.
+    // Position new controls at their destination before changing visibility.
     let initialFrames = panes.map { id, end in (id, startFrames[id] ?? end) }
     // New panes adopt their committed size immediately. Existing panes retain
     // their live viewport while their visible crop moves toward its destination.
@@ -335,9 +334,12 @@ final class BrowserSurfaceHostView: NSView {
 
   private func layoutToolbar(for id: UUID, in frame: CGRect, visible: Bool, animatedVisibility: Bool = false) {
     guard let toolbar = toolbars[id] else { return }
-    toolbar.setSpaceControlsVisible(visible && !isCovered, animated: animatedVisibility)
+    guard visible else {
+      toolbar.setSpaceControlsVisible(false, animated: animatedVisibility)
+      return
+    }
     if toolbarGuides[id]?.frame != frame { toolbarGuides[id]?.frame = frame }
-    guard visible, let contentView = chromeOverlayHost else { return }
+    guard let contentView = chromeOverlayHost else { return }
     if toolbar.view.superview !== contentView {
       contentView.addSubview(toolbar.view, positioned: .above, relativeTo: nil)
     }
@@ -345,6 +347,7 @@ final class BrowserSurfaceHostView: NSView {
     let toolbarFrame = convert(CGRect(x: frame.minX, y: -BrowserLayout.chromeThickness,
                                       width: frame.width, height: BrowserLayout.chromeThickness), to: contentView)
     if toolbar.view.frame != toolbarFrame { toolbar.view.frame = toolbarFrame }
+    toolbar.setSpaceControlsVisible(!isCovered, animated: animatedVisibility)
     toolbar.browserGeometryDidChange()
   }
 
@@ -383,7 +386,7 @@ final class BrowserSurfaceHostView: NSView {
       toolbar.setSpaceControlsVisible(false, animated: animates)
       // Keep the glass and address overlay mounted until their exit finishes.
       if animates {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ToolbarComponentAnimation.duration + 0.05) {
           toolbar.dispose()
           guide?.removeFromSuperview()
         }

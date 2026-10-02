@@ -141,9 +141,12 @@ final class NativeBrowserShellController: NSViewController {
       guard let self else { return }
       // A split commit replaces the shell controls with pane controls before
       // resetting the hidden shell's geometry; do not flash them at full width.
-      self.updateSplitToolbar()
+      if self.runtime.workspaceStore.activeSplit != nil { self.updateSplitToolbar() }
       let local = frame.map { host.convert($0, to: self.browserItem.viewController.view) }
       self.browserToolbar.setBrowserViewportFrame(local)
+      // Restore shell controls only after their destination geometry is ready,
+      // so the appearance transition cannot inherit the old half-width frame.
+      self.updateSplitToolbar()
     }
     view = shellView
   }

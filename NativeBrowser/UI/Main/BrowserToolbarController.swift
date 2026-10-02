@@ -242,7 +242,7 @@ final class ToolbarChromeView: NSView {
   }
 
   func applyLayout(
-    browserRect: NSRect, sidebarAnchor: NSRect
+    browserRect: NSRect, sidebarAnchor: NSRect, preparingToShow: Bool = false
   ) {
     guard browserRect.width > 0 else { return }
     layoutTrafficLights()
@@ -267,6 +267,9 @@ final class ToolbarChromeView: NSView {
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
              on: sidebarControlHost)
+    // Outgoing first-level components expand/fade at their last visible position.
+    // Page/crop relayout must not drag them sideways during that transition.
+    guard presentation.isVisible || preparingToShow else { return }
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
     if let contentView = superview {
@@ -302,6 +305,7 @@ final class BrowserToolbarController: NSObject {
   /// Nil follows selection (shell); a UUID binds every control to that tab.
   let tabID: UUID?
   var isPaneToolbar: Bool { tabID != nil }
+  var arePageControlsVisible: Bool { toolbarPresentation.isVisible }
   private let isActivePane: (() -> Bool)?
   private let onActivatePane: (() -> Void)?
   private var isDisposed = false
@@ -491,6 +495,7 @@ final class BrowserToolbarController: NSObject {
 
   func setSpaceControlsVisible(_ visible: Bool, animated: Bool = true) {
     guard !isDisposed else { return }
+    if visible { preparePageControlsForAppearance() }
     if !visible { siteInformation.dismiss() }
     if !visible, addressPresentation.isFocused {
       releaseAddressFocus()
@@ -503,6 +508,7 @@ final class BrowserToolbarController: NSObject {
   /// traffic lights and sidebar button while split panes provide page controls.
   func setPageControlsVisible(_ visible: Bool, animated: Bool = true) {
     guard !isDisposed else { return }
+    if visible { preparePageControlsForAppearance() }
     if !visible {
       siteInformation.dismiss()
       releaseAddressFocus()
@@ -579,12 +585,23 @@ final class BrowserToolbarController: NSObject {
     return nil
   }
 
-  private func applyCurrentLayout() {
+  private func preparePageControlsForAppearance() {
+    guard !toolbarPresentation.isVisible else { return }
+    // Mount and lay out the hidden native hosts at the destination first. In
+    // particular, a newly created address overlay must render its invisible,
+    // enlarged state before the visibility transaction begins.
+    applyCurrentLayout(preparingToShow: true)
+    chromeView?.layoutSubtreeIfNeeded()
+    addressOverlay?.layoutSubtreeIfNeeded()
+  }
+
+  private func applyCurrentLayout(preparingToShow: Bool = false) {
     guard let window, let chromeView,
           chromeView.window === window, browserView.window === window else { return }
     let browserRect = browserView.convert(browserViewportFrame ?? browserView.bounds, to: chromeView)
     let sidebarAnchor = browserView.convert(browserView.bounds, to: chromeView)
-    chromeView.applyLayout(browserRect: browserRect, sidebarAnchor: sidebarAnchor)
+    chromeView.applyLayout(browserRect: browserRect, sidebarAnchor: sidebarAnchor,
+                          preparingToShow: preparingToShow)
   }
 
   private func observeWorkspace() {
