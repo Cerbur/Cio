@@ -88,6 +88,13 @@ final class BrowserSurfaceHostView: NSView {
 
   func present(containers: [UUID: ChromiumContainerView], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
     let pairChanged = self.split?.tabIDs != split?.tabIDs
+    // A single-page tab switch replaces the toolbar in its existing slot. Both
+    // tab-owned instances stay alive, but neither plays an exit/entry animation.
+    // Split changes and drag previews still use the component visibility contract.
+    let isSinglePageTabSwitch = self.split == nil && split == nil
+      && previewSide == nil && !isCommittingSplitPreview
+      && self.selectedTabID != nil && selectedTabID != nil
+      && self.selectedTabID != selectedTabID
     self.selectedTabID = selectedTabID
     self.split = split
     // Identity follows live tabs, never pane count, selected section or split ID.
@@ -103,14 +110,15 @@ final class BrowserSurfaceHostView: NSView {
     }
     for id in Array(pages.keys) where containers[id] == nil {
       guard let page = pages.removeValue(forKey: id) else { continue }
-      page.hide(animated: window != nil)
+      page.hide(animated: window != nil && !isSinglePageTabSwitch)
       // Only runtime closure retires a page instance. Leave its native overlay
       // mounted until the common first-level component exit has completed.
       DispatchQueue.main.asyncAfter(deadline: .now() + ToolbarComponentAnimation.duration + 0.05) {
         page.dispose()
       }
     }
-    applySurfaceLayout(animatedPresentation: isCommittingSplitPreview || pairChanged)
+    applySurfaceLayout(animatedPresentation: isCommittingSplitPreview || pairChanged,
+                       animatedVisibility: !isSinglePageTabSwitch)
   }
 
   override func layout() {
@@ -136,7 +144,7 @@ final class BrowserSurfaceHostView: NSView {
     return committed
   }
 
-  private func applySurfaceLayout(animatedPresentation: Bool = false) {
+  private func applySurfaceLayout(animatedPresentation: Bool = false, animatedVisibility: Bool = true) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
@@ -173,7 +181,7 @@ final class BrowserSurfaceHostView: NSView {
         next[selectedTabID] = PagePlacement(frame: bounds, cropOnly: false)
       }
     }
-    updatePresentationLayout(next, animated: animatedPresentation)
+    updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
   }
 
   private func collapsedFrame(for id: UUID) -> CGRect {
@@ -184,7 +192,7 @@ final class BrowserSurfaceHostView: NSView {
   /// One clock and one placement map drive both the content crop and toolbar.
   /// Only entering/leaving page controls change visibility; surviving controls
   /// keep their native state and animate position with their outer container.
-  private func updatePresentationLayout(_ next: [UUID: PagePlacement], animated: Bool) {
+  private func updatePresentationLayout(_ next: [UUID: PagePlacement], animated: Bool, animatedVisibility: Bool) {
     guard next != targets else {
       if presentationAnimationTimer == nil { applyPlacements(next) }
       return
@@ -195,7 +203,7 @@ final class BrowserSurfaceHostView: NSView {
     presentationAnimationTimer = nil
     appearingToolbarFrames = [:]
     guard animated, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-      applyPlacements(next, animatedVisibility: window != nil)
+      applyPlacements(next, animatedVisibility: animatedVisibility && window != nil)
       return
     }
     let start = placements
@@ -209,7 +217,7 @@ final class BrowserSurfaceHostView: NSView {
       }
     }
     let toolbarStarts = appearingToolbarFrames
-    applyPlacements(interpolatedPlacements(from: start, to: next, amount: 0), animatedVisibility: true)
+    applyPlacements(interpolatedPlacements(from: start, to: next, amount: 0), animatedVisibility: animatedVisibility)
     let startTime = ProcessInfo.processInfo.systemUptime
     let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {

@@ -2176,8 +2176,11 @@ same tab, or reparents its Chromium surface.
 `BrowserSurfaceHostView` drives page placement, content cropping, split divider
 geometry and visibility with one placement map and animation clock. Preview only
 changes the outer viewport; Chromium resizes when the drop settles. Divider drags
-resize it immediately. A surviving page only reflows; entering/leaving page
-controls use the shared first-level scale/fade contract. Returning controls after
+resize it immediately. A surviving page only reflows. Switching between two
+single-page tabs swaps their existing toolbar instances in place without entry
+or exit animation, including when closing the active tab selects another single
+page. Split and section entry/exit still use the shared first-level scale/fade
+contract. Returning controls after
 preview cancellation appear at their target frame, independently of the content
 crop. Inactive page instances remain mounted until their runtime closes.
 

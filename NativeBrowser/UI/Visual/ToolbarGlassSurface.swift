@@ -9,6 +9,9 @@ import SwiftUI
 /// for visibility. Symbols, text, reload controls and other capsule children keep
 /// their own interaction animations; do not apply this contract recursively.
 /// Window-owned traffic lights stay mounted and retain their native behaviour.
+/// Switching one single-page tab to another replaces the existing toolbar slot
+/// immediately, without visibility animation. Split entry/exit and section
+/// visibility changes still use this contract; surviving controls only reflow.
 ///
 /// Apple recommends materialize for independent glass insertion/removal and
 /// permits custom transitions alongside it:
