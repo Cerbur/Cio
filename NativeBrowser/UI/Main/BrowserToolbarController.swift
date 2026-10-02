@@ -30,7 +30,7 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 }
 
 @MainActor
-private final class ToolbarChromeView: NSView {
+final class ToolbarChromeView: NSView {
   var onGeometryRequest: (() -> Void)?
   private let sidebarButton: NSButton
   private let sidebarControlHost: NSHostingView<ToolbarNativeControlsView>
@@ -45,7 +45,7 @@ private final class ToolbarChromeView: NSView {
   private weak var trafficLightsWindow: NSWindow?
   private var frameBeforeMaximizing: NSRect?
 
-  init(
+  fileprivate init(
     sidebarButton: NSButton,
     backButton: NSButton,
     forwardButton: NSButton,
@@ -69,6 +69,15 @@ private final class ToolbarChromeView: NSView {
     // Custom shell chrome doesn't receive NSToolbar's automatic group glass.
     // Embed the native buttons as content so AppKit owns the material,
     // adaptive symbol appearance and supported glass interaction feedback.
+    // USER-REQUIRED STYLE CONTRACT: Back/Forward are independent native buttons
+    // inside ONE continuous Liquid Glass capsule, matching the Safari reference.
+    // Preserve the shared glass, native hover/press feedback (where supported),
+    // independent enabled states, and geometry derived from the shared metrics.
+    // Do not replace this with a plain segmented control, separate glass circles,
+    // an inert background, or custom-drawn glass/interaction animations.
+    // If platform limitations or another requirement conflict with this contract,
+    // explain the conflict and obtain an explicit human trade-off decision before
+    // changing the style or relaxing its native behavior or layout constraints.
     let navigationGlass = NSGlassEffectView(frame: navigationContent.frame)
     navigationGlass.style = .regular
     navigationGlass.cornerRadius = height / 2
@@ -137,9 +146,6 @@ private final class ToolbarChromeView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
     if !showsWindowControls {
-      // Pane chrome overlaps the shell's toolbar row. Only its visible page
-      // controls handle input; empty space must reach the shell's sidebar and
-      // window controls (and retain the shell's window-drag behavior).
       guard presentation.isVisible, let hit,
             hit.isDescendant(of: navigationGroup) else { return nil }
       return hit
@@ -149,6 +155,35 @@ private final class ToolbarChromeView: NSView {
       if !presentation.isVisible, hit.isDescendant(of: navigationGroup) { return self }
     }
     return hit
+  }
+
+  /// Window gestures belong to the complete toolbar row, independently of
+  /// which overlapping AppKit/SwiftUI host would otherwise receive the click.
+  func isWindowInteraction(at windowPoint: NSPoint) -> Bool {
+    guard showsWindowControls, !isHidden, let window, window.attachedSheet == nil,
+          bounds.contains(convert(windowPoint, from: nil)), let host = superview else { return false }
+
+    // Native window widgets retain their complete hit regions and actions.
+    for button in trafficLights where !button.isHidden {
+      if button.bounds.contains(button.convert(windowPoint, from: nil)) { return false }
+    }
+    for view in host.subviews {
+      if let chrome = view as? ToolbarChromeView, !chrome.isHidden {
+        var buttons: [NSButton] = []
+        if chrome.showsWindowControls, chrome.sidebarPresentation.isVisible {
+          buttons.append(chrome.sidebarButton)
+        }
+        if chrome.presentation.isVisible {
+          buttons += [chrome.backButton, chrome.forwardButton]
+        }
+        for button in buttons where button.window === window && !button.isHidden {
+          if button.bounds.contains(button.convert(windowPoint, from: nil)) { return false }
+        }
+      } else if let address = view as? AddressOverlayHostingView {
+        if address.hitTest(host.convert(windowPoint, from: nil)) != nil { return false }
+      }
+    }
+    return true
   }
 
   func installTrafficLights(in window: NSWindow) {
@@ -658,6 +693,9 @@ final class BrowserToolbarController: NSObject {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
     // Standalone buttons own their glass; grouped toolbar buttons receive it
     // from their native content container and reveal their bezel on hover.
+    // Keep the sidebar's standalone .glass style and the navigation buttons'
+    // shared-container style. Conflicting changes require the same explicit
+    // human trade-off decision as the style contract beside navigationGlass.
     button.setButtonType(.momentaryPushIn)
     button.bezelStyle = usesSharedGlass ? .toolbar : .glass
     button.borderShape = .circle

@@ -47,6 +47,18 @@ private final class BrowserShellView: NSView {
 
   override var isFlipped: Bool { true }
 
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    // Resolve the entire toolbar background before overlapping pane and
+    // SwiftUI hosts can claim it. Visible controls retain normal hit-testing;
+    // all other toolbar points share the shell's drag and double-click handler.
+    if !isHidden, bounds.contains(convert(point, from: superview)),
+       let toolbar = toolbarView as? ToolbarChromeView,
+       toolbar.isWindowInteraction(at: superview?.convert(point, to: nil) ?? point) {
+      return toolbar
+    }
+    return super.hitTest(point)
+  }
+
   override func layout() {
     super.layout()
     let frames = BrowserShellFrames(bounds: bounds)
