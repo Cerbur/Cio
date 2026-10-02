@@ -7,6 +7,7 @@
 //
 
 import AppKit
+import Combine
 import SwiftUI
 
 final class SeamlessSplitView: NSSplitView {
@@ -23,6 +24,18 @@ final class BrowserMainViewController: NSViewController {
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
   let spaceSplitController: NSSplitViewController
+
+  /// Section-owned control displayed in the shell overlay, outside content clips.
+  private(set) lazy var spaceToolbar = SpaceToolbarController(onToggle: { [weak self] in
+    self?.toggleSpaceSidebar()
+  })
+  var onToolbarLayoutChange: (() -> Void)?
+  private var panelObservation: AnyCancellable?
+  private var sidebarCollapseObservation: NSKeyValueObservation?
+  private var sidebarWasCollapsedBeforeLibrary = false
+  private var wasShowingLibrary = false
+  private var didRestoreSidebarWidth = false
+  private var expandedSidebarWidth = BrowserLayout.sidebarDefaultWidth
 
   var spaceSplitView: NSSplitView { spaceSplitController.splitView }
 
@@ -85,6 +98,80 @@ final class BrowserMainViewController: NSViewController {
         equalTo: container.bottomAnchor),
     ])
   }
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    spaceToolbar.setVisible(runtime.presentedInternalPanel == nil, animated: false)
+    sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak self] _, _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.spaceToolbar.setCollapsed(self.sidebarItem.isCollapsed)
+        self.onToolbarLayoutChange?()
+      }
+    }
+    panelObservation = runtime.$presentedInternalPanel.receive(on: RunLoop.main).sink { [weak self] panel in
+      MainActor.assumeIsolated { self?.showSection(panel) }
+    }
+  }
+
+  override func viewDidAppear() {
+    super.viewDidAppear()
+    if !didRestoreSidebarWidth {
+      didRestoreSidebarWidth = true
+      let defaults = UserDefaults.standard
+      var saved = defaults.double(forKey: BrowserLayout.sidebarWidthPreferenceKey)
+      if !defaults.bool(forKey: BrowserLayout.sidebarWidthMigrationKey) {
+        if saved == 210 { saved = Double(BrowserLayout.sidebarMinimumWidth) }
+        defaults.set(true, forKey: BrowserLayout.sidebarWidthMigrationKey)
+      }
+      let desired = saved > 0 ? CGFloat(saved) : BrowserLayout.sidebarDefaultWidth
+      expandedSidebarWidth = min(max(desired, BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
+      spaceSplitView.setPosition(expandedSidebarWidth, ofDividerAt: 0)
+    }
+    onToolbarLayoutChange?()
+  }
+
+  override func viewDidLayout() {
+    super.viewDidLayout()
+    onToolbarLayoutChange?()
+  }
+
+  func layoutSpaceToolbar(in host: NSView, windowControlsTrailingEdge: CGFloat) {
+    let anchor = browserItem.viewController.view.convert(browserItem.viewController.view.bounds, to: host)
+    spaceToolbar.layout(in: host, sidebarAnchor: anchor, windowControlsTrailingEdge: windowControlsTrailingEdge)
+  }
+
+  private func showSection(_ panel: ApplicationRuntime.InternalBrowserPanel?) {
+    // Space owns both sidebar state and the lifetime/visibility of its control.
+    if panel != nil {
+      if !wasShowingLibrary {
+        sidebarWasCollapsedBeforeLibrary = sidebarItem.isCollapsed
+        if !sidebarItem.isCollapsed { toggleSpaceSidebar() }
+      }
+      wasShowingLibrary = true
+    } else if wasShowingLibrary {
+      wasShowingLibrary = false
+      if !sidebarWasCollapsedBeforeLibrary && sidebarItem.isCollapsed { toggleSpaceSidebar() }
+    }
+    spaceToolbar.setVisible(panel == nil, animated: true)
+  }
+
+  private func toggleSpaceSidebar() {
+    if sidebarItem.isCollapsed {
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.28
+        sidebarItem.animator().isCollapsed = false
+      }
+      let width = expandedSidebarWidth
+      DispatchQueue.main.async { [weak self] in self?.spaceSplitView.setPosition(width, ofDividerAt: 0) }
+    } else {
+      expandedSidebarWidth = sidebarItem.viewController.view.frame.width
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.28
+        sidebarItem.animator().isCollapsed = true
+      }
+    }
+  }
+
   private func installDragOverlay(_ drag: SidebarTabDrag) {
     // Sidebar reattachment during tier changes must preserve the glass namespace.
     if overlayDrag === drag, dragOverlay != nil { return }

@@ -1,34 +1,45 @@
-//
-//  BrowserSurfaceHostView.swift
-//  NativeBrowser
-//
-//  The stable AppKit host for every live Chromium surface in the window
-//  (Milestone 3 section 11).
-//
-//  Why this type exists: the obvious SwiftUI implementation of tab selection --
-//
-//      if tab.id == selectedTabID { ChromiumView(session: session) }
-//
-//  removes the inactive representable's NSView from the hierarchy, which
-//  deallocates the CEF host view, which destroys the CefBrowser. Switching back
-//  then builds a second browser for the same tab, and every switch loses the
-//  tab's page state.
-//
-//  Instead, each live BrowserSession owns exactly one ChromiumContainerView that
-//  stays a subview of this host for as long as the session is alive. Selection
-//  only changes which container is visible; no browser is created, destroyed or
-//  reparented by a tab switch.
-//
-//  The host creates and destroys nothing: the session manager owns the
-//  containers and hands the current set in, so "remove a container" can only
-//  happen after OnBeforeClose released its session.
-//
-
 import AppKit
 
+/// Stable page registry and outer layout container. Each tab keeps one page UI
+/// instance; this host only chooses its placement, crop and toolbar visibility.
+/// BrowserSessionManager retains ownership of Chromium runtime lifetimes.
 final class BrowserSurfaceHostView: NSView {
   var onDarkAppearanceChange: ((Bool) -> Void)?
-  var onSelectedSurfaceFrameChange: ((CGRect?) -> Void)?
+  private var pages: [UUID: BrowserPagePresentation] = [:]
+  private var selectedTabID: UUID?
+  private var split: BrowserSplitLayout?
+  private var isCovered = false
+  private var previewSide: BrowserSplitLayout.Side?
+  private var isCommittingSplitPreview = false
+  private var resizingFraction: CGFloat?
+
+  private struct PagePlacement: Equatable {
+    var frame: CGRect
+    var cropOnly: Bool
+    var toolbarVisible: Bool = true
+  }
+  private var placements: [UUID: PagePlacement] = [:]
+  private var targets: [UUID: PagePlacement] = [:]
+  /// Returning controls materialize at their final placement even while their
+  /// previously collapsed content crop is still expanding from a preview.
+  private var appearingToolbarFrames: [UUID: CGRect] = [:]
+  nonisolated(unsafe) private var presentationAnimationTimer: Timer?
+  private weak var workspace: BrowserWorkspaceStore?
+  private var history: HistoryService?
+  private let divider = BrowserSplitDividerView()
+  private let preview = NSVisualEffectView()
+  nonisolated(unsafe) private var paneClickMonitor: Any?
+
+  private var chromeOverlayHost: NSView? {
+    var ancestor = superview
+    while let candidate = ancestor {
+      if candidate is BrowserToolbarLayoutHosting { return candidate }
+      ancestor = candidate.superview
+    }
+    return nil
+  }
+
+  override var isFlipped: Bool { true }
 
   func syncChromiumAppearance() {
     guard window != nil else { return }
@@ -40,10 +51,7 @@ final class BrowserSurfaceHostView: NSView {
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     syncChromiumAppearance()
-    if let window {
-      for toolbar in toolbars.values { toolbar.install(in: window, showsSpaceToolbar: !isCovered) }
-      needsLayout = true
-    }
+    needsLayout = true
   }
 
   override func viewDidChangeEffectiveAppearance() {
@@ -51,55 +59,17 @@ final class BrowserSurfaceHostView: NSView {
     syncChromiumAppearance()
   }
 
-  private var containers: [UUID: ChromiumContainerView] = [:]
-  private var selectedTabID: UUID?
-  private var split: BrowserSplitLayout?
-  private var isCovered = false
-  private var previewSide: BrowserSplitLayout.Side?
-  private var isCommittingSplitPreview = false
-  private var resizingFraction: CGFloat?
-  private var toolbarFrames: [UUID: CGRect] = [:]
-  private var selectedToolbarFrame: CGRect?
-  private var toolbarTargetFrames: [UUID: CGRect] = [:]
-  private var selectedToolbarTargetFrame: CGRect?
-  private struct SurfacePlacement: Equatable {
-    var frame: CGRect
-    var cropOnly: Bool
-    var roundedEdge: BrowserSplitLayout.Side?
-  }
-  private var surfacePlacements: [UUID: SurfacePlacement] = [:]
-  private var surfaceTargets: [UUID: SurfacePlacement] = [:]
-  nonisolated(unsafe) private var presentationAnimationTimer: Timer?
-  private weak var workspace: BrowserWorkspaceStore?
-  private var history: HistoryService?
-  private var toolbars: [UUID: BrowserToolbarController] = [:]
-  private var toolbarGuides: [UUID: NSView] = [:]
-  private let divider = BrowserSplitDividerView()
-  private let preview = NSVisualEffectView()
-  nonisolated(unsafe) private var paneClickMonitor: Any?
-
-  private var chromeOverlayHost: NSView? {
-    var ancestor = superview
-    while let candidate = ancestor {
-      if candidate.identifier?.rawValue == "browser-shell-chrome-host" { return candidate }
-      ancestor = candidate.superview
-    }
-    return nil
-  }
-
-  override var isFlipped: Bool { true }
-
   func configure(workspace: BrowserWorkspaceStore, history: HistoryService) {
     self.workspace = workspace
     self.history = history
+    for page in pages.values { page.configureToolbar(workspace: workspace, history: history) }
     if paneClickMonitor == nil {
       paneClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
         guard let self, event.window === self.window, let split = self.split,
               !self.isCovered, self.workspace?.isSpotlightPresented != true, self.preview.isHidden else { return event }
         let point = self.convert(event.locationInWindow, from: nil)
         guard self.bounds.contains(point), !self.divider.frame.contains(point) else { return event }
-        let tabID = point.x < self.divider.frame.minX ? split.leftTabID : split.rightTabID
-        self.workspace?.selectTab(id: tabID)
+        self.workspace?.selectTab(id: point.x < self.divider.frame.minX ? split.leftTabID : split.rightTabID)
         return event
       }
     }
@@ -108,31 +78,38 @@ final class BrowserSurfaceHostView: NSView {
   func setPresentationCovered(_ covered: Bool) {
     guard isCovered != covered else { return }
     isCovered = covered
-    for id in toolbars.keys {
-      layoutToolbar(for: id, in: toolbarFrames[id] ?? bounds, visible: toolbarFrames[id] != nil,
-                    animatedVisibility: true)
+    if !covered, presentationAnimationTimer != nil {
+      for (id, target) in targets where target.toolbarVisible {
+        appearingToolbarFrames[id] = target.frame
+      }
     }
+    applyPlacements(placements, animatedVisibility: true)
   }
 
   func present(containers: [UUID: ChromiumContainerView], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
-    self.containers = containers
-    self.selectedTabID = selectedTabID
     let pairChanged = self.split?.tabIDs != split?.tabIDs
-    if self.split != nil, split == nil {
-      // The restored shell materializes at full width instead of entering from
-      // the surviving pane. Preview cancellation still reflows a visible shell.
-      selectedToolbarFrame = nil
-    }
+    self.selectedTabID = selectedTabID
     self.split = split
-    for (tabID, container) in containers {
-      if container.superview !== self { addSubview(container, positioned: .below, relativeTo: divider) }
-      container.autoresizingMask = []
-      container.setSurfaceVisible(split?.contains(tabID) ?? (tabID == selectedTabID))
+    // Identity follows live tabs, never pane count, selected section or split ID.
+    // Every surface is mounted once in its viewport before CEF attaches to it.
+    for (id, surface) in containers {
+      if pages[id] == nil {
+        let page = BrowserPagePresentation(tabID: id, surface: surface)
+        pages[id] = page
+        addSubview(page.viewport, positioned: .below, relativeTo: divider)
+      }
+      if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
+      surface.setSurfaceVisible(split?.contains(id) ?? (id == selectedTabID))
     }
-    for case let container as ChromiumContainerView in subviews {
-      if !containers.values.contains(where: { $0 === container }) { container.removeFromSuperview() }
+    for id in Array(pages.keys) where containers[id] == nil {
+      guard let page = pages.removeValue(forKey: id) else { continue }
+      page.hide(animated: window != nil)
+      // Only runtime closure retires a page instance. Leave its native overlay
+      // mounted until the common first-level component exit has completed.
+      DispatchQueue.main.asyncAfter(deadline: .now() + ToolbarComponentAnimation.duration + 0.05) {
+        page.dispose()
+      }
     }
-    if pairChanged { rebuildToolbars() }
     applySurfaceLayout(animatedPresentation: isCommittingSplitPreview || pairChanged)
   }
 
@@ -141,15 +118,14 @@ final class BrowserSurfaceHostView: NSView {
     applySurfaceLayout()
   }
 
-  /// Preview changes origins and layer masks only. No Chromium view changes size.
   func previewSplit(on side: BrowserSplitLayout.Side?) {
     guard previewSide != side else { return }
     previewSide = side
     applySurfaceLayout(animatedPresentation: true)
   }
 
-  /// Consume the preview without first presenting the full-width page. The
-  /// workspace publishes the committed pair synchronously inside this closure.
+  /// Commit directly from the current preview placement. No full-width reset,
+  /// no replacement toolbar, and no reparenting of the surviving Chromium view.
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {
     let hadPreview = previewSide != nil
     previewSide = nil
@@ -165,116 +141,91 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     preview.isHidden = previewSide == nil
-    var surfaces: [UUID: SurfacePlacement] = [:]
+    var next: [UUID: PagePlacement] = [:]
     if let side = previewSide, let split {
       let frames = split.frames(in: bounds)
       let survivorID = side == .left ? split.rightTabID : split.leftTabID
-      let survivorFrame = side == .left ? frames.right : frames.left
       preview.frame = side == .left ? frames.left : frames.right
       divider.frame = frames.divider
       divider.isHidden = false
-      for (id, container) in containers where container.isSurfaceVisible {
-        surfaces[id] = SurfacePlacement(frame: id == survivorID ? survivorFrame : collapsedSurfaceFrame(for: id, container: container),
-          cropOnly: true, roundedEdge: side)
+      for id in split.tabIDs {
+        let survivor = id == survivorID
+        next[id] = PagePlacement(frame: survivor ? (side == .left ? frames.right : frames.left)
+          : collapsedFrame(for: id), cropOnly: true, toolbarVisible: survivor)
       }
-      updatePresentationLayout(panes: [survivorID: survivorFrame], selectedFrame: nil,
-                               surfaces: surfaces, animated: animatedPresentation)
-    } else if let side = previewSide {
-      let currentWidth = selectedTabID.flatMap { containers[$0]?.frame.width } ?? bounds.width
+    } else if let side = previewSide, let selectedTabID {
       let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
-                                                   maximumSurvivorWidth: currentWidth)
+        maximumSurvivorWidth: pages[selectedTabID]?.surface.frame.width ?? bounds.width)
       preview.frame = frames.target
       divider.isHidden = true
-      for (id, container) in containers where container.isSurfaceVisible {
-        // Keep every Chromium surface at its committed size during tab placement.
-        surfaces[id] = SurfacePlacement(frame: id == selectedTabID ? frames.survivor : collapsedSurfaceFrame(for: id, container: container),
-                                        cropOnly: true, roundedEdge: side)
-      }
-      let paneFrames = toolbars.keys.filter { $0 == selectedTabID }
-        .reduce(into: [UUID: CGRect]()) { $0[$1] = frames.survivor }
-      updatePresentationLayout(panes: paneFrames, selectedFrame: frames.survivor,
-                               surfaces: surfaces, animated: animatedPresentation)
+      next[selectedTabID] = PagePlacement(frame: frames.survivor, cropOnly: true)
     } else if let split {
       var shown = split
       shown.fraction = resizingFraction ?? split.fraction
       let frames = shown.frames(in: bounds)
-      for (id, frame) in [(split.leftTabID, frames.left), (split.rightTabID, frames.right)] {
-        guard containers[id] != nil else { continue }
-        // Divider drags resize Chromium immediately so responsive page layout
-        // previews at the actual pane width, rather than cropping the old page.
-        surfaces[id] = SurfacePlacement(frame: frame, cropOnly: false,
-                                        roundedEdge: id == split.leftTabID ? .right : .left)
-      }
       divider.frame = frames.divider
       divider.isHidden = false
-      updatePresentationLayout(panes: [split.leftTabID: frames.left, split.rightTabID: frames.right],
-                               selectedFrame: nil, surfaces: surfaces, animated: animatedPresentation)
+      next[split.leftTabID] = PagePlacement(frame: frames.left, cropOnly: false)
+      next[split.rightTabID] = PagePlacement(frame: frames.right, cropOnly: false)
     } else {
       divider.isHidden = true
-      if let selectedTabID, containers[selectedTabID] != nil {
-        surfaces[selectedTabID] = SurfacePlacement(frame: bounds, cropOnly: false, roundedEdge: nil)
+      if let selectedTabID, pages[selectedTabID] != nil {
+        next[selectedTabID] = PagePlacement(frame: bounds, cropOnly: false)
       }
-      updatePresentationLayout(panes: [:], selectedFrame: nil, surfaces: surfaces, animated: animatedPresentation)
     }
-    // Inactive containers keep their last committed geometry and their live page.
+    updatePresentationLayout(next, animated: animatedPresentation)
   }
 
-  /// Page origins and crop masks follow the same clock as their toolbar. Resize
-  /// the surviving Chromium surface once the drop settles; splitter tracking
-  /// still updates actual page widths immediately.
-  private func updatePresentationLayout(panes: [UUID: CGRect], selectedFrame: CGRect?,
-                                       surfaces: [UUID: SurfacePlacement], animated: Bool) {
-    guard panes != toolbarTargetFrames || selectedFrame != selectedToolbarTargetFrame
-      || surfaces != surfaceTargets else {
-      // Layout may be repeated while a window or overlay is being attached.
-      // Preserve an active transition; otherwise refresh the mounted controls.
-      if presentationAnimationTimer == nil {
-        applySurfacePlacements(surfaces)
-        applyToolbarLayout(panes: panes, selectedFrame: selectedFrame)
-      }
+  private func collapsedFrame(for id: UUID) -> CGRect {
+    let frame = placements[id]?.frame ?? pages[id]?.viewport.frame ?? .zero
+    return CGRect(x: frame.midX, y: frame.midY, width: 0, height: 0)
+  }
+
+  /// One clock and one placement map drive both the content crop and toolbar.
+  /// Only entering/leaving page controls change visibility; surviving controls
+  /// keep their native state and animate position with their outer container.
+  private func updatePresentationLayout(_ next: [UUID: PagePlacement], animated: Bool) {
+    guard next != targets else {
+      if presentationAnimationTimer == nil { applyPlacements(next) }
       return
     }
-    toolbarTargetFrames = panes
-    selectedToolbarTargetFrame = selectedFrame
-    surfaceTargets = surfaces
+    let previousToolbarFrames = appearingToolbarFrames
+    targets = next
     presentationAnimationTimer?.invalidate()
     presentationAnimationTimer = nil
+    appearingToolbarFrames = [:]
     guard animated, window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
-      applySurfacePlacements(surfaces)
-      applyToolbarLayout(panes: panes, selectedFrame: selectedFrame)
+      applyPlacements(next, animatedVisibility: window != nil)
       return
     }
-    // Only controls that remain visible follow pane geometry. Newly created or
-    // restored controls materialize at their destination, never slide in from
-    // an old pane or split-preview frame.
-    let startFrames = toolbarFrames.filter { toolbars[$0.key]?.arePageControlsVisible == true }
-    let startSurfaces = surfacePlacements
-    let startSelected = selectedToolbarFrame ?? bounds
-    let endSelected = selectedFrame ?? bounds
-    // Position new controls at their destination before changing visibility.
-    let initialFrames = panes.map { id, end in (id, startFrames[id] ?? end) }
-    // New panes adopt their committed size immediately. Existing panes retain
-    // their live viewport while their visible crop moves toward its destination.
-    applySurfacePlacements(interpolatedSurfaces(from: startSurfaces, to: surfaces, amount: 0))
-    applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: initialFrames), selectedFrame: startSelected,
-                       animatedVisibility: true)
+    let start = placements
+    for (id, target) in next where target.toolbarVisible {
+      if pages[id]?.toolbar?.arePageControlsVisible != true {
+        appearingToolbarFrames[id] = target.frame
+      } else if let previousFrame = previousToolbarFrames[id] {
+        // An interrupted cancellation retains the chrome's actual placement;
+        // it must not jump back to the still-expanding content crop.
+        appearingToolbarFrames[id] = previousFrame
+      }
+    }
+    let toolbarStarts = appearingToolbarFrames
+    applyPlacements(interpolatedPlacements(from: start, to: next, amount: 0), animatedVisibility: true)
     let startTime = ProcessInfo.processInfo.systemUptime
     let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self else { return }
         let progress = min(1, (ProcessInfo.processInfo.systemUptime - startTime) / 0.3)
-        // Smooth acceleration/deceleration matches the glass block's morph.
         let amount = CGFloat(progress * progress * (3 - 2 * progress))
-        let current = panes.map { id, end in
-          (id, Self.interpolatedFrame(from: startFrames[id] ?? end, to: end, amount: amount))
+        for (id, initial) in toolbarStarts {
+          if let target = next[id] {
+            self.appearingToolbarFrames[id] = self.interpolatedFrame(from: initial, to: target.frame, amount: amount)
+          }
         }
-        self.applySurfacePlacements(self.interpolatedSurfaces(from: startSurfaces, to: surfaces, amount: amount))
-        self.applyToolbarLayout(panes: Dictionary(uniqueKeysWithValues: current),
-          selectedFrame: progress == 1 ? selectedFrame : Self.interpolatedFrame(
-            from: startSelected, to: endSelected, amount: amount))
+        self.applyPlacements(self.interpolatedPlacements(from: start, to: next, amount: amount))
         if progress == 1 {
           self.presentationAnimationTimer?.invalidate()
           self.presentationAnimationTimer = nil
+          self.appearingToolbarFrames = [:]
         }
       }
     }
@@ -282,131 +233,41 @@ final class BrowserSurfaceHostView: NSView {
     RunLoop.main.add(timer, forMode: .common)
   }
 
-  private func collapsedSurfaceFrame(for id: UUID, container: ChromiumContainerView) -> CGRect {
-    // Collapse within the visible Chromium pane, including an interrupted preview.
-    let frame = surfacePlacements[id]?.frame ?? container.frame
-    return CGRect(x: frame.midX, y: frame.midY, width: 0, height: 0)
-  }
-
-  private func interpolatedSurfaces(from start: [UUID: SurfacePlacement],
-                                    to end: [UUID: SurfacePlacement], amount: CGFloat) -> [UUID: SurfacePlacement] {
+  private func interpolatedPlacements(from start: [UUID: PagePlacement],
+                                     to end: [UUID: PagePlacement], amount: CGFloat) -> [UUID: PagePlacement] {
     end.reduce(into: [:]) { result, entry in
       let (id, target) = entry
       guard amount < 1, let initial = start[id], initial.frame != target.frame else {
         result[id] = target
         return
       }
-      result[id] = SurfacePlacement(frame: Self.interpolatedFrame(from: initial.frame, to: target.frame, amount: amount),
-                                    cropOnly: true, roundedEdge: target.roundedEdge)
+      let frame = interpolatedFrame(from: initial.frame, to: target.frame, amount: amount)
+      result[id] = PagePlacement(frame: frame, cropOnly: true, toolbarVisible: target.toolbarVisible)
     }
   }
 
-  private func applySurfacePlacements(_ placements: [UUID: SurfacePlacement]) {
+  private func interpolatedFrame(from a: CGRect, to b: CGRect, amount: CGFloat) -> CGRect {
+    CGRect(x: a.minX + (b.minX - a.minX) * amount,
+           y: a.minY + (b.minY - a.minY) * amount,
+           width: a.width + (b.width - a.width) * amount,
+           height: a.height + (b.height - a.height) * amount)
+  }
+
+  private func applyPlacements(_ next: [UUID: PagePlacement], animatedVisibility: Bool = false) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
-    surfacePlacements = placements
-    for (id, placement) in placements {
-      guard let container = containers[id] else { continue }
-      place(container, in: placement.frame, cropOnly: placement.cropOnly, roundedEdge: placement.roundedEdge)
-    }
-  }
-
-  private func applyToolbarLayout(panes: [UUID: CGRect], selectedFrame: CGRect?, animatedVisibility: Bool = false) {
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
-    for id in toolbars.keys {
-      layoutToolbar(for: id, in: panes[id] ?? toolbarFrames[id] ?? bounds,
-                    visible: panes[id] != nil, animatedVisibility: animatedVisibility)
-    }
-    toolbarFrames = panes
-    selectedToolbarFrame = selectedFrame
-    onSelectedSurfaceFrameChange?(selectedFrame)
-  }
-
-  private static func interpolatedFrame(from start: CGRect, to end: CGRect, amount: CGFloat) -> CGRect {
-    CGRect(x: start.minX + (end.minX - start.minX) * amount,
-           y: start.minY + (end.minY - start.minY) * amount,
-           width: start.width + (end.width - start.width) * amount,
-           height: start.height + (end.height - start.height) * amount)
-  }
-
-  private func layoutToolbar(for id: UUID, in frame: CGRect, visible: Bool, animatedVisibility: Bool = false) {
-    guard let toolbar = toolbars[id] else { return }
-    guard visible else {
-      toolbar.setSpaceControlsVisible(false, animated: animatedVisibility)
-      return
-    }
-    if toolbarGuides[id]?.frame != frame { toolbarGuides[id]?.frame = frame }
-    guard let contentView = chromeOverlayHost else { return }
-    if toolbar.view.superview !== contentView {
-      contentView.addSubview(toolbar.view, positioned: .above, relativeTo: nil)
-    }
-    // Pane chrome occupies the shell's existing toolbar row.
-    let toolbarFrame = convert(CGRect(x: frame.minX, y: -BrowserLayout.chromeThickness,
-                                      width: frame.width, height: BrowserLayout.chromeThickness), to: contentView)
-    if toolbar.view.frame != toolbarFrame { toolbar.view.frame = toolbarFrame }
-    toolbar.setSpaceControlsVisible(!isCovered, animated: animatedVisibility)
-    toolbar.browserGeometryDidChange()
-  }
-
-  private func place(_ container: ChromiumContainerView, in frame: CGRect, cropOnly: Bool,
-                     roundedEdge: BrowserSplitLayout.Side? = nil) {
-    if cropOnly {
-      container.setFrameOrigin(frame.origin)
-    } else {
-      if container.frame != frame { container.frame = frame }
-    }
-    guard cropOnly || roundedEdge != nil else {
-      container.layer?.mask = nil
-      return
-    }
-    // Round only the edge facing the other pane. The shared Main View retains
-    // ownership of its outer corners, and preview masks do not resize Chromium.
-    let mask = container.layer?.mask ?? CALayer()
-    mask.backgroundColor = NSColor.black.cgColor
-    // The host is flipped, while Chromium's container uses bottom-up coordinates.
-    // Convert the visible rect so shrinking height keeps the mask at the pane's top.
-    mask.frame = container.convert(frame, from: self)
-    mask.cornerRadius = roundedEdge == nil ? 0 : BrowserLayout.contentCornerRadius
-    mask.cornerCurve = .continuous
-    mask.maskedCorners = roundedEdge == .right
-      ? [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-      : [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-    container.layer?.mask = mask
-  }
-
-  private func rebuildToolbars() {
-    let desiredIDs = Set(split?.tabIDs ?? [])
-    let animates = window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    for id in Array(toolbars.keys) where !desiredIDs.contains(id) {
-      guard let toolbar = toolbars.removeValue(forKey: id) else { continue }
-      let guide = toolbarGuides.removeValue(forKey: id)
-      toolbar.setSpaceControlsVisible(false, animated: animates)
-      // Keep the glass and address overlay mounted until their exit finishes.
-      if animates {
-        DispatchQueue.main.asyncAfter(deadline: .now() + ToolbarComponentAnimation.duration + 0.05) {
-          toolbar.dispose()
-          guide?.removeFromSuperview()
-        }
-      } else {
-        toolbar.dispose()
-        guide?.removeFromSuperview()
+    for (id, page) in pages {
+      guard let placement = next[id] else {
+        page.hide(animated: animatedVisibility)
+        continue
       }
+      page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
+                  cropOnly: placement.cropOnly, toolbarVisible: placement.toolbarVisible && !isCovered,
+                  toolbarLayoutFrame: appearingToolbarFrames[id] ?? placement.frame,
+                  animatedVisibility: animatedVisibility)
     }
-    guard let split, let workspace, let history else { return }
-    for id in split.tabIDs where toolbars[id] == nil {
-      let guide = NSView()
-      guide.isHidden = true
-      addSubview(guide)
-      toolbarGuides[id] = guide
-      let toolbar = BrowserToolbarController(workspace: workspace, history: history, browserView: guide,
-        isSidebarCollapsed: { true }, onSidebarToggle: {}, tabID: id, initiallyVisible: false)
-      if let contentView = chromeOverlayHost { contentView.addSubview(toolbar.view, positioned: .above, relativeTo: nil) }
-      toolbars[id] = toolbar
-      if let window { toolbar.install(in: window, showsSpaceToolbar: false) }
-    }
+    placements = next
   }
 
   override init(frame frameRect: NSRect) {
@@ -429,8 +290,8 @@ final class BrowserSurfaceHostView: NSView {
     divider.setAccessibilityLabel("Resize Split View")
     divider.onDrag = { [weak self] x, finished in
       guard let self, self.split != nil else { return }
-      let fraction = BrowserSplitLayout.clampedFraction(x / max(1, self.bounds.width - BrowserSplitLayout.dividerWidth),
-                                                         width: self.bounds.width)
+      let fraction = BrowserSplitLayout.clampedFraction(
+        x / max(1, self.bounds.width - BrowserSplitLayout.dividerWidth), width: self.bounds.width)
       self.resizingFraction = fraction
       self.applySurfaceLayout()
       if finished {

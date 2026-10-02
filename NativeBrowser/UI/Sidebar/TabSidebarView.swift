@@ -466,7 +466,10 @@ struct TabSidebarView: View {
 
   private func select(_ id: UUID) {
     guard !tabDrag.suppressesClick(on: id) else { return }
-    workspace.selectTab(id: id)
+    // AppKit ends the address field's editing before this button action runs.
+    // An explicit sidebar selection supplies the page-focus intent rather than
+    // trying to infer it after the old native editor has already resigned.
+    workspace.selectTab(id: id, focusingPage: true)
   }
 
   private func move(_ id: UUID, to target: SidebarTabDropTarget) -> Bool {

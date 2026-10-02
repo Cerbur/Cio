@@ -61,9 +61,6 @@ final class BrowserSessionManager: ObservableObject {
   /// its status bar without becoming a second runtime registry.
   var onRuntimeStateChanged: (() -> Void)?
 
-  /// Presentation-only geometry for shell chrome; this never resizes Chromium.
-  var onSelectedSurfaceFrameChange: ((BrowserSurfaceHostView, CGRect?) -> Void)?
-
   // MARK: - Runtime registry
 
   private var sessions: [UUID: BrowserSession] = [:]
@@ -238,15 +235,10 @@ final class BrowserSessionManager: ObservableObject {
   func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
     if surfaceHost !== host {
       surfaceHost?.onDarkAppearanceChange = nil
-      surfaceHost?.onSelectedSurfaceFrameChange = nil
     }
     surfaceHost = host
     host.onDarkAppearanceChange = { [weak self] dark in
       self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
-    }
-    host.onSelectedSurfaceFrameChange = { [weak self, weak host] frame in
-      guard let self, let host, self.surfaceHost === host else { return }
-      self.onSelectedSurfaceFrameChange?(host, frame)
     }
     syncSurface()
     host.syncChromiumAppearance()

@@ -59,7 +59,8 @@ final class ChromiumContainerView: NSView {
   /// Shows or hides this container as the selected tab surface.
   ///
   /// Hiding is exactly that - a hide. The view stays a subview of the surface
-  /// host, so the Chromium view it hosts is not deallocated and switching back
+  /// host inside its stable page viewport, so the Chromium view it hosts is not
+  /// deallocated and switching back
   /// does not create a second CefBrowser.
   func setSurfaceVisible(_ visible: Bool) {
     guard isSurfaceVisible != visible else { return }

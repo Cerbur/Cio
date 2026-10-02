@@ -1,4 +1,10 @@
-import Foundation
+import AppKit
+
+/// The shell supplies geometry only; page controls retain their tab ownership.
+@MainActor
+protocol BrowserToolbarLayoutHosting: AnyObject {
+  var pageControlsLeadingEdge: CGFloat { get }
+}
 
 /// Shared shell metrics. Toolbar height and navigation-rail width always use
 /// chromeThickness; changing it moves both Main View edges together.
@@ -8,6 +14,8 @@ enum BrowserLayout {
   static let contentCornerRadius: CGFloat = 14
   static let sidebarContentInset: CGFloat = 12
   static let chromeControlSize: CGFloat = 36
+  static let chromeControlSpacing: CGFloat = 10
+  static let pageControlInset: CGFloat = 7
   static let trafficLightSpacing: CGFloat = 9
   static let sidebarMinimumWidth: CGFloat = 182
   static let sidebarDefaultWidth = sidebarMinimumWidth

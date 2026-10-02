@@ -2142,10 +2142,11 @@ string: `ApplicationRuntime.record(_:)` only appends to the trace.
 ## 54. Browser surface lifetime
 
 `BrowserSurfaceHostView` (`NativeBrowser/Browser/BrowserSurfaceHostView.swift`) is
-a single AppKit view that holds **every** live session's
-`ChromiumContainerView` as a subview for as long as the session is alive. The
-manager owns the containers and hands the current set in; the host only lays them
-out. Selecting a tab calls `ChromiumContainerView.setSurfaceVisible(_:)`, which
+a single AppKit layout host that retains a `BrowserPagePresentation` for each
+live session. Each page keeps its `ChromiumContainerView` mounted in one stable
+rounded viewport. The manager owns Chromium runtime lifetimes and hands the
+current set of surfaces to the host; the host owns their page presentation and
+outer placement. Selecting a tab calls `ChromiumContainerView.setSurfaceVisible(_:)`, which
 sets `isHidden`.
 
 Consequences:
@@ -2166,10 +2167,39 @@ Consequences:
 
 ## 55. Toolbar and address field binding
 
-One window, one sidebar, one toolbar, one address field. `MainWindowView` binds
-`BrowserToolbarView(session:)` to `workspace.selectedSession`, so a selection change
-re-points the toolbar, the address model, Back/Forward state and loading state
-together.
+Each live tab has one stable `BrowserPagePresentation`: its Chromium surface,
+outer clipping viewport and tab-bound `BrowserToolbarController`. Single-page,
+split and drag-preview layouts use the same page instances. Selecting a tab or
+changing the split never rebinds a shared editor, creates a second toolbar for the
+same tab, or reparents its Chromium surface.
+
+`BrowserSurfaceHostView` drives page placement, content cropping, split divider
+geometry and visibility with one placement map and animation clock. Preview only
+changes the outer viewport; Chromium resizes when the drop settles. Divider drags
+resize it immediately. A surviving page only reflows; entering/leaving page
+controls use the shared first-level scale/fade contract. Returning controls after
+preview cancellation appear at their target frame, independently of the content
+crop. Inactive page instances remain mounted until their runtime closes.
+
+`BrowserWindowChromeView` belongs to the shell and retains native traffic lights
+and window gestures. `BrowserMainViewController` owns `SpaceToolbarController`
+and sidebar state: only Space shows the sidebar button. Both Space and page
+controls mount in the shell's overlay layer, outside Main View's content clip,
+so address panels can expand over the page. Dimensions and control reservations
+come from `BrowserShellLayout.swift`; the common 56-point row and rail, 4-point
+content edge insets and 14-point content corners are unchanged.
+
+Bare runtime test hosts may omit toolbar configuration. They still mount stable
+page viewports and Chromium surfaces; production configures each page toolbar
+once when workspace/history dependencies are available.
+
+Selection focus remains a workspace responsibility. It captures keyboard
+ownership through either Chromium or the outgoing native address editor before
+publishing the new selection. The outgoing toolbar only releases its editor;
+the workspace transfers focus to the incoming page after publishing presentation.
+Sidebar clicks explicitly request page focus because AppKit can end address
+editing before the button's selection action runs.
+No delayed toolbar callback may override a newer address editor or panel.
 
 Background isolation is structural rather than defensive: each `BrowserSession`
 owns its own `AddressFieldModel`, and `AddressFieldModel.applyBrowserURL` only
@@ -2182,9 +2212,8 @@ The ⌘L path is two notifications, each narrowed by object identity:
 ```text
 ⌘L menu item -> BrowserSession.requestAddressFieldFocus()
              -> .browserFocusAddressField   (object = that BrowserSession)
-             -> toolbar listener matches the session, re-posts
-             -> .browserAddressFieldShouldFocus (object = that session's AddressFieldModel)
-             -> the AddressField observing exactly that model becomes first responder
+             -> the visible tab-bound toolbar matches the active session
+             -> its native address editor becomes first responder
 ```
 
 No global keyboard monitor, no key polling and no Chromium key interception is

@@ -2,7 +2,7 @@
 //  BrowserToolbarController.swift
 //  NativeBrowser
 //
-//  Shell and tab-bound pane toolbars with native page controls. Their
+//  Stable tab-bound page toolbars with native page controls. Their
 //  height comes from the same metric as the navigation rail; AppKit no longer
 //  adds an independent toolbar safe area above the Main View.
 //
@@ -29,36 +29,26 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
   }
 }
 
+/// Page-owned navigation and address views. The shell owns window controls;
+/// Space owns its sidebar button. Both single-page and split layouts mount this
+/// same tab-bound view, with no toolbar hand-off when the layout changes.
 @MainActor
 final class ToolbarChromeView: NSView {
   var onGeometryRequest: (() -> Void)?
-  private let sidebarButton: NSButton
-  private let sidebarControlHost: NSHostingView<ToolbarNativeControlsView>
+  func refreshLayout() { onGeometryRequest?() }
   private let navigationGroup: NSHostingView<ToolbarNativeControlsView>
   private let backButton: NSButton
   private let forwardButton: NSButton
   private let addressView: AddressOverlayHostingView
   private let presentation: ToolbarPresentationState
-  private let showsWindowControls: Bool
-  private let sidebarPresentation = ToolbarPresentationState()
-  private var trafficLights: [NSButton] = []
-  private weak var trafficLightsWindow: NSWindow?
-  private var frameBeforeMaximizing: NSRect?
 
-  fileprivate init(
-    sidebarButton: NSButton,
-    backButton: NSButton,
-    forwardButton: NSButton,
-    addressView: AddressOverlayHostingView,
-    presentation: ToolbarPresentationState,
-    showsWindowControls: Bool
-  ) {
-    self.sidebarButton = sidebarButton
+  fileprivate init(backButton: NSButton, forwardButton: NSButton,
+                   addressView: AddressOverlayHostingView,
+                   presentation: ToolbarPresentationState) {
     self.backButton = backButton
     self.forwardButton = forwardButton
     self.addressView = addressView
     self.presentation = presentation
-    self.showsWindowControls = showsWindowControls
     let height = AddressCapsuleLayout.height
     let navigationContent = NSView(frame: NSRect(x: 0, y: 0,
                                                 width: 2 + 2 * height, height: height))
@@ -86,194 +76,65 @@ final class ToolbarChromeView: NSView {
     if #available(macOS 27.0, *) {
       navigationGlass.effectIsInteractive = true
     }
-    sidebarControlHost = NSHostingView(rootView: ToolbarNativeControlsView(
-      content: sidebarButton, presentation: sidebarPresentation,
-      size: NSSize(width: height, height: height)))
     navigationGroup = NSHostingView(rootView: ToolbarNativeControlsView(
       content: navigationGlass, presentation: presentation,
       size: NSSize(width: 2 + 2 * height, height: height)))
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
-
-    for host in [sidebarControlHost, navigationGroup] {
-      host.safeAreaRegions = []
-      host.clipsToBounds = false
-    }
-    sidebarButton.frame = NSRect(x: 0, y: 0, width: height, height: height)
-    sidebarButton.autoresizingMask = [.width, .height]
+    navigationGroup.safeAreaRegions = []
+    navigationGroup.clipsToBounds = false
     navigationContent.autoresizingMask = [.width, .height]
-
-    if showsWindowControls { addSubview(sidebarControlHost) }
     addSubview(navigationGroup)
-    // The field is a shell overlay, keeping the same native editor mounted
-    // while its glass expands over the Main View.
   }
 
   @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) is not supported")
-  }
-
-  override var intrinsicContentSize: NSSize {
-    NSSize(width: NSView.noIntrinsicMetric, height: BrowserLayout.chromeThickness)
-  }
-
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
   override var isFlipped: Bool { true }
-  // Handle the gesture here so AppKit's titlebar double-click preference cannot
-  // turn a requested maximize into minimization or full screen.
-  override var mouseDownCanMoveWindow: Bool { false }
-
-  override func mouseDown(with event: NSEvent) {
-    guard showsWindowControls, let window else {
-      super.mouseDown(with: event)
-      return
-    }
-    if event.clickCount == 2 {
-      guard !window.styleMask.contains(.fullScreen), let screen = window.screen else { return }
-      // Use the desktop's available frame, leaving the menu bar and Dock visible.
-      // NSWindow owns resizing and animation; no full-screen transition occurs.
-      if window.frame == screen.visibleFrame, let frameBeforeMaximizing {
-        window.setFrame(frameBeforeMaximizing, display: true, animate: true)
-        self.frameBeforeMaximizing = nil
-      } else {
-        frameBeforeMaximizing = window.frame
-        window.setFrame(screen.visibleFrame, display: true, animate: true)
-      }
-    } else if event.clickCount == 1 {
-      window.performDrag(with: event)
-    }
-  }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
-    let hit = super.hitTest(point)
-    if !showsWindowControls {
-      guard presentation.isVisible, let hit,
-            hit.isDescendant(of: navigationGroup) else { return nil }
-      return hit
-    }
-    if let hit {
-      if !sidebarPresentation.isVisible, hit.isDescendant(of: sidebarControlHost) { return self }
-      if !presentation.isVisible, hit.isDescendant(of: navigationGroup) { return self }
-    }
+    guard presentation.isVisible, let hit = super.hitTest(point),
+          hit.isDescendant(of: navigationGroup) else { return nil }
     return hit
   }
 
-  /// Window gestures belong to the complete toolbar row, independently of
-  /// which overlapping AppKit/SwiftUI host would otherwise receive the click.
-  func isWindowInteraction(at windowPoint: NSPoint) -> Bool {
-    guard showsWindowControls, !isHidden, let window, window.attachedSheet == nil,
-          bounds.contains(convert(windowPoint, from: nil)), let host = superview else { return false }
-
-    // Native window widgets retain their complete hit regions and actions.
-    for button in trafficLights where !button.isHidden {
-      if button.bounds.contains(button.convert(windowPoint, from: nil)) { return false }
+  /// Lets the shell reserve native button/editor interactions before handling
+  /// window dragging, without making it the owner of any page controls.
+  func containsControl(at windowPoint: NSPoint) -> Bool {
+    guard presentation.isVisible, let window else { return false }
+    for button in [backButton, forwardButton] where button.window === window {
+      if button.bounds.contains(button.convert(windowPoint, from: nil)) { return true }
     }
-    for view in host.subviews {
-      if let chrome = view as? ToolbarChromeView, !chrome.isHidden {
-        var buttons: [NSButton] = []
-        if chrome.showsWindowControls, chrome.sidebarPresentation.isVisible {
-          buttons.append(chrome.sidebarButton)
-        }
-        if chrome.presentation.isVisible {
-          buttons += [chrome.backButton, chrome.forwardButton]
-        }
-        for button in buttons where button.window === window && !button.isHidden {
-          if button.bounds.contains(button.convert(windowPoint, from: nil)) { return false }
-        }
-      } else if let address = view as? AddressOverlayHostingView {
-        if address.hitTest(host.convert(windowPoint, from: nil)) != nil { return false }
-      }
-    }
-    return true
-  }
-
-  func installTrafficLights(in window: NSWindow) {
-    guard showsWindowControls, trafficLightsWindow !== window else { return }
-    trafficLightsWindow = window
-    frameBeforeMaximizing = nil
-    // Keep the window-owned widgets and their native titlebar parent.
-    trafficLights = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-      .compactMap { window.standardWindowButton($0) }
-    layoutTrafficLights()
-  }
-
-  override func layout() {
-    super.layout()
-    layoutTrafficLights()
-  }
-
-  private func layoutTrafficLights() {
-    guard showsWindowControls else { return }
-    BrowserTrafficLightLayout.layout(trafficLights, in: self)
-  }
-
-  func setAddressVisible(_ visible: Bool, animated: Bool) {
-    sidebarPresentation.setVisible(visible, animated: animated && window != nil)
-    setPageControlsVisible(visible, animated: animated)
+    if let host = addressView.superview,
+       addressView.hitTest(host.convert(windowPoint, from: nil)) != nil { return true }
+    return false
   }
 
   func setPageControlsVisible(_ visible: Bool, animated: Bool) {
     presentation.setVisible(visible, animated: animated && window != nil)
   }
 
-  func setSidebarCollapsed(_ collapsed: Bool) {
-    let title = collapsed ? "Show Sidebar" : "Hide Sidebar"
-    sidebarButton.toolTip = title
-    sidebarButton.setAccessibilityLabel(title)
-  }
-
-  func setNavigationState(
-    canGoBack: Bool,
-    canGoForward: Bool,
-    hasSession: Bool
-  ) {
+  func setNavigationState(canGoBack: Bool, canGoForward: Bool, hasSession: Bool) {
     backButton.isEnabled = hasSession && canGoBack
     forwardButton.isEnabled = hasSession && canGoForward
   }
 
-  private func windowControlsTrailingEdge(in view: NSView) -> CGFloat? {
-    guard showsWindowControls else { return nil }
-    // Keep this reservation while library panels hide the shell controls.
-    // Pane controls may restore before the sidebar button becomes visible;
-    // their layout must not depend on the order of those visibility updates.
-    // Refresh the shell first: sidebar-collapse notifications can reach pane
-    // toolbars before the shell has laid out its window controls.
-    onGeometryRequest?()
-    return view.convert(sidebarControlHost.bounds, from: sidebarControlHost).maxX
-  }
-
-  func applyLayout(
-    browserRect: NSRect, sidebarAnchor: NSRect, preparingToShow: Bool = false
-  ) {
-    guard browserRect.width > 0 else { return }
-    layoutTrafficLights()
-    let trafficLightsRight = trafficLights.last.map { convert($0.bounds, from: $0).maxX } ?? 0
+  func applyLayout(browserRect: NSRect, preparingToShow: Bool = false) {
+    guard browserRect.width > 0, presentation.isVisible || preparingToShow else { return }
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
-    let sidebarLeft = max(trafficLightsRight + 10, sidebarAnchor.minX - height - 10)
-    let defaultNavigationLeft = showsWindowControls
-      ? max(browserRect.minX + 7, sidebarLeft + height + 10) : browserRect.minX + 7
-    // Pane and shell toolbars share the chrome host. Reserve the shell's actual
-    // window-control area in this pane's coordinates, including during motion.
-    let windowControlsRight = showsWindowControls ? nil : superview?.subviews
-      .compactMap { $0 as? ToolbarChromeView }
-      .first(where: { $0.showsWindowControls })?
-      .windowControlsTrailingEdge(in: self)
-    let navigationLeft = max(defaultNavigationLeft, windowControlsRight.map { $0 + 10 } ?? defaultNavigationLeft)
-    // Keep the host at its maximum width. SwiftUI animates the capsule inside
-    // it so the native glass is never clipped by the host's rectangular bounds.
+    let reservedEdge = (superview as? BrowserToolbarLayoutHosting).map {
+      convert(NSPoint(x: $0.pageControlsLeadingEdge, y: 0), from: superview).x
+    } ?? browserRect.minX
+    let navigationLeft = max(browserRect.minX + BrowserLayout.pageControlInset,
+                             reservedEdge + BrowserLayout.chromeControlSpacing)
     let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
     let addressLeft = max(browserRect.midX - addressWidth / 2,
-                          navigationLeft + 2 + 2 * height + 7)
-
-    setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
-             on: sidebarControlHost)
-    // Outgoing first-level components expand/fade at their last visible position.
-    // Page/crop relayout must not drag them sideways during that transition.
-    guard presentation.isVisible || preparingToShow else { return }
+                          navigationLeft + 2 + 2 * height + BrowserLayout.pageControlInset)
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
     if let contentView = superview {
-      if addressView.superview !== contentView { contentView.addSubview(addressView, positioned: .above, relativeTo: nil) }
+      if addressView.superview !== contentView {
+        contentView.addSubview(addressView, positioned: .above, relativeTo: nil)
+      }
       let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
       let panelHeight = max(AddressCapsuleLayout.maximumHeight,
                             AddressCapsuleLayout.height + AddressSiteInformationState.contentHeight)
@@ -291,7 +152,6 @@ final class ToolbarChromeView: NSView {
 final class BrowserToolbarController: NSObject {
   private enum ToolbarEvent {
     case geometryChanged
-    case sidebarChanged
     case sessionChanged
     case addressFocusChanged(BrowserSession, Bool)
     case addressFocusRequested(BrowserSession)
@@ -301,16 +161,12 @@ final class BrowserToolbarController: NSObject {
   private let workspace: BrowserWorkspaceStore
   private let addressAutocomplete: AddressAutocompleteModel
   private let browserView: NSView
-  private var browserViewportFrame: CGRect?
-  /// Nil follows selection (shell); a UUID binds every control to that tab.
-  let tabID: UUID?
-  var isPaneToolbar: Bool { tabID != nil }
+  /// Identity is fixed for the lifetime of this page, regardless of layout.
+  let tabID: UUID
   var arePageControlsVisible: Bool { toolbarPresentation.isVisible }
   private let isActivePane: (() -> Bool)?
   private let onActivatePane: (() -> Void)?
   private var isDisposed = false
-  private let isSidebarCollapsed: () -> Bool
-  private let onSidebarToggle: () -> Void
   private weak var window: NSWindow?
   nonisolated(unsafe) private var chromeView: ToolbarChromeView?
   private var browserFrameObservation: AnyCancellable?
@@ -326,20 +182,13 @@ final class BrowserToolbarController: NSObject {
   private var certificatePanel: SFCertificatePanel?
   private var addressFocusRequestObservation: AnyCancellable?
 
-  /// Omit `tabID` for the existing shell toolbar, including window/sidebar controls.
-  /// Supply `tabID` and that pane's `browserView` for an independent pane toolbar.
-  /// `isActivePane` optionally adds the host's active-pane check to selected-session
-  /// command routing; `onActivatePane` selects the pane on address interaction
-  /// (by default this calls `workspace.selectTab(id:)`). Mount `view`, then call
-  /// `install(in:showsSpaceToolbar:)`; call `removeFromPresentation()` when hidden
-  /// (it can be mounted and installed again), or `dispose()` to end its lifetime.
+  /// One controller per page identity. Mount its view in the shell's overlay
+  /// layer; bind browserView to that page's stable viewport, not a split-only guide.
   init(
     workspace: BrowserWorkspaceStore,
     history: HistoryService,
     browserView: NSView,
-    isSidebarCollapsed: @escaping () -> Bool = { true },
-    onSidebarToggle: @escaping () -> Void = {},
-    tabID: UUID? = nil,
+    tabID: UUID,
     initiallyVisible: Bool = true,
     isActivePane: (() -> Bool)? = nil,
     onActivatePane: (() -> Void)? = nil
@@ -350,8 +199,6 @@ final class BrowserToolbarController: NSObject {
     self.tabID = tabID
     self.isActivePane = isActivePane
     self.onActivatePane = onActivatePane
-    self.isSidebarCollapsed = isSidebarCollapsed
-    self.onSidebarToggle = onSidebarToggle
     super.init()
     toolbarPresentation.setVisible(initiallyVisible, animated: false)
     browserView.postsFrameChangedNotifications = true
@@ -374,8 +221,7 @@ final class BrowserToolbarController: NSObject {
   }
 
   private var boundSession: BrowserSession? {
-    if let tabID { return workspace.session(for: tabID) }
-    return workspace.selectedSession
+    workspace.session(for: tabID)
   }
 
   private func isActive(_ session: BrowserSession) -> Bool {
@@ -384,7 +230,7 @@ final class BrowserToolbarController: NSObject {
   }
 
   private func activatePane(for session: BrowserSession) {
-    guard tabID != nil, boundSession === session, !isActive(session) else { return }
+    guard boundSession === session, !isActive(session) else { return }
     if let onActivatePane { onActivatePane() }
     else { workspace.selectTab(id: session.tabID) }
   }
@@ -458,21 +304,11 @@ final class BrowserToolbarController: NSObject {
     observedSession?.addressFieldFocusChanged(false)
   }
 
-  func install(in window: NSWindow, showsSpaceToolbar: Bool) {
+  func install(in window: NSWindow) {
     guard !isDisposed else { return }
     self.window = window
-    if tabID == nil {
-      window.styleMask.insert(.fullSizeContentView)
-      window.isOpaque = false
-      window.backgroundColor = .clear
-      window.titleVisibility = .hidden
-      window.titlebarAppearsTransparent = true
-      BrowserTrafficLightLayout.installTitlebar(in: window)
-      window.initialFirstResponder = browserView
-    }
     _ = view
     installSiteInformationEventMonitor()
-    chromeView?.installTrafficLights(in: window)
 
     windowObservations.removeAll()
     for name in [NSWindow.didResizeNotification, NSWindow.didEnterFullScreenNotification,
@@ -488,24 +324,10 @@ final class BrowserToolbarController: NSObject {
         MainActor.assumeIsolated { self?.siteInformation.dismiss() }
       }
       .store(in: &windowObservations)
-    setSpaceControlsVisible(showsSpaceToolbar, animated: false)
     bindSession(boundSession)
-    updateSidebarState()
   }
 
-  func setSpaceControlsVisible(_ visible: Bool, animated: Bool = true) {
-    guard !isDisposed else { return }
-    if visible { preparePageControlsForAppearance() }
-    if !visible { siteInformation.dismiss() }
-    if !visible, addressPresentation.isFocused {
-      releaseAddressFocus()
-    }
-    chromeView?.setAddressVisible(visible, animated: animated)
-    handle(.geometryChanged)
-  }
-
-  /// Shows/hides only navigation and address controls. The shell keeps its
-  /// traffic lights and sidebar button while split panes provide page controls.
+  /// Visibility is driven solely by whether the page is in the visible layout.
   func setPageControlsVisible(_ visible: Bool, animated: Bool = true) {
     guard !isDisposed else { return }
     if visible { preparePageControlsForAppearance() }
@@ -517,17 +339,6 @@ final class BrowserToolbarController: NSObject {
     handle(.geometryChanged)
   }
 
-  func updateSidebarState() {
-    handle(.sidebarChanged)
-  }
-
-  /// Match the tab-placement crop while the browser's real frame stays unchanged.
-  func setBrowserViewportFrame(_ frame: CGRect?) {
-    guard browserViewportFrame != frame else { return }
-    browserViewportFrame = frame
-    handle(.geometryChanged)
-  }
-
   func browserGeometryDidChange() {
     handle(.geometryChanged)
   }
@@ -535,16 +346,12 @@ final class BrowserToolbarController: NSObject {
   private func handle(_ event: ToolbarEvent) {
     guard !isDisposed else { return }
     switch event {
-    case .sidebarChanged:
-      chromeView?.setSidebarCollapsed(isSidebarCollapsed())
     case .sessionChanged:
       let session = boundSession
       let changed = observedSession !== session
-      let hadAddressFocus = addressPresentation.isFocused
       if changed || (session.map { !isActive($0) } ?? true) {
         siteInformation.dismiss()
         releaseAddressFocus()
-        if changed, hadAddressFocus, !isPaneToolbar { session?.focusPage() }
       }
       bindSession(session)
     case .addressFocusChanged(let session, let focused):
@@ -558,8 +365,7 @@ final class BrowserToolbarController: NSObject {
       guard isActive(session), toolbarPresentation.isVisible,
             let window, chromeView?.window === window else { return }
       siteInformation.dismiss()
-      // Focus only this overlay's editor. Broadcasting its model would also
-      // reach the hidden shell editor bound to the same selected session.
+      // Focus only this tab's stable editor, after its overlay is mounted.
       DispatchQueue.main.async { [weak self, weak session] in
         guard let self, let session, self.isActive(session),
               self.toolbarPresentation.isVisible, let overlay = self.addressOverlay,
@@ -598,9 +404,10 @@ final class BrowserToolbarController: NSObject {
   private func applyCurrentLayout(preparingToShow: Bool = false) {
     guard let window, let chromeView,
           chromeView.window === window, browserView.window === window else { return }
-    let browserRect = browserView.convert(browserViewportFrame ?? browserView.bounds, to: chromeView)
-    let sidebarAnchor = browserView.convert(browserView.bounds, to: chromeView)
-    chromeView.applyLayout(browserRect: browserRect, sidebarAnchor: sidebarAnchor,
+    // The outer layout has already placed this chrome. Its geometry can differ
+    // from a collapsed content crop when controls return after preview cancellation.
+    let browserRect = chromeView.bounds
+    chromeView.applyLayout(browserRect: browserRect,
                           preparingToShow: preparingToShow)
   }
 
@@ -619,12 +426,6 @@ final class BrowserToolbarController: NSObject {
   }
 
   private func bindSession(_ session: BrowserSession?) {
-    // Explicitly update the mounted address view when selection changes. A
-    // hidden shell toolbar must not retain the pane that just closed.
-    let addressTabID = tabID ?? session?.tabID
-    if let overlay = addressOverlay, overlay.rootView.tabID != addressTabID {
-      overlay.rootView.tabID = addressTabID
-    }
     guard let session else {
       selectedSessionObservations.removeAll()
       observedSession = nil
@@ -708,11 +509,8 @@ final class BrowserToolbarController: NSObject {
   ) -> NSButton {
     let size = BrowserLayout.chromeControlSize
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
-    // Standalone buttons own their glass; grouped toolbar buttons receive it
-    // from their native content container and reveal their bezel on hover.
-    // Keep the sidebar's standalone .glass style and the navigation buttons'
-    // shared-container style. Conflicting changes require the same explicit
-    // human trade-off decision as the style contract beside navigationGlass.
+    // Page navigation buttons receive glass from their shared native capsule.
+    // Retain independent enabled states and system hover feedback.
     button.setButtonType(.momentaryPushIn)
     button.bezelStyle = usesSharedGlass ? .toolbar : .glass
     button.borderShape = .circle
@@ -730,9 +528,6 @@ final class BrowserToolbarController: NSObject {
   }
 
   private func makeChromeView() -> ToolbarChromeView {
-    let sidebarButton = makeButton(
-      label: "Hide Sidebar", symbol: "sidebar.left",
-      action: #selector(handleSidebarToggle(_:)))
     let backButton = makeButton(
       label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)),
       usesSharedGlass: true)
@@ -741,7 +536,7 @@ final class BrowserToolbarController: NSObject {
       usesSharedGlass: true)
     let addressView = AddressOverlayHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
-      tabID: tabID ?? boundSession?.tabID,
+      tabID: tabID,
       interaction: addressPresentation,
       autocomplete: addressAutocomplete,
       presentation: toolbarPresentation,
@@ -762,14 +557,12 @@ final class BrowserToolbarController: NSObject {
     addressView.clipsToBounds = false
     addressOverlay = addressView
     let view = ToolbarChromeView(
-      sidebarButton: sidebarButton,
       backButton: backButton,
       forwardButton: forwardButton,
       addressView: addressView,
-      presentation: toolbarPresentation,
-      showsWindowControls: !isPaneToolbar)
+      presentation: toolbarPresentation)
     view.setAccessibilityRole(.toolbar)
-    view.setAccessibilityLabel(tabID == nil ? "Toolbar" : "Pane Toolbar")
+    view.setAccessibilityLabel("Page Toolbar")
     chromeView = view
     view.onGeometryRequest = { [weak self] in self?.applyCurrentLayout() }
     if let session = boundSession {
@@ -779,11 +572,6 @@ final class BrowserToolbarController: NSObject {
       applyNavigationToolbarState(canGoBack: false, canGoForward: false, hasSession: false)
     }
     return view
-  }
-
-  @objc private func handleSidebarToggle(_ sender: NSButton) {
-    guard !isDisposed, tabID == nil else { return }
-    onSidebarToggle()
   }
 
   @objc private func goBack(_ sender: NSButton) {

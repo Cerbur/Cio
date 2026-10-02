@@ -222,8 +222,9 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   NSView *browserView = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(host->GetWindowHandle());
   if (browserView.window != nil) {
     if (focused) {
-      // Chromium only receives key events when its view is first responder.
-      [browserView.window makeFirstResponder:browserView];
+      // CEF selects its native render responder through SetFocus. The window
+      // handle is the browser's outer view; forcing that wrapper to become
+      // first responder can displace Chromium's actual keyboard input view.
       fprintf(stderr, "[browser] focus granted\n");
     } else if (NBResponderBelongsToView(browserView.window.firstResponder, browserView)) {
       // Only this browser's own responder is cleared. Releasing focus from a

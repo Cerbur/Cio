@@ -326,9 +326,13 @@ final class BrowserWorkspaceStore: ObservableObject {
     selectedSession?.focusPage()
   }
 
-  func selectTab(id: UUID) {
+  func selectTab(id: UUID, focusingPage: Bool = false) {
     if workspace.selectedTabID == id, isSpotlightPresented {
       dismissSpotlight()
+      return
+    }
+    if workspace.selectedTabID == id, focusingPage {
+      selectedSession?.focusPage()
       return
     }
     guard (workspace.globalPinnedTabIDs.contains(id)
@@ -337,7 +341,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     else { return }
 
     let wasSpotlightPresented = isSpotlightPresented
-    withSelectionTransition {
+    withSelectionTransition(pageHeldKeyboardOverride: focusingPage ? true : nil) {
       workspace.selectTab(id: id)
       ensureSelectedPresentationSessions()
     }
@@ -472,7 +476,11 @@ final class BrowserWorkspaceStore: ObservableObject {
     let outgoing = selectedSession
     let previousSelection = workspace.selectedTabID
     let previousSpace = workspace.selectedSpaceID
-    let pageHeldKeyboard = pageHeldKeyboardOverride ?? outgoing?.ownsPageKeyboard ?? false
+    // A tab owns the keyboard through either Chromium or its native address
+    // editor. Capture that before publishing selection: hiding its stable
+    // toolbar ends editing, so a later UI observer cannot recover this intent.
+    let pageHeldKeyboard = pageHeldKeyboardOverride
+      ?? (outgoing?.ownsPageKeyboard == true || outgoing?.isEditingAddressField == true)
     let beforeSnapshot = sessionSnapshot
 
     let result = change()
