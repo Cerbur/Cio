@@ -21,7 +21,6 @@ final class ToolbarPresentationState: ObservableObject {
 struct ToolbarGlassSurface: View {
   @ObservedObject var presentation: ToolbarPresentationState
   let cornerRadius: CGFloat
-  var isInteractive = false
   @Namespace private var glassNamespace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -29,7 +28,7 @@ struct ToolbarGlassSurface: View {
     GlassEffectContainer(spacing: 0) {
       if presentation.isVisible {
         Color.clear
-          .glassEffect(isInteractive ? .regular.interactive() : .regular,
+          .glassEffect(.regular,
                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
           .glassEffectID("surface", in: glassNamespace)
           .glassEffectTransition(reduceMotion ? .identity : .materialize)
@@ -41,9 +40,9 @@ struct ToolbarGlassSurface: View {
   }
 }
 
-/// AppKit buttons retain their native tracking and circular bezel. Their content
-/// fades independently of the material's own transition.
-struct ToolbarGlassControlView: View {
+/// Visibility only: standalone AppKit glass buttons and NSGlassEffectView
+/// groups own their material and interaction feedback inside the native tree.
+struct ToolbarNativeControlsView: View {
   let content: NSView
   @ObservedObject var presentation: ToolbarPresentationState
   let size: NSSize
@@ -52,10 +51,6 @@ struct ToolbarGlassControlView: View {
     ToolbarNativeControl(view: content)
       .frame(width: size.width, height: size.height)
       .opacity(presentation.isVisible ? 1 : 0)
-      .background {
-        ToolbarGlassSurface(presentation: presentation,
-                            cornerRadius: size.height / 2, isInteractive: true)
-      }
       .allowsHitTesting(presentation.isVisible)
       .accessibilityHidden(!presentation.isVisible)
   }

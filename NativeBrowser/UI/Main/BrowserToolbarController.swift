@@ -33,8 +33,8 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 private final class ToolbarChromeView: NSView {
   var onGeometryRequest: (() -> Void)?
   private let sidebarButton: NSButton
-  private let sidebarGlass: NSHostingView<ToolbarGlassControlView>
-  private let navigationGroup: NSHostingView<ToolbarGlassControlView>
+  private let sidebarControlHost: NSHostingView<ToolbarNativeControlsView>
+  private let navigationGroup: NSHostingView<ToolbarNativeControlsView>
   private let backButton: NSButton
   private let forwardButton: NSButton
   private let addressView: AddressOverlayHostingView
@@ -62,15 +62,30 @@ private final class ToolbarChromeView: NSView {
     let height = AddressCapsuleLayout.height
     let navigationContent = NSView(frame: NSRect(x: 0, y: 0,
                                                 width: 2 + 2 * height, height: height))
-    sidebarGlass = NSHostingView(rootView: ToolbarGlassControlView(
+    navigationContent.addSubview(backButton)
+    navigationContent.addSubview(forwardButton)
+    backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
+    forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
+    // Custom shell chrome doesn't receive NSToolbar's automatic group glass.
+    // Embed the native buttons as content so AppKit owns the material,
+    // adaptive symbol appearance and supported glass interaction feedback.
+    let navigationGlass = NSGlassEffectView(frame: navigationContent.frame)
+    navigationGlass.style = .regular
+    navigationGlass.cornerRadius = height / 2
+    navigationGlass.contentView = navigationContent
+    navigationGlass.clipsToBounds = false
+    if #available(macOS 27.0, *) {
+      navigationGlass.effectIsInteractive = true
+    }
+    sidebarControlHost = NSHostingView(rootView: ToolbarNativeControlsView(
       content: sidebarButton, presentation: sidebarPresentation,
       size: NSSize(width: height, height: height)))
-    navigationGroup = NSHostingView(rootView: ToolbarGlassControlView(
-      content: navigationContent, presentation: presentation,
+    navigationGroup = NSHostingView(rootView: ToolbarNativeControlsView(
+      content: navigationGlass, presentation: presentation,
       size: NSSize(width: 2 + 2 * height, height: height)))
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
 
-    for host in [sidebarGlass, navigationGroup] {
+    for host in [sidebarControlHost, navigationGroup] {
       host.safeAreaRegions = []
       host.clipsToBounds = false
     }
@@ -78,15 +93,10 @@ private final class ToolbarChromeView: NSView {
     sidebarButton.autoresizingMask = [.width, .height]
     navigationContent.autoresizingMask = [.width, .height]
 
-    if showsWindowControls { addSubview(sidebarGlass) }
+    if showsWindowControls { addSubview(sidebarControlHost) }
     addSubview(navigationGroup)
-    navigationContent.addSubview(backButton)
-    navigationContent.addSubview(forwardButton)
     // The field is a shell overlay, keeping the same native editor mounted
     // while its glass expands over the Main View.
-
-    backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
-    forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
   }
 
   @available(*, unavailable)
@@ -135,7 +145,7 @@ private final class ToolbarChromeView: NSView {
       return hit
     }
     if let hit {
-      if !sidebarPresentation.isVisible, hit.isDescendant(of: sidebarGlass) { return self }
+      if !sidebarPresentation.isVisible, hit.isDescendant(of: sidebarControlHost) { return self }
       if !presentation.isVisible, hit.isDescendant(of: navigationGroup) { return self }
     }
     return hit
@@ -193,7 +203,7 @@ private final class ToolbarChromeView: NSView {
     // Refresh the shell first: sidebar-collapse notifications can reach pane
     // toolbars before the shell has laid out its window controls.
     onGeometryRequest?()
-    return view.convert(sidebarGlass.bounds, from: sidebarGlass).maxX
+    return view.convert(sidebarControlHost.bounds, from: sidebarControlHost).maxX
   }
 
   func applyLayout(
@@ -221,7 +231,7 @@ private final class ToolbarChromeView: NSView {
                           navigationLeft + 2 + 2 * height + 7)
 
     setFrame(NSRect(x: sidebarLeft, y: y, width: height, height: height),
-             on: sidebarGlass)
+             on: sidebarControlHost)
     setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
              on: navigationGroup)
     if let contentView = superview {
@@ -641,14 +651,19 @@ final class BrowserToolbarController: NSObject {
   private func makeButton(
     label: String,
     symbol: String,
-    action: Selector
+    action: Selector,
+    usesSharedGlass: Bool = false
   ) -> NSButton {
-    let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-    // These icon-only controls sit inside a shared glass surface. Request the
-    // native circular bezel explicitly; .toolbar can draw a rounded rectangle.
-    button.bezelStyle = .circular
+    let size = BrowserLayout.chromeControlSize
+    let button = NSButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
+    // Standalone buttons own their glass; grouped toolbar buttons receive it
+    // from their native content container and reveal their bezel on hover.
+    button.setButtonType(.momentaryPushIn)
+    button.bezelStyle = usesSharedGlass ? .toolbar : .glass
+    button.borderShape = .circle
+    button.controlSize = .large
     button.isBordered = true
-    button.showsBorderOnlyWhileMouseInside = true
+    button.showsBorderOnlyWhileMouseInside = usesSharedGlass
     button.title = ""
     button.image = toolbarImage(named: symbol, description: label)
     button.imagePosition = .imageOnly
@@ -664,9 +679,11 @@ final class BrowserToolbarController: NSObject {
       label: "Hide Sidebar", symbol: "sidebar.left",
       action: #selector(handleSidebarToggle(_:)))
     let backButton = makeButton(
-      label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)))
+      label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)),
+      usesSharedGlass: true)
     let forwardButton = makeButton(
-      label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)))
+      label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)),
+      usesSharedGlass: true)
     let addressView = AddressOverlayHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
       tabID: tabID ?? boundSession?.tabID,
@@ -715,21 +732,19 @@ final class BrowserToolbarController: NSObject {
   }
 
   @objc private func goBack(_ sender: NSButton) {
-    guard !isDisposed, toolbarPresentation.isVisible else { return }
+    guard !isDisposed, toolbarPresentation.isVisible, sender.isEnabled,
+          let session = boundSession else { return }
     siteInformation.dismiss()
-    if let session = boundSession {
-      activatePane(for: session)
-      session.goBack()
-    }
+    activatePane(for: session)
+    session.goBack()
   }
 
   @objc private func goForward(_ sender: NSButton) {
-    guard !isDisposed, toolbarPresentation.isVisible else { return }
+    guard !isDisposed, toolbarPresentation.isVisible, sender.isEnabled,
+          let session = boundSession else { return }
     siteInformation.dismiss()
-    if let session = boundSession {
-      activatePane(for: session)
-      session.goForward()
-    }
+    activatePane(for: session)
+    session.goForward()
   }
 
   private func toggleSiteInformation(for session: BrowserSession) {
