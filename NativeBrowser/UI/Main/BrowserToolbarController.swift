@@ -13,20 +13,6 @@ import SwiftUI
 import Security
 import SecurityInterface
 
-/// Keep native button tracking and symbol rendering, but give the hover and
-/// pressed backgrounds a circular outline instead of the toolbar bezel.
-@MainActor
-private final class CircularToolbarButtonCell: NSButtonCell {
-  override func drawBezel(withFrame frame: NSRect, in controlView: NSView) {
-    guard isEnabled else { return }
-    let diameter = max(0, min(frame.width, frame.height) - 8)
-    let circle = NSRect(x: frame.midX - diameter / 2, y: frame.midY - diameter / 2,
-                        width: diameter, height: diameter)
-    NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.12 : 0.06).setFill()
-    NSBezierPath(ovalIn: circle).fill()
-  }
-}
-
 @MainActor
 private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressFieldView> {
   override func hitTest(_ point: NSPoint) -> NSView? {
@@ -57,6 +43,7 @@ private final class ToolbarChromeView: NSView {
   private let sidebarPresentation = ToolbarPresentationState()
   private var trafficLights: [NSButton] = []
   private weak var trafficLightsWindow: NSWindow?
+  private var frameBeforeMaximizing: NSRect?
 
   init(
     sidebarButton: NSButton,
@@ -112,11 +99,29 @@ private final class ToolbarChromeView: NSView {
   }
 
   override var isFlipped: Bool { true }
-  override var mouseDownCanMoveWindow: Bool { showsWindowControls }
+  // Handle the gesture here so AppKit's titlebar double-click preference cannot
+  // turn a requested maximize into minimization or full screen.
+  override var mouseDownCanMoveWindow: Bool { false }
 
   override func mouseDown(with event: NSEvent) {
-    if showsWindowControls { window?.performDrag(with: event) }
-    else { super.mouseDown(with: event) }
+    guard showsWindowControls, let window else {
+      super.mouseDown(with: event)
+      return
+    }
+    if event.clickCount == 2 {
+      guard !window.styleMask.contains(.fullScreen), let screen = window.screen else { return }
+      // Use the desktop's available frame, leaving the menu bar and Dock visible.
+      // NSWindow owns resizing and animation; no full-screen transition occurs.
+      if window.frame == screen.visibleFrame, let frameBeforeMaximizing {
+        window.setFrame(frameBeforeMaximizing, display: true, animate: true)
+        self.frameBeforeMaximizing = nil
+      } else {
+        frameBeforeMaximizing = window.frame
+        window.setFrame(screen.visibleFrame, display: true, animate: true)
+      }
+    } else if event.clickCount == 1 {
+      window.performDrag(with: event)
+    }
   }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
@@ -138,25 +143,12 @@ private final class ToolbarChromeView: NSView {
 
   func installTrafficLights(in window: NSWindow) {
     guard showsWindowControls, trafficLightsWindow !== window else { return }
-    trafficLights.forEach { $0.removeFromSuperview() }
     trafficLightsWindow = window
-    let controls: [(NSWindow.ButtonType, Selector, String)] = [
-      (.closeButton, #selector(NSWindow.performClose(_:)), "Close"),
-      (.miniaturizeButton, #selector(NSWindow.performMiniaturize(_:)), "Minimize"),
-      (.zoomButton, #selector(NSWindow.toggleFullScreen(_:)), "Full Screen"),
-    ]
-    // AppKit can reclaim the window-owned titlebar buttons during relayout.
-    // Its public factory supplies native buttons owned by this toolbar instead.
-    trafficLights = controls.compactMap { type, action, label in
-      guard let button = NSWindow.standardWindowButton(type, for: window.styleMask) else { return nil }
-      button.target = window
-      button.action = action
-      button.setAccessibilityLabel(label)
-      button.toolTip = label
-      button.autoresizingMask = []
-      addSubview(button)
-      return button
-    }
+    frameBeforeMaximizing = nil
+    // Keep the window-owned widgets and their native titlebar parent.
+    trafficLights = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+      .compactMap { window.standardWindowButton($0) }
+    layoutTrafficLights()
   }
 
   override func layout() {
@@ -166,16 +158,7 @@ private final class ToolbarChromeView: NSView {
 
   private func layoutTrafficLights() {
     guard showsWindowControls else { return }
-    for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-      window?.standardWindowButton(type)?.isHidden = true
-    }
-    let fullscreen = window?.styleMask.contains(.fullScreen) == true
-    let frames = BrowserShellFrames.trafficLightFrames(
-      sizes: trafficLights.map { $0.frame.size }, toolbarHeight: bounds.height)
-    for (button, frame) in zip(trafficLights, frames) {
-      button.isHidden = fullscreen
-      button.frame = frame
-    }
+    BrowserTrafficLightLayout.layout(trafficLights, in: self)
   }
 
   func setAddressVisible(_ visible: Bool, animated: Bool) {
@@ -218,7 +201,7 @@ private final class ToolbarChromeView: NSView {
   ) {
     guard browserRect.width > 0 else { return }
     layoutTrafficLights()
-    let trafficLightsRight = trafficLights.last?.frame.maxX ?? 0
+    let trafficLightsRight = trafficLights.last.map { convert($0.bounds, from: $0).maxX } ?? 0
     let height = AddressCapsuleLayout.height
     let y = (bounds.height - height) / 2
     let sidebarLeft = max(trafficLightsRight + 10, sidebarAnchor.minX - height - 10)
@@ -435,7 +418,7 @@ final class BrowserToolbarController: NSObject {
       window.backgroundColor = .clear
       window.titleVisibility = .hidden
       window.titlebarAppearsTransparent = true
-      window.toolbar = nil
+      BrowserTrafficLightLayout.installTitlebar(in: window)
       window.initialFirstResponder = browserView
     }
     _ = view
@@ -661,7 +644,6 @@ final class BrowserToolbarController: NSObject {
     action: Selector
   ) -> NSButton {
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
-    button.cell = CircularToolbarButtonCell(textCell: "")
     button.bezelStyle = .toolbar
     button.isBordered = true
     button.showsBorderOnlyWhileMouseInside = true
