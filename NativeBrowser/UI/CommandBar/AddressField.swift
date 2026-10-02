@@ -29,6 +29,9 @@ struct AddressField: NSViewRepresentable {
   @ObservedObject var model: AddressFieldModel
   /// The toolbar controller owns the presentation state across tab changes.
   var isFocused: Bool
+  /// Local AppKit monitors bypass SwiftUI's allowsHitTesting. Read the owning
+  /// toolbar's current visibility even while its native editor stays mounted.
+  var acceptsInteraction: () -> Bool
 
   /// Called when the user changes the text (before any submit).
   var completion: SpotlightInputState? = nil
@@ -195,7 +198,8 @@ struct AddressField: NSViewRepresentable {
           // Focus on the next turn so the hosting view cannot reclaim the
           // responder and discard the field editor's selection.
           DispatchQueue.main.async { [weak self, weak field, weak model] in
-            guard let self, let model, self.observedModel === model else { return }
+            guard let self, let model, self.observedModel === model,
+                  self.parent.acceptsInteraction() else { return }
             self.reportFocusChange(true)
             field?.focusAndSelectAll()
           }
@@ -210,7 +214,8 @@ struct AddressField: NSViewRepresentable {
       outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
         matching: [.leftMouseDown, .rightMouseDown]
       ) { [weak self, weak field] event in
-        guard let self, let field, let window = field.window
+        guard let self, self.parent.acceptsInteraction(),
+              let field, let window = field.window
         else { return event }
         let fieldRect = field.convert(field.bounds, to: nil)
         // The expanded input starts at the candidate text column. Include its
