@@ -108,7 +108,6 @@ struct TabSidebarView: View {
   @State private var dumpAngle: Double = 0
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  private let pinGlassOverlap: CGFloat = 24
   private let topPinEdgeInset = BrowserLayout.sidebarContentInset
   private let topPinHeight: CGFloat = 40.5  // 75% of the former 54-point tiles.
 
@@ -119,31 +118,15 @@ struct TabSidebarView: View {
   var body: some View {
     GeometryReader { geometry in
       VStack(spacing: 0) {
-        // The fixed top pin and scrolling space tab share one sidebar material.
         pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
           .padding(.horizontal, topPinEdgeInset)
           .padding(.top, chromeLayout.topInset + topPinEdgeInset)
           .padding(.bottom, 6)
           .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
-          .background(alignment: .bottom) {
-            // Blur the scrolling space tab only where it passes under top pin.
-            // A narrow fade preserves the sidebar's continuous glass background.
-            Rectangle()
-              .fill(.ultraThinMaterial)
-              .frame(height: pinGlassOverlap + 8)
-              .mask {
-                LinearGradient(
-                  stops: [.init(color: .white, location: 0),
-                          .init(color: .white, location: 0.55),
-                          .init(color: .clear, location: 1)],
-                  startPoint: .top, endPoint: .bottom)
-              }
-              .allowsHitTesting(false)
-          }
           .zIndex(1)
 
         spacePages
-          .padding(.top, -pinGlassOverlap)
+          .padding(.top, -BrowserLayout.sidebarPinScrollOverlap)
           .frame(maxHeight: .infinity)
 
         footer
@@ -219,11 +202,12 @@ struct TabSidebarView: View {
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
         sectionTitle(space.name, symbol: "square.3.layers.3d")
+          .modifier(SidebarScrollEdge())
         tierRows(pinSlots, tier: .space(space.id))
-          .padding(.bottom, pinSlots.isEmpty ? 0 : -6)
 
         HStack(spacing: 8) {
-          Rectangle().fill(.primary.opacity(0.12)).frame(height: 0.5)
+          VStack(spacing: 0) { Divider() }
+            .frame(maxWidth: .infinity)
           if clearableCount > 0 && (isSidebarHovered || clearingSpaceID == space.id) {
             Button {
               animateClear(in: space.id)
@@ -243,9 +227,9 @@ struct TabSidebarView: View {
             }
           }
         }
-        .frame(height: 24)
+        .frame(height: BrowserLayout.sidebarSectionDividerHeight)
         .padding(.horizontal, 9)
-        .padding(.vertical, 2)
+        .modifier(SidebarScrollEdge())
 
         Button {
           workspace.selectSpace(id: space.id)
@@ -256,6 +240,7 @@ struct TabSidebarView: View {
             .padding(.horizontal, 12)
             .frame(height: 34)
             .contentShape(SidebarTabAppearance.glassShape)
+            .modifier(SidebarScrollEdge())
         }
         .buttonStyle(.plain)
         .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
@@ -280,15 +265,16 @@ struct TabSidebarView: View {
         }
         .help("Open Spotlight to create a tab")
         .accessibilityAddTraits(spotlightIsActive ? [.isSelected] : [])
+        .modifier(SidebarScrollEdgeFade())
 
         tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
       .padding(.horizontal, 10)
-      .padding(.top, 8 + pinGlassOverlap)
+      .padding(.top, 8 + BrowserLayout.sidebarPinScrollOverlap)
       .padding(.bottom, 18)
     }
     .scrollIndicators(.hidden)
-    .scrollEdgeEffectStyle(.soft, for: .top)
+    .scrollEdgeEffectHidden(true, for: .top)
     .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
   }
 
@@ -407,7 +393,14 @@ struct TabSidebarView: View {
           Color.clear.frame(height: 36)
         }
       }
-      Color.clear.frame(height: slots.isEmpty ? 16 : 8)
+      if case .space = tier {
+        if slots.isEmpty {
+          // Keep an empty pin tier reachable as a drop target.
+          Color.clear.frame(height: BrowserLayout.sidebarEmptyPinDropHeight)
+        }
+      } else {
+        Color.clear.frame(height: slots.isEmpty ? 16 : 8)
+      }
     }
     .onSidebarFrameChange { tabDrag.register(tier, frame: $0) }
     .animation(.smooth(duration: 0.28), value: slots.map(\.id))
@@ -777,6 +770,7 @@ private struct SidebarSplitTabRow: View {
     .padding(contentInset)
     .frame(maxWidth: .infinity)
     .containerShape(SidebarTabAppearance.glassShape)
+    .modifier(SidebarScrollEdge(isEnabled: tier != .global))
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
@@ -818,6 +812,7 @@ private struct SidebarSplitTabRow: View {
     .accessibilityIdentifier("split-group-\(group.id.uuidString)")
     .help("\(left.displayTitle) | \(right.displayTitle)")
     .modifier(SidebarTabDragItem(drag: drag, tabID: group.leftTabID, tier: tier))
+    .modifier(SidebarScrollEdgeFade(isEnabled: tier != .global))
   }
 
   private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
@@ -914,6 +909,7 @@ private struct SidebarTabRow: View {
       .help("Close Tab")
     }
     .padding(.trailing, 3)
+    .modifier(SidebarScrollEdge())
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
@@ -935,6 +931,7 @@ private struct SidebarTabRow: View {
     }
     .help(tab.displayTitle)
     .accessibilityAddTraits(selected ? [.isSelected] : [])
+    .modifier(SidebarScrollEdgeFade())
   }
 
 }
