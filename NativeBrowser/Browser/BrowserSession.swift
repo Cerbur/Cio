@@ -95,6 +95,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   /// True once the Chromium browser object exists.
   @Published private(set) var hasBrowser = false
+  @Published private(set) var isDevToolsOpen = false
   /// True once Chromium destroyed the browser; the session cannot be reused.
   private(set) var isClosed = false
   /// True after the first load finished (successfully or not).
@@ -257,9 +258,15 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       // The manager moved this session's surface to another container (for
       // example because SwiftUI re-created the representable's view): move the
       // existing browser instead of creating a second one.
+      existing.delegate = nil
       containerView = view
       view.delegate = self
-      bridge?.reparent(to: view)
+      bridge?.reparent(to: view.pageContentView)
+      if isDevToolsOpen {
+        view.showDevToolsPane()
+        bridge?.reparentDevTools(to: view.devToolsHostView)
+        existing.hideDevToolsPane()
+      }
       return
     }
     containerView = view
@@ -271,7 +278,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     guard !isClosed, bridge == nil, let view = containerView, view.window != nil else {
       return
     }
-    let bridge = BrowserBridge(parentView: view)
+    let bridge = BrowserBridge(parentView: view.pageContentView)
     bridge.delegate = self
     self.bridge = bridge
     // The initial load does not go through load(_:), so it is logged here; the
@@ -368,6 +375,17 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     AppLog.navigation.info("stop")
     onLifecycleEvent?("navigation:stop")
     bridge?.stopLoading()
+  }
+
+  func toggleDevTools() {
+    guard closeState == .open, let bridge, let containerView else { return }
+    if isDevToolsOpen {
+      bridge.closeDevTools()
+    } else {
+      containerView.showDevToolsPane()
+      isDevToolsOpen = bridge.showDevTools(in: containerView.devToolsHostView)
+      if !isDevToolsOpen { containerView.hideDevToolsPane() }
+    }
   }
 
   /// Starts a download through CEF's browser host. This is used only by the
@@ -578,7 +596,8 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 
   func containerViewDidResize(_ view: ChromiumContainerView) {
     guard !isClosed, view.window != nil else { return }
-    bridge?.resize(toBounds: view.bounds)
+    bridge?.resize(toBounds: view.pageContentView.bounds)
+    bridge?.resizeDevTools()
   }
 
   func containerViewDidChangeVisibility(_ view: ChromiumContainerView, isVisible: Bool) {
@@ -587,13 +606,21 @@ extension BrowserSession: ChromiumContainerViewDelegate {
     // the browser is simply told its geometry again so the first frame after the
     // switch matches the container.
     guard !isClosed, isVisible, view.window != nil else { return }
-    bridge?.resize(toBounds: view.bounds)
+    bridge?.resize(toBounds: view.pageContentView.bounds)
+    bridge?.resizeDevTools()
   }
 }
 
 // MARK: - BrowserBridgeDelegate
 
 extension BrowserSession: BrowserBridgeDelegate {
+  func browserBridgeDidCloseDevTools(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    isDevToolsOpen = false
+    containerView?.hideDevToolsPane()
+    if closeState == .open, isSurfaceVisible, !isEditingAddressField { focusPage() }
+  }
+
   func browserBridgeDidCreateBrowser(_ bridge: BrowserBridge) {
     guard acceptsCallback(from: bridge) else { return }
     browserCreationCount += 1

@@ -42,8 +42,24 @@ class NativeBrowserApp final : public CefApp,
   void OnBeforeCommandLineProcessing(
       const CefString &process_type,
       CefRefPtr<CefCommandLine> command_line) override {
-    // Keep the default Chromium command line for now. Any switch added here
-    // must be justified and documented; see ARCHITECTURE.md section 33.
+    if (process_type.empty()) {
+#if defined(DEBUG)
+      command_line->AppendSwitchWithValue("remote-debugging-address", "127.0.0.1");
+      // Chromium's updater clones the app and hard-links the executable on a
+      // background task that shutdown must await. Rebuilt ad-hoc Debug bundles
+      // can stall that link(). Like Chrome for Testing, this app has no Chrome
+      // auto-update flow. Preserve other feature switches and disable only the
+      // updater's clone in Debug; normal macOS code signing remains in effect.
+      std::string disabled = command_line->GetSwitchValue("disable-features").ToString();
+      if (!disabled.empty()) disabled += ",";
+      disabled += "MacAppCodeSignClone";
+      command_line->AppendSwitchWithValue("disable-features", disabled);
+#else
+      // Switches override CefSettings; network debugging stays Debug-only.
+      command_line->RemoveSwitch("remote-debugging-port");
+      command_line->RemoveSwitch("remote-debugging-pipe");
+#endif
+    }
   }
 
   // CefBrowserProcessHandler
@@ -298,6 +314,25 @@ void NativeBrowserApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   settings.log_severity = LOGSEVERITY_INFO;
   settings.persist_session_cookies = false;
   settings.remote_debugging_port = 0;
+#if defined(DEBUG)
+  // Network debugging is opt-in. The in-process inspector needs no listener.
+  NSString *debugPort = NSProcessInfo.processInfo.environment[@"NATIVEBROWSER_CDP_PORT"];
+  if (debugPort != nil) {
+    NSScanner *scanner = [NSScanner scannerWithString:debugPort];
+    scanner.charactersToBeSkipped = nil;
+    int port = 0;
+    if ([scanner scanInt:&port] && scanner.isAtEnd &&
+        (port == 0 || (port >= 1024 && port <= 65535))) {
+      settings.remote_debugging_port = port;
+    } else {
+      fprintf(stderr, "[cef] invalid NATIVEBROWSER_CDP_PORT; remote debugging disabled\n");
+    }
+  }
+#endif
+  // Derive Chrome's reduced product version from the bundled runtime. Leave
+  // platform tokens and UA Client Hints to Chromium, without JS spoofing.
+  CefString(&settings.user_agent_product).FromString(
+      "Chrome/" + std::to_string(CHROME_VERSION_MAJOR) + ".0.0.0");
   // CEF 120+ protects root_cache_path with a process-singleton lock. Set it
   // explicitly instead of relying on the platform default so every isolated
   // verification run (and the production profile) owns a deterministic,

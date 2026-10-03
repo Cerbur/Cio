@@ -64,6 +64,9 @@ committed; it is fetched into `ThirdParty/CEF` and ignored by git. Only
 
 ## Build
 
+For native webpage accessibility, the Web Inspector / CDP endpoint and the
+H.264/AAC runtime build recipe, see [Chromium capabilities](docs/chromium-capabilities.md).
+
 ```bash
 Scripts/fetch_cef.sh     # once: download + extract CEF 152.0.6 (macOS arm64)
 Scripts/build.sh         # xcodegen generate + xcodebuild (DerivedData in ./build)

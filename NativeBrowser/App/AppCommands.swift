@@ -49,6 +49,16 @@ struct BrowserCommands: Commands {
         .keyboardShortcut("l", modifiers: .command)
     }
 
+    CommandMenu("Develop") {
+      if let session = workspace.selectedSession {
+        WebInspectorMenuItem(session: session)
+      } else {
+        Button("Show Web Inspector") {}
+          .keyboardShortcut("i", modifiers: [.command, .option])
+          .disabled(true)
+      }
+    }
+
     // Tabs. A dedicated menu keeps the tab lifecycle commands together and keeps
     // them away from AppKit's own File > Close item, which is removed in
     // AppDelegate so that Command-W cannot mean "close the window" while tabs
@@ -85,5 +95,19 @@ struct BrowserCommands: Commands {
 
   private var selectedIsLoading: Bool {
     workspace.selectedSession?.isLoading ?? false
+  }
+}
+
+/// Inspector state belongs to the runtime, so observe it directly rather than
+/// waiting for unrelated URL/title metadata to make the workspace redraw.
+private struct WebInspectorMenuItem: View {
+  @ObservedObject var session: BrowserSession
+
+  var body: some View {
+    Button(session.isDevToolsOpen ? "Hide Web Inspector" : "Show Web Inspector") {
+      session.toggleDevTools()
+    }
+    .keyboardShortcut("i", modifiers: [.command, .option])
+    .disabled(!session.hasBrowser || session.isClosed)
   }
 }

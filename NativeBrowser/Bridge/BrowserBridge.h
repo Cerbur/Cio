@@ -118,6 +118,7 @@ NS_SWIFT_UI_ACTOR
                          errorCode:(NSInteger)errorCode;
 
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
+- (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
 
 @end
 
@@ -149,6 +150,13 @@ NS_SWIFT_UI_ACTOR
 - (void)goForward;
 - (void)reload;
 - (void)stopLoading;
+
+/// Embeds Chromium's DevTools frontend in an application-owned native view.
+/// Returns NO when the request cannot be accepted (e.g. during teardown).
+- (BOOL)showDevToolsInView:(NSView *)view;
+- (void)closeDevTools;
+- (void)resizeDevTools;
+- (void)reparentDevToolsToView:(NSView *)view;
 
 /// Reads the visible entry on CEF's UI thread. Certificates are DER bytes;
 /// no CEF objects escape the bridge and no second network request is made.
@@ -250,6 +258,9 @@ NS_SWIFT_UI_ACTOR
 - (void)browserDidTerminateRendererWithStatus:(NSInteger)status
                                      errorCode:(NSInteger)errorCode;
 - (void)browserDidClose;
+- (void)devToolsDidCreate;
+- (void)devToolsDidClose;
+- (BOOL)devToolsAllowsFocus;
 
 @end
 

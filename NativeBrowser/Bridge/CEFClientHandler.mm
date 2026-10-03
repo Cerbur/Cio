@@ -156,6 +156,9 @@ bool CEFClientHandler::OnSetFocus(CefRefPtr<CefBrowser> browser,
 
 void CEFClientHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   browser_ = browser;
+  // Windowed CEF uses Complete mode and publishes Chromium's native macOS AX
+  // objects, including frames, even when VoiceOver is not running.
+  browser->GetHost()->SetAccessibilityState(STATE_ENABLED);
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{
     [bridge browserDidCreate];

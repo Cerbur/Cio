@@ -14,7 +14,10 @@
 #include <string>
 
 #include "include/cef_browser.h"
+#include "include/cef_devtools_message_observer.h"
 #include "include/cef_frame.h"
+#include "include/cef_parser.h"
+#include "include/cef_request_handler.h"
 #include "include/cef_ssl_info.h"
 #include "include/cef_values.h"
 #include "include/internal/cef_mac.h"
@@ -41,6 +44,125 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   return NO;
 }
 
+/// The inspector has independent callbacks and a child view, never a native
+/// top-level window. Handle its close ourselves so CEF cannot close the shell.
+class NativeBrowserDevToolsClient final : public CefClient,
+                                         public CefLifeSpanHandler,
+                                         public CefFocusHandler,
+                                         public CefRequestHandler,
+                                         public CefDevToolsMessageObserver {
+ public:
+  NativeBrowserDevToolsClient(BrowserBridge *bridge, CefRefPtr<CefBrowser> inspected)
+      : bridge_(bridge), inspected_(inspected), pending_ids_([NSMutableDictionary dictionary]) {}
+  CefRefPtr<CefBrowser> browser() const { return browser_; }
+  void Disconnect() {
+    registration_ = nullptr;
+    inspected_ = nullptr;
+    [pending_ids_ removeAllObjects];
+  }
+  CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+  CefRefPtr<CefFocusHandler> GetFocusHandler() override { return this; }
+  CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                      CefRefPtr<CefRequest> request, bool user_gesture, bool is_redirect) override {
+    return request->GetURL().ToString() != "devtools://devtools/bundled/devtools_app.html";
+  }
+
+  bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                     int popup_id, const CefString& target_url, const CefString& target_frame_name,
+                     WindowOpenDisposition disposition, bool user_gesture,
+                     const CefPopupFeatures& features, CefWindowInfo& info,
+                     CefRefPtr<CefClient>& client, CefBrowserSettings& settings,
+                     CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) override {
+    return true;
+  }
+
+  bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                                CefProcessId source, CefRefPtr<CefProcessMessage> message) override {
+    if (source != PID_RENDERER || message->GetName() != "NativeBrowser.Inspector" ||
+        !browser_ || !browser_->IsSame(browser) || !frame->IsMain() ||
+        frame->GetURL().ToString() != "devtools://devtools/bundled/devtools_app.html") return false;
+    auto args = message->GetArgumentList();
+    if (args->GetSize() != 2) return true;
+    if (args->GetString(0) == "close") { [bridge_ closeDevTools]; return true; }
+    if (args->GetString(0) != "protocol" || !inspected_ || !inspected_->IsValid()) return true;
+    // The shell also uses CDP for appearance. Keep its response IDs separate
+    // from the frontend, which starts its own sequence at 1 on every reopen.
+    auto value = CefParseJSON(args->GetString(1), JSON_PARSER_RFC);
+    auto dictionary = value ? value->GetDictionary() : nullptr;
+    if (!dictionary || !dictionary->HasKey("id")) return true;
+    const int id = next_id_++;
+    pending_ids_[@(id)] = @(dictionary->GetInt("id"));
+    dictionary->SetInt("id", id);
+    std::string json = CefWriteJSON(value, JSON_WRITER_DEFAULT).ToString();
+    inspected_->GetHost()->SendDevToolsMessage(json.data(), json.size());
+    return true;
+  }
+
+  bool OnDevToolsMessage(CefRefPtr<CefBrowser> browser, const void* message, size_t size) override {
+    if (!browser_) return true;
+    @autoreleasepool {
+      NSData* data = [NSData dataWithBytes:message length:size];
+      NSMutableDictionary* json = [NSJSONSerialization JSONObjectWithData:data
+          options:NSJSONReadingMutableContainers error:nil];
+      if (![json isKindOfClass:[NSMutableDictionary class]]) return true;
+      if (NSNumber* id = json[@"id"]) {
+        NSNumber* original = pending_ids_[id];
+        if (!original) return true;
+        json[@"id"] = original;
+        [pending_ids_ removeObjectForKey:id];
+      }
+      NSData* payload = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil];
+      NSString* encoded = [payload base64EncodedStringWithOptions:0];
+      NSString* script = [NSString stringWithFormat:
+          @"globalThis.InspectorFrontendAPI?.dispatchMessage(new TextDecoder().decode(Uint8Array.from(atob('%@'),c=>c.charCodeAt(0))))", encoded];
+      browser_->GetMainFrame()->ExecuteJavaScript(std::string(script.UTF8String), "", 0);
+    }
+    return true;
+  }
+
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    browser_ = browser;
+    if (inspected_ && inspected_->IsValid())
+      registration_ = inspected_->GetHost()->AddDevToolsMessageObserver(this);
+    browser->GetHost()->SetAccessibilityState(STATE_ENABLED);
+    [bridge_ devToolsDidCreate];
+  }
+
+  bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override {
+    return ![bridge_ devToolsAllowsFocus];
+  }
+
+  bool DoClose(CefRefPtr<CefBrowser> browser) override {
+    @autoreleasepool {
+      NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+      browser->GetHost()->SetFocus(false);
+      if (NBResponderBelongsToView(view.window.firstResponder, view)) {
+        [view.window makeFirstResponder:nil];
+      }
+      [view removeFromSuperview];
+      view = nil;
+    }
+    return true;
+  }
+
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    Disconnect();
+    browser_ = nullptr;
+    [bridge_ devToolsDidClose];
+  }
+
+ private:
+  __weak BrowserBridge *bridge_;
+  CefRefPtr<CefBrowser> browser_;
+  CefRefPtr<CefBrowser> inspected_;
+  CefRefPtr<CefRegistration> registration_;
+  __strong NSMutableDictionary<NSNumber*, NSNumber*>* pending_ids_;
+  int next_id_ = 1000000000;
+  IMPLEMENT_REFCOUNTING(NativeBrowserDevToolsClient);
+};
+
 }  // namespace
 
 @interface BrowserConnectionInfo ()
@@ -56,6 +178,11 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
 
 @implementation BrowserBridge {
   CefRefPtr<CEFClientHandler> _client;
+  CefRefPtr<NativeBrowserDevToolsClient> _devToolsClient;
+  __weak NSView *_devToolsParentView;
+  BOOL _devToolsCloseRequested;
+  BOOL _closePageAfterDevTools;
+  BOOL _closeNotificationDelivered;
   /// Parent view the Chromium browser view is attached to. The container owns
   /// the view; the bridge must not keep it alive.
   __weak NSView *_parentView;
@@ -146,6 +273,101 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   }
 }
 
+- (BOOL)showDevToolsInView:(NSView *)view {
+  if (_closed || _closeRequested || _ordinaryCloseRequested ||
+      _devToolsCloseRequested || view.window == nil) return NO;
+  CefRefPtr<CefBrowser> browser = _client->browser();
+  if (!browser) return NO;
+  _devToolsParentView = view;
+  if (_devToolsClient) return YES;
+  _devToolsClient = new NativeBrowserDevToolsClient(self, browser);
+  CefWindowInfo windowInfo;
+  windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+  windowInfo.SetAsChild(CAST_NSVIEW_TO_CEF_WINDOW_HANDLE(view),
+      CefRect(0, 0, static_cast<int>(NSWidth(view.bounds)),
+                    static_cast<int>(NSHeight(view.bounds))));
+  CefBrowserSettings settings;
+  // CEF 152's ShowDevTools creates a Chrome-style window and CHECKs if macOS
+  // SetAsChild forces Alloy. Host the bundled frontend as a regular child and
+  // connect its protocol using CEF's in-process observer API instead.
+  auto extraInfo = CefDictionaryValue::Create();
+  extraInfo->SetBool("nativeBrowserInspector", true);
+  bool created = CefBrowserHost::CreateBrowser(windowInfo, _devToolsClient,
+      "devtools://devtools/bundled/devtools_app.html", settings, extraInfo,
+      browser->GetHost()->GetRequestContext());
+  if (!created) {
+    _devToolsClient = nullptr;
+    _devToolsParentView = nil;
+  }
+  return created;
+}
+
+- (void)closeDevTools {
+  if (!_devToolsClient) return;
+  _devToolsCloseRequested = YES;
+  _devToolsClient->Disconnect();
+  if (CefRefPtr<CefBrowser> inspector = _devToolsClient->browser()) {
+    inspector->GetHost()->CloseBrowser(/*force_close=*/true);
+  }
+  // A close before OnAfterCreated is remembered and completed by that callback.
+}
+
+- (void)resizeDevTools {
+  if (!_devToolsClient || _devToolsCloseRequested) return;
+  CefRefPtr<CefBrowser> inspector = _devToolsClient->browser();
+  NSView *parent = _devToolsParentView;
+  if (!inspector || !parent) return;
+  NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(inspector->GetHost()->GetWindowHandle());
+  view.frame = parent.bounds;
+  view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  inspector->GetHost()->WasResized();
+}
+
+- (void)reparentDevToolsToView:(NSView *)view {
+  if (!_devToolsClient || _closed || _closeRequested || _ordinaryCloseRequested ||
+      _devToolsCloseRequested) return;
+  _devToolsParentView = view;
+  if (CefRefPtr<CefBrowser> inspector = _devToolsClient->browser()) {
+    NSView *child = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(inspector->GetHost()->GetWindowHandle());
+    [child removeFromSuperview];
+    [view addSubview:child];
+    [self resizeDevTools];
+  }
+}
+
+- (void)devToolsDidCreate {
+  if (_closed || _closeRequested || _ordinaryCloseRequested || _devToolsCloseRequested) {
+    [self closeDevTools];
+    return;
+  }
+  [self resizeDevTools];
+}
+
+- (BOOL)devToolsAllowsFocus {
+  NSView *parent = _devToolsParentView;
+  return !_closed && !_closeRequested && !_ordinaryCloseRequested &&
+      !_devToolsCloseRequested && parent.window != nil && !parent.isHiddenOrHasHiddenAncestor;
+}
+
+- (void)devToolsDidClose {
+  _devToolsClient = nullptr;
+  _devToolsCloseRequested = NO;
+  _devToolsParentView = nil;
+  [self.delegate browserBridgeDidCloseDevTools:self];
+  if (_closePageAfterDevTools) {
+    _closePageAfterDevTools = NO;
+    [self closeForApplicationTermination:YES];
+  }
+  [self notifyCloseWhenAllBrowsersAreClosed];
+}
+
+- (void)notifyCloseWhenAllBrowsersAreClosed {
+  if (!_closed || _devToolsClient || _closeNotificationDelivered) return;
+  _closeNotificationDelivered = YES;
+  NBShutdownTimingMark(@"T3");
+  [self.delegate browserBridgeDidClose:self];
+}
+
 - (BrowserConnectionInfo *)connectionInfo {
   if (_closed || _closeRequested) return nil;
   CefRefPtr<CefBrowser> browser = _client->browser();
@@ -217,6 +439,17 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     return;
   }
   CefRefPtr<CefBrowserHost> host = browser->GetHost();
+  // Returning to the page, switching tabs or editing the address must also
+  // release the inspector's CEF focus. It shares this session's native shell.
+  if (_devToolsClient) {
+    if (CefRefPtr<CefBrowser> inspector = _devToolsClient->browser()) {
+      inspector->GetHost()->SetFocus(false);
+      NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(inspector->GetHost()->GetWindowHandle());
+      if (!focused && NBResponderBelongsToView(view.window.firstResponder, view)) {
+        [view.window makeFirstResponder:nil];
+      }
+    }
+  }
   host->SetFocus(focused);
 
   NSView *browserView = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(host->GetWindowHandle());
@@ -331,6 +564,14 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     _client->CancelActiveDownloads();
     _closeRequested = YES;
     _releasesFirstResponderOnClose = YES;
+    // Finish the inspector and release its inspected-browser reference before
+    // starting the page teardown. CefShutdown must not see a protocol observer
+    // or another browser retaining a page whose OnBeforeClose already ran.
+    if (_devToolsClient) {
+      _closePageAfterDevTools = YES;
+      [self closeDevTools];
+      return;
+    }
   }
 
   CefRefPtr<CefBrowser> browser = _client->browser();
@@ -386,6 +627,7 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     return;
   }
   _viewReleased = YES;
+  [self closeDevTools];
   NBShutdownTimingMark(@"T2");
 
   // Detaching the Chromium view is what actually destroys the browser: CEF
@@ -597,6 +839,12 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   if (_closed || _closeRequested || _ordinaryCloseRequested) {
     return NO;
   }
+  // A page navigation or window activation must not steal the keyboard from
+  // the docked console. Explicit page-focus commands release inspector focus.
+  NSView *inspectorParent = _devToolsParentView;
+  if (NBResponderBelongsToView(inspectorParent.window.firstResponder, inspectorParent)) {
+    return NO;
+  }
   return [self.delegate browserBridge:self allowsFocusRequestFromSystem:fromSystem];
 }
 
@@ -741,8 +989,10 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
     [self browserDidAcceptClose];
   }
   _closed = YES;
-  NBShutdownTimingMark(@"T3");
-  [self.delegate browserBridgeDidClose:self];
+  [self closeDevTools];
+  // Keep the session and native hosts alive until BOTH OnBeforeClose callbacks
+  // arrive. Otherwise the manager could shut CEF down with a live inspector.
+  [self notifyCloseWhenAllBrowsersAreClosed];
 }
 
 @end

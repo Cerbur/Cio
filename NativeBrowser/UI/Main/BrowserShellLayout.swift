@@ -22,6 +22,9 @@ enum BrowserLayout {
   static let sidebarMaximumWidth: CGFloat = 480
   static let sidebarWidthPreferenceKey = "cio.sidebar.width"
   static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
+  static let devToolsDefaultFraction: CGFloat = 0.5
+  static let devToolsMinimumHeight: CGFloat = 160
+  static let inspectedPageMinimumHeight: CGFloat = 120
 }
 
 /// Frames in the shell's top-left coordinate system. There is no outer split

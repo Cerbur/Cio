@@ -14,6 +14,7 @@ NativeBrowser.xcodeproj/
 # CEF binary distribution (fetch with: Scripts/fetch_cef.sh)
 ThirdParty/CEF/
 ThirdParty/.cache/
+ThirdParty/.cef-install-*/
 
 # CEF wrapper build products
 ThirdParty/libcef_dll_wrapper.a
