@@ -84,7 +84,6 @@ private struct SpacePageTrack: View {
       }
         .offset(x: -CGFloat(selectedIndex - firstVisibleIndex) * geometry.size.width + swipeState.offset)
         .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
-        .clipped()
     }
     .onChange(of: selectedIndex) { oldIndex, _ in
       outgoingIndex = oldIndex
@@ -118,16 +117,20 @@ struct TabSidebarView: View {
   var body: some View {
     GeometryReader { geometry in
       VStack(spacing: 0) {
-        pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
-          .padding(.horizontal, topPinEdgeInset)
-          .padding(.top, chromeLayout.topInset + topPinEdgeInset)
-          .padding(.bottom, 6)
-          .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
-          .zIndex(1)
-
         spacePages
-          .padding(.top, -BrowserLayout.sidebarPinScrollOverlap)
+          .safeAreaBar(edge: .top, spacing: 0) {
+            pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
+              .padding(.horizontal, topPinEdgeInset)
+              .padding(.top, chromeLayout.topInset + topPinEdgeInset)
+              .padding(.bottom, 6)
+              .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
+              .scrollEdgeEffectStyle(.soft, for: .top)
+          }
+          .scrollEdgeEffectStyle(.soft, for: .top)
           .frame(maxHeight: .infinity)
+          // Clip the whole bar and pager together so scrolling content can
+          // pass beneath the system edge effect without spilling into the footer.
+          .clipped()
 
         footer
       }
@@ -202,7 +205,7 @@ struct TabSidebarView: View {
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
         sectionTitle(space.name, symbol: "square.3.layers.3d")
-          .modifier(SidebarScrollEdge())
+
         tierRows(pinSlots, tier: .space(space.id))
 
         HStack(spacing: 8) {
@@ -229,7 +232,6 @@ struct TabSidebarView: View {
         }
         .frame(height: BrowserLayout.sidebarSectionDividerHeight)
         .padding(.horizontal, 9)
-        .modifier(SidebarScrollEdge())
 
         Button {
           workspace.selectSpace(id: space.id)
@@ -240,7 +242,6 @@ struct TabSidebarView: View {
             .padding(.horizontal, 12)
             .frame(height: 34)
             .contentShape(SidebarTabAppearance.glassShape)
-            .modifier(SidebarScrollEdge())
         }
         .buttonStyle(.plain)
         .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
@@ -265,16 +266,15 @@ struct TabSidebarView: View {
         }
         .help("Open Spotlight to create a tab")
         .accessibilityAddTraits(spotlightIsActive ? [.isSelected] : [])
-        .modifier(SidebarScrollEdgeFade())
 
         tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
       .padding(.horizontal, 10)
-      .padding(.top, 8 + BrowserLayout.sidebarPinScrollOverlap)
+      .padding(.top, 8)
       .padding(.bottom, 18)
     }
     .scrollIndicators(.hidden)
-    .scrollEdgeEffectHidden(true, for: .top)
+    .scrollEdgeEffectStyle(.soft, for: .top)
     .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
   }
 
@@ -770,7 +770,6 @@ private struct SidebarSplitTabRow: View {
     .padding(contentInset)
     .frame(maxWidth: .infinity)
     .containerShape(SidebarTabAppearance.glassShape)
-    .modifier(SidebarScrollEdge(isEnabled: tier != .global))
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
@@ -812,7 +811,6 @@ private struct SidebarSplitTabRow: View {
     .accessibilityIdentifier("split-group-\(group.id.uuidString)")
     .help("\(left.displayTitle) | \(right.displayTitle)")
     .modifier(SidebarTabDragItem(drag: drag, tabID: group.leftTabID, tier: tier))
-    .modifier(SidebarScrollEdgeFade(isEnabled: tier != .global))
   }
 
   private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
@@ -909,7 +907,6 @@ private struct SidebarTabRow: View {
       .help("Close Tab")
     }
     .padding(.trailing, 3)
-    .modifier(SidebarScrollEdge())
     .background {
       if selected {
         Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
@@ -931,7 +928,6 @@ private struct SidebarTabRow: View {
     }
     .help(tab.displayTitle)
     .accessibilityAddTraits(selected ? [.isSelected] : [])
-    .modifier(SidebarScrollEdgeFade())
   }
 
 }
