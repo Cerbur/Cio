@@ -258,6 +258,14 @@ final class BrowserWorkspaceStore: ObservableObject {
     return changed
   }
 
+  @discardableResult
+  func setSpaceIcon(id: UUID, icon: BrowserSpaceIcon) -> Bool {
+    guard workspace.setSpaceIcon(id: id, icon: icon) else { return false }
+    publishWorkspace()
+    persistIfNeeded()
+    return true
+  }
+
   /// Keep Spotlight open while changing Space so submission targets the new Space.
   func selectSpace(id: UUID) {
     guard workspace.space(withID: id) != nil,

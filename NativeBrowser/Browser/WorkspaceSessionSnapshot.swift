@@ -48,7 +48,8 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
         tabs: tabs,
         pinnedTabIDs: space.pinnedTabIDs,
         stableTabStack: space.stableTabStack,
-        splitGroups: space.splitGroups)
+        splitGroups: space.splitGroups,
+        icon: space.icon)
     }
   }
 
@@ -76,8 +77,9 @@ struct PersistedSpace: Codable, Equatable, Sendable {
   var pinnedTabIDs: [UUID] = []
   var stableTabStack: [UUID] = []
   var splitGroups: [BrowserSplitLayout] = []
+  var icon: BrowserSpaceIcon = .placeholder
 
-  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = [], splitGroups: [BrowserSplitLayout] = []) {
+  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = [], splitGroups: [BrowserSplitLayout] = [], icon: BrowserSpaceIcon = .placeholder) {
     self.id = id
     self.name = name
     self.selectedTabID = selectedTabID
@@ -85,10 +87,11 @@ struct PersistedSpace: Codable, Equatable, Sendable {
     self.pinnedTabIDs = pinnedTabIDs
     self.stableTabStack = stableTabStack
     self.splitGroups = splitGroups
+    self.icon = icon
   }
 
   private enum CodingKeys: String, CodingKey {
-    case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack, splitGroups
+    case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack, splitGroups, icon
   }
 
   init(from decoder: Decoder) throws {
@@ -102,6 +105,7 @@ struct PersistedSpace: Codable, Equatable, Sendable {
     stableTabStack = (try? values.decode([UUID].self, forKey: .stableTabStack)) ?? []
     // Optional layout metadata must never discard otherwise valid open tabs.
     splitGroups = (try? values.decode([BrowserSplitLayout].self, forKey: .splitGroups)) ?? []
+    icon = (try? values.decode(BrowserSpaceIcon.self, forKey: .icon)) ?? .placeholder
   }
 }
 

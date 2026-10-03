@@ -344,7 +344,9 @@ final class SidebarTabDrag {
   // MARK: - Targeting
 
   private var visibleSpaceFrame: CGRect {
-    let top = max(spaceFrame.minY, topPinFrame.maxY)
+    // Use the same boundary as the shield, including the transition below pins.
+    let top = max(spaceFrame.minY + BrowserLayout.sidebarScrollTransitionHeight,
+                  topPinFrame.maxY)
     return CGRect(
       x: spaceFrame.minX, y: top,
       width: spaceFrame.width, height: max(0, spaceFrame.maxY - top))

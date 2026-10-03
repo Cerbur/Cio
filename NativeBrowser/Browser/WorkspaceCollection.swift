@@ -136,6 +136,7 @@ struct WorkspaceCollection: Equatable, Sendable {
         BrowserSpace(
           id: persistedSpace.id,
           name: name,
+          icon: persistedSpace.icon,
           tabIDs: orderedTabIDs,
           pinnedTabIDs: persistedSpace.pinnedTabIDs,
           selectedTabID: selectedTabID,
@@ -460,6 +461,13 @@ struct WorkspaceCollection: Equatable, Sendable {
     guard spaces[index].name != trimmed else { return false }
     spaces[index].name = trimmed
     validateInvariants()
+    return true
+  }
+
+  @discardableResult
+  mutating func setSpaceIcon(id: UUID, icon: BrowserSpaceIcon) -> Bool {
+    guard let index = index(of: id), spaces[index].icon != icon else { return false }
+    spaces[index].icon = icon
     return true
   }
 

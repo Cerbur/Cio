@@ -7,6 +7,15 @@
 
 import Foundation
 
+/// Shared by the Space row and its page indicator; future icon pickers can
+/// supply either an emoji or a native SF Symbol without changing those views.
+enum BrowserSpaceIcon: Codable, Equatable, Sendable {
+  case emoji(String)
+  case systemImage(String)
+
+  static let placeholder = Self.emoji("🧸")
+}
+
 /// A logical group of tabs.
 ///
 /// A Space contains only domain identity and ordering. Runtime objects and
@@ -15,6 +24,7 @@ import Foundation
 struct BrowserSpace: Identifiable, Equatable, Sendable {
   let id: UUID
   var name: String
+  var icon: BrowserSpaceIcon
   var tabIDs: [UUID]
   var pinnedTabIDs: [UUID]
   var selectedTabID: UUID?
@@ -26,6 +36,7 @@ struct BrowserSpace: Identifiable, Equatable, Sendable {
   init(
     id: UUID = UUID(),
     name: String,
+    icon: BrowserSpaceIcon = .placeholder,
     tabIDs: [UUID] = [],
     pinnedTabIDs: [UUID] = [],
     selectedTabID: UUID? = nil,
@@ -34,6 +45,7 @@ struct BrowserSpace: Identifiable, Equatable, Sendable {
   ) {
     self.id = id
     self.name = name
+    self.icon = icon
     self.tabIDs = tabIDs
     self.pinnedTabIDs = pinnedTabIDs
     self.selectedTabID = selectedTabID

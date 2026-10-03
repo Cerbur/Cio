@@ -105,6 +105,7 @@ struct TabSidebarView: View {
   @State private var isClearHovered = false
   @State private var hoveredNewTabSpaceID: UUID?
   @State private var clearingSpaceID: UUID?
+  @State private var collapsedSpaceIDs: Set<UUID> = []
   @State private var dumpAngle: Double = 0
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -121,7 +122,6 @@ struct TabSidebarView: View {
         pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
           .padding(.horizontal, topPinEdgeInset)
           .padding(.top, chromeLayout.topInset + topPinEdgeInset)
-          .padding(.bottom, 6)
           .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
           .zIndex(1)
 
@@ -185,11 +185,16 @@ struct TabSidebarView: View {
     SpacePageTrack(swipeState: pageSwipeState, selectedIndex: selectedSpaceIndex,
                    pages: workspace.spaces.map { AnyView(spacePage($0)) })
     .onSidebarFrameChange { tabDrag.spaceFrame = $0 }
+    .overlay(alignment: .top) {
+      SidebarScrollEdgeShield()
+        .frame(height: BrowserLayout.sidebarScrollTransitionHeight)
+        .accessibilityHidden(true)
+    }
     .accessibilityIdentifier("space-pages")
   }
 
   private func spacePage(_ space: BrowserSpace) -> some View {
-    let pinnedTabs = space.pinnedTabIDs.compactMap(workspace.tab(withID:))
+    let pinnedTabs = visiblePinnedTabs(in: space)
     let globalIDs = Set(workspace.globalPinnedTabs.map(\.id))
     let temporaryTabs = space.tabIDs
       .filter { !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) }
@@ -201,8 +206,16 @@ struct TabSidebarView: View {
 
     return ScrollView {
       VStack(alignment: .leading, spacing: 4) {
-        sectionTitle(space.name, symbol: "square.3.layers.3d")
-          .modifier(SidebarScrollEdge())
+        SidebarSpaceRow(space: space, isCollapsed: collapsedSpaceIDs.contains(space.id),
+                        isTabDragActive: tabDrag.tabID != nil) {
+          withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) {
+            if !collapsedSpaceIDs.insert(space.id).inserted {
+              collapsedSpaceIDs.remove(space.id)
+            }
+          }
+        } onRename: {
+          promptRename(space)
+        }
         tierRows(pinSlots, tier: .space(space.id))
 
         HStack(spacing: 8) {
@@ -269,8 +282,8 @@ struct TabSidebarView: View {
 
         tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
       }
-      .padding(.horizontal, 10)
-      .padding(.top, 8 + BrowserLayout.sidebarPinScrollOverlap)
+      .padding(.horizontal, BrowserLayout.sidebarContentInset)
+      .padding(.top, BrowserLayout.sidebarTopPinSpacing + BrowserLayout.sidebarPinScrollOverlap)
       .padding(.bottom, 18)
     }
     .scrollIndicators(.hidden)
@@ -299,7 +312,8 @@ struct TabSidebarView: View {
   private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
     let tileSlots = slots(workspace.globalPinnedTabs, tier: .global)
     return VStack(alignment: .leading, spacing: 3) {
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: columns), spacing: 9) {
+      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: BrowserLayout.sidebarTopPinSpacing), count: columns),
+                spacing: BrowserLayout.sidebarTopPinSpacing) {
         ForEach(tileSlots) { slot in
           switch slot {
           case .tab(let tab):
@@ -334,24 +348,17 @@ struct TabSidebarView: View {
       }
       .animation(.smooth(duration: 0.28), value: tileSlots.map(\.id))
 
-      if !tileSlots.isEmpty {
-        Color.clear.frame(height: 8)
-      }
     }
     .help("Workspace pins stay visible when you switch Spaces")
   }
 
-  private func sectionTitle(_ title: String, symbol: String) -> some View {
-    HStack(spacing: 6) {
-      Image(systemName: symbol).frame(width: 16)
-      Text(title).lineLimit(1)
-      Spacer(minLength: 0)
-    }
-    .font(.caption.weight(.medium))
-    .foregroundStyle(.secondary)
-    .padding(.horizontal, 9)
-    .frame(height: 24)
-    .contentShape(Rectangle())
+  private func visiblePinnedTabs(in space: BrowserSpace) -> [BrowserTab] {
+    let tabs = space.pinnedTabIDs.compactMap(workspace.tab(withID:))
+    guard collapsedSpaceIDs.contains(space.id) else { return tabs }
+    let stableID = space.id == workspace.selectedSpaceID ? workspace.selectedTabID : space.selectedTabID
+    guard let stableID, space.pinnedTabIDs.contains(stableID) else { return [] }
+    let visibleIDs = Set(workspace.splitGroup(containing: stableID)?.tabIDs ?? [stableID])
+    return tabs.filter { visibleIDs.contains($0.id) }
   }
 
   /// While a tab is lifted it leaves its tier, and the tier it would land in
@@ -390,7 +397,7 @@ struct TabSidebarView: View {
         case .group(let group):
           splitRow(group, tier: tier)
         case .gap:
-          Color.clear.frame(height: 36)
+          Color.clear.frame(height: BrowserLayout.sidebarTabRowHeight)
         }
       }
       if case .space = tier {
@@ -413,7 +420,7 @@ struct TabSidebarView: View {
       let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
       let height: CGFloat? = switch tier {
       case .global: topPinHeight
-      case .space: 36
+      case .space: BrowserLayout.sidebarTabRowHeight
       case .temporary: nil
       }
       SidebarSplitTabRow(group: group, left: left, right: right,
@@ -494,7 +501,8 @@ struct TabSidebarView: View {
     let globalIDs = workspace.globalPinnedTabs.map(\.id)
     let globalRightIDs = Set(globalIDs.compactMap { workspace.splitGroup(containing: $0)?.rightTabID })
     let groupedRightIDs = Set(space?.splitGroups.map(\.rightTabID) ?? [])
-    let pinIDs = (space?.pinnedTabIDs ?? []).filter { !groupedRightIDs.contains($0) }
+    let pinIDs = (space.map { visiblePinnedTabs(in: $0).map(\.id) } ?? [])
+      .filter { !groupedRightIDs.contains($0) }
     let columns = CGFloat(columns(for: width))
     return SidebarTabDragLayout(
       spaceID: workspace.selectedSpaceID,
@@ -505,7 +513,8 @@ struct TabSidebarView: View {
       temporaryTabIDs: (space?.tabIDs ?? []).filter {
         !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0) && !groupedRightIDs.contains($0)
       },
-      tileSize: CGSize(width: (width - 24 - 9 * (columns - 1)) / columns, height: topPinHeight),
+      tileSize: CGSize(width: (width - 2 * topPinEdgeInset - BrowserLayout.sidebarTopPinSpacing * (columns - 1)) / columns,
+                       height: topPinHeight),
       topInset: chromeLayout.topInset)
   }
 
@@ -519,10 +528,15 @@ struct TabSidebarView: View {
           Button {
             withAnimation(.smooth(duration: 0.28)) { workspace.selectSpace(id: space.id) }
           } label: {
-            Circle()
-              .fill(space.id == workspace.selectedSpaceID ? Color.accentColor : Color.primary.opacity(0.25))
-              .frame(width: space.id == workspace.selectedSpaceID ? 10 : 7,
-                     height: space.id == workspace.selectedSpaceID ? 10 : 7)
+            Group {
+              if space.id == workspace.selectedSpaceID {
+                SpaceIconView(icon: space.icon, size: SidebarTabAppearance.faviconSize)
+              } else {
+                Circle()
+                  .fill(Color.primary.opacity(0.25))
+                  .frame(width: 7, height: 7)
+              }
+            }
               .frame(maxWidth: .infinity)
               .frame(height: 27)
               .contentShape(Rectangle())
@@ -866,6 +880,84 @@ private struct SidebarSplitTabRow: View {
   }
 }
 
+private struct SpaceIconView: View {
+  let icon: BrowserSpaceIcon
+  let size: CGFloat
+
+  var body: some View {
+    Group {
+      switch icon {
+      case .emoji(let emoji): Text(emoji)
+      case .systemImage(let name): Image(systemName: name)
+      }
+    }
+    .font(.system(size: size))
+    .frame(width: size, height: size)
+    .accessibilityHidden(true)
+  }
+}
+
+/// Keeps Space and Tab titles, icons and hit areas on the same grid.
+private struct SidebarRowLabel<Icon: View>: View {
+  let title: String
+  var selected = false
+  @ViewBuilder let icon: () -> Icon
+
+  var body: some View {
+    HStack(spacing: 9) {
+      icon().frame(width: 20)
+      Text(title)
+        .font(.callout.weight(selected ? .semibold : .regular))
+        .lineLimit(1)
+      Spacer(minLength: 0)
+    }
+    .padding(.leading, 11)
+    .frame(maxWidth: .infinity, minHeight: BrowserLayout.sidebarTabRowHeight)
+    .contentShape(Rectangle())
+  }
+}
+
+private struct SidebarSpaceRow: View {
+  let space: BrowserSpace
+  let isCollapsed: Bool
+  let isTabDragActive: Bool
+  let onToggle: () -> Void
+  let onRename: () -> Void
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: onToggle) {
+      HStack(spacing: 0) {
+        SidebarRowLabel(title: space.name) {
+          SpaceIconView(icon: space.icon, size: SidebarTabAppearance.faviconSize)
+        }
+        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.secondary)
+          .frame(width: 29, height: 32)
+          .opacity(isCollapsed || isHovered ? 1 : 0)
+          .accessibilityHidden(true)
+      }
+      .padding(.trailing, 3)
+      .contentShape(SidebarTabAppearance.glassShape)
+      .modifier(SidebarScrollEdge())
+    }
+    .buttonStyle(.plain)
+    .background {
+      if isHovered && !isTabDragActive {
+        SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
+      }
+    }
+    .onHover { isHovered = $0 }
+    .contextMenu { Button("Rename Space", action: onRename) }
+    .help(isCollapsed ? "Expand Space Pins" : "Collapse Space Pins")
+    .accessibilityLabel("Space: \(space.name)")
+    .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
+    .accessibilityIdentifier("space-row-\(space.id.uuidString)")
+    .modifier(SidebarScrollEdgeFade())
+  }
+}
+
 private struct SidebarTabRow: View {
   let tab: BrowserTab
   let session: BrowserSession?
@@ -885,17 +977,9 @@ private struct SidebarTabRow: View {
   var body: some View {
     HStack(spacing: 0) {
       Button(action: onSelect) {
-        HStack(spacing: 9) {
+        SidebarRowLabel(title: tab.displayTitle, selected: selected) {
           TabFaviconView(pageURL: tab.url, session: session, size: SidebarTabAppearance.faviconSize)
-            .frame(width: 20)
-          Text(tab.displayTitle)
-            .font(.callout.weight(selected ? .semibold : .regular))
-            .lineLimit(1)
-          Spacer(minLength: 0)
         }
-        .padding(.leading, 11)
-        .frame(maxWidth: .infinity, minHeight: 36)
-        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       Button(action: onClose) {

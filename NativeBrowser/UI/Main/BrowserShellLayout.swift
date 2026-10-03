@@ -13,6 +13,8 @@ enum BrowserLayout {
   static let mainViewEdgeInset: CGFloat = 4
   static let contentCornerRadius: CGFloat = 14
   static let sidebarContentInset: CGFloat = 12
+  static let sidebarTopPinSpacing: CGFloat = 9
+  static let sidebarTabRowHeight: CGFloat = 36
   static let sidebarPinScrollOverlap: CGFloat = 64
   static let sidebarScrollTransitionHeight: CGFloat = 80
   static let sidebarScrollBlurRadius: CGFloat = 24
