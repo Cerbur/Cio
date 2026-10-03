@@ -2,8 +2,8 @@ import AppKit
 
 /// A stable page UI module: one tab-bound toolbar and one Chromium surface.
 /// Single-page, split and preview layouts all refer to the same instance. The
-/// viewport owns content clipping; the toolbar/editor mount in the shell overlay
-/// so expanded address panels remain outside the content's rounded clip.
+/// splitter host supplies and clips the viewport; the toolbar/editor mount in
+/// the shell overlay so expanded address panels remain outside content clipping.
 @MainActor
 final class BrowserPagePresentation {
   let tabID: UUID
@@ -12,10 +12,9 @@ final class BrowserPagePresentation {
   private(set) var toolbar: BrowserToolbarController?
   private weak var installedWindow: NSWindow?
 
-  init(tabID: UUID, surface: ChromiumContainerView) {
+  init(tabID: UUID, surface: ChromiumContainerView, viewport: NSView) {
     self.tabID = tabID
     self.surface = surface
-    let viewport = PageViewportView(frame: surface.frame)
     self.viewport = viewport
     surface.autoresizingMask = []
     surface.setFrameOrigin(.zero)
@@ -68,21 +67,4 @@ final class BrowserPagePresentation {
     toolbar?.dispose()
     viewport.removeFromSuperview()
   }
-}
-
-/// Stable outer container; it never swaps or recreates its Chromium child.
-private final class PageViewportView: NSView {
-  override var isFlipped: Bool { true }
-
-  override init(frame: NSRect) {
-    super.init(frame: frame)
-    wantsLayer = true
-    layer?.cornerRadius = BrowserLayout.contentCornerRadius
-    layer?.cornerCurve = .continuous
-    layer?.masksToBounds = true
-    autoresizesSubviews = false
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 }

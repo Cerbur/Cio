@@ -13,10 +13,13 @@ final class BrowserSurfaceHostView: NSView {
   private var isCommittingSplitPreview = false
   private var resizingFraction: CGFloat?
 
+  private enum RoundedEdge: Equatable { case none, left, right }
+
   private struct PagePlacement: Equatable {
     var frame: CGRect
     var cropOnly: Bool
     var toolbarVisible: Bool = true
+    var roundedEdge: RoundedEdge = .none
   }
   private var placements: [UUID: PagePlacement] = [:]
   private var targets: [UUID: PagePlacement] = [:]
@@ -101,7 +104,8 @@ final class BrowserSurfaceHostView: NSView {
     // Every surface is mounted once in its viewport before CEF attaches to it.
     for (id, surface) in containers {
       if pages[id] == nil {
-        let page = BrowserPagePresentation(tabID: id, surface: surface)
+        let viewport = BrowserPageViewportView(frame: surface.frame)
+        let page = BrowserPagePresentation(tabID: id, surface: surface, viewport: viewport)
         pages[id] = page
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
@@ -149,6 +153,9 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     preview.isHidden = previewSide == nil
+    if let side = previewSide {
+      applyCornerClipping(to: preview, roundedEdge: side == .left ? .right : .left)
+    }
     var next: [UUID: PagePlacement] = [:]
     if let side = previewSide, let split {
       let frames = split.frames(in: bounds)
@@ -159,22 +166,24 @@ final class BrowserSurfaceHostView: NSView {
       for id in split.tabIDs {
         let survivor = id == survivorID
         next[id] = PagePlacement(frame: survivor ? (side == .left ? frames.right : frames.left)
-          : collapsedFrame(for: id), cropOnly: true, toolbarVisible: survivor)
+          : collapsedFrame(for: id), cropOnly: true, toolbarVisible: survivor,
+          roundedEdge: id == split.leftTabID ? .right : .left)
       }
     } else if let side = previewSide, let selectedTabID {
       let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
         maximumSurvivorWidth: pages[selectedTabID]?.surface.frame.width ?? bounds.width)
       preview.frame = frames.target
       divider.isHidden = true
-      next[selectedTabID] = PagePlacement(frame: frames.survivor, cropOnly: true)
+      next[selectedTabID] = PagePlacement(frame: frames.survivor, cropOnly: true,
+        roundedEdge: side == .left ? .left : .right)
     } else if let split {
       var shown = split
       shown.fraction = resizingFraction ?? split.fraction
       let frames = shown.frames(in: bounds)
       divider.frame = frames.divider
       divider.isHidden = false
-      next[split.leftTabID] = PagePlacement(frame: frames.left, cropOnly: false)
-      next[split.rightTabID] = PagePlacement(frame: frames.right, cropOnly: false)
+      next[split.leftTabID] = PagePlacement(frame: frames.left, cropOnly: false, roundedEdge: .right)
+      next[split.rightTabID] = PagePlacement(frame: frames.right, cropOnly: false, roundedEdge: .left)
     } else {
       divider.isHidden = true
       if let selectedTabID, pages[selectedTabID] != nil {
@@ -250,7 +259,10 @@ final class BrowserSurfaceHostView: NSView {
         return
       }
       let frame = interpolatedFrame(from: initial.frame, to: target.frame, amount: amount)
-      result[id] = PagePlacement(frame: frame, cropOnly: true, toolbarVisible: target.toolbarVisible)
+      // While exiting a split, keep the moving inner edge rounded until it
+      // reaches Main View's outside boundary, where the outer clip takes over.
+      result[id] = PagePlacement(frame: frame, cropOnly: true, toolbarVisible: target.toolbarVisible,
+        roundedEdge: target.roundedEdge == .none ? initial.roundedEdge : target.roundedEdge)
     }
   }
 
@@ -270,12 +282,27 @@ final class BrowserSurfaceHostView: NSView {
         page.hide(animated: animatedVisibility)
         continue
       }
+      applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
                   cropOnly: placement.cropOnly, toolbarVisible: placement.toolbarVisible && !isCovered,
                   toolbarLayoutFrame: appearingToolbarFrames[id] ?? placement.frame,
                   animatedVisibility: animatedVisibility)
     }
     placements = next
+  }
+
+  /// Main View owns the shell's outside corners. This splitter host owns only
+  /// the two corners on each pane's divider-facing edge, including previews.
+  /// A single page has no extra rounded mask. Chromium receives rectangular
+  /// layout bounds only; its layer and bridge never receive a clipping policy.
+  private func applyCornerClipping(to viewport: NSView, roundedEdge: RoundedEdge) {
+    guard let layer = viewport.layer else { return }
+    layer.cornerRadius = roundedEdge == .none ? 0 : BrowserLayout.contentCornerRadius
+    switch roundedEdge {
+    case .none: layer.maskedCorners = []
+    case .left: layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+    case .right: layer.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+    }
   }
 
   override init(frame frameRect: NSRect) {
@@ -287,7 +314,8 @@ final class BrowserSurfaceHostView: NSView {
     preview.blendingMode = .withinWindow
     preview.state = .active
     preview.wantsLayer = true
-    preview.layer?.cornerRadius = BrowserLayout.contentCornerRadius
+    preview.layer?.cornerCurve = .continuous
+    preview.layer?.masksToBounds = true
     preview.layer?.borderWidth = 1.5
     preview.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
     preview.isHidden = true
@@ -312,6 +340,23 @@ final class BrowserSurfaceHostView: NSView {
   deinit {
     presentationAnimationTimer?.invalidate()
     if let paneClickMonitor { NSEvent.removeMonitor(paneClickMonitor) }
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+/// Splitter-owned rectangular crop. The host assigns divider-facing rounded
+/// edges from its placement map without changing the Chromium child hierarchy.
+private final class BrowserPageViewportView: NSView {
+  override var isFlipped: Bool { true }
+
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    wantsLayer = true
+    layer?.cornerCurve = .continuous
+    layer?.masksToBounds = true
+    autoresizesSubviews = false
   }
 
   @available(*, unavailable)

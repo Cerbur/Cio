@@ -2174,7 +2174,12 @@ changing the split never rebinds a shared editor, creates a second toolbar for t
 same tab, or reparents its Chromium surface.
 
 `BrowserSurfaceHostView` drives page placement, content cropping, split divider
-geometry and visibility with one placement map and animation clock. Preview only
+geometry and visibility with one placement map and animation clock. It creates
+the stable outer viewports and owns their clipping policy: single pages have no
+extra rounded mask; left panes round only their right corners, and right panes
+round only their left corners. Main View provides the outside rounded boundary.
+Split previews use the same divider-facing corner policy. Chromium receives only
+rectangular layout sizes and has no knowledge of corner clipping. Preview only
 changes the outer viewport; Chromium resizes when the drop settles. Divider drags
 resize it immediately. A surviving page only reflows. Switching between two
 single-page tabs swaps their existing toolbar instances in place without entry
