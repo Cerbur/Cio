@@ -15,9 +15,13 @@ enum BrowserLayout {
   static let sidebarContentInset: CGFloat = 12
   static let sidebarTopPinSpacing: CGFloat = 9
   static let sidebarTabRowHeight: CGFloat = 36
-  static let sidebarPinScrollOverlap: CGFloat = 64
-  static let sidebarScrollTransitionHeight: CGFloat = 80
-  static let sidebarScrollBlurRadius: CGFloat = 24
+  static let sidebarSpaceHeaderSpacing: CGFloat = 4
+  static let sidebarSpaceHeaderHeight = sidebarTopPinSpacing + sidebarTabRowHeight + sidebarSpaceHeaderSpacing
+  // Blur starts at the Space title row's bottom edge; its top edge is hidden.
+  static let sidebarScrollHiddenBoundary = sidebarTopPinSpacing
+  static let sidebarScrollTransitionHeight = sidebarTabRowHeight
+  static let sidebarScrollFadeHeight = sidebarScrollTransitionHeight
+  static let sidebarScrollBlurRadius: CGFloat = 18
   static let sidebarSectionDividerHeight: CGFloat = 16
   static let sidebarEmptyPinDropHeight: CGFloat = 8
   static let chromeControlSize: CGFloat = 36

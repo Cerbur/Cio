@@ -86,6 +86,7 @@ final class SidebarTabDrag {
   @ObservationIgnored var bounds = CGRect.zero
   @ObservationIgnored var topPinFrame = CGRect.zero
   @ObservationIgnored var spaceFrame = CGRect.zero
+  @ObservationIgnored var spaceHeaderFrame = CGRect.zero
   @ObservationIgnored var reduceMotion = false
   @ObservationIgnored private(set) var autoscrollSpeed: CGFloat = 0
 
@@ -344,9 +345,8 @@ final class SidebarTabDrag {
   // MARK: - Targeting
 
   private var visibleSpaceFrame: CGRect {
-    // Use the same boundary as the shield, including the transition below pins.
-    let top = max(spaceFrame.minY + BrowserLayout.sidebarScrollTransitionHeight,
-                  topPinFrame.maxY)
+    // Scrolling tabs beneath the fixed Space block cannot be selected or lifted.
+    let top = max(spaceFrame.minY, spaceHeaderFrame.maxY)
     return CGRect(
       x: spaceFrame.minX, y: top,
       width: spaceFrame.width, height: max(0, spaceFrame.maxY - top))

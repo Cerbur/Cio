@@ -2,25 +2,26 @@
 #include <SwiftUI/SwiftUI_Metal.h>
 using namespace metal;
 
-// Blur the actual scrolling layer, increasing the radius toward the fixed pins.
-// Two separable passes keep sampling confined to the small transition band.
+// Increase blur from the fixed Space title row's bottom edge to its top edge.
+// The viewport fades every scrolling surface, including glass and borders.
 [[ stitchable ]] half4 sidebarScrollEdgeBlur(
     float2 position, SwiftUI::Layer layer, float originY,
     float transitionHeight, float maxRadius, float2 axis) {
   float y = position.y + originY;
-  float progress = 1.0 - smoothstep(0.0, transitionHeight, y);
-  float radius = maxRadius * progress;
+  float progress = clamp(y / transitionHeight, 0.0, 1.0);
+  float eased = progress * progress * progress * (progress * (progress * 6.0 - 15.0) + 10.0);
+  float radius = maxRadius * (1.0 - eased);
   if (radius < 0.01) return layer.sample(position);
 
-  constexpr float weights[9] = {1, 8, 28, 56, 70, 56, 28, 8, 1};
+  // Dense, truncated Gaussian sampling avoids the separated copies of text
+  // produced by widely spaced taps. radius covers three standard deviations.
   half4 color = half4(0);
-  for (int i = 0; i < 9; ++i) {
-    float2 offset = axis * (float(i - 4) * radius / 4.0);
-    color += layer.sample(position + offset) * half(weights[i] / 256.0);
+  float totalWeight = 0.0;
+  for (int i = -16; i <= 16; ++i) {
+    float distance = float(i) / 16.0;
+    float weight = exp(-4.5 * distance * distance);
+    color += layer.sample(position + axis * (distance * radius)) * half(weight);
+    totalWeight += weight;
   }
-  if (axis.y > 0) {
-    // Fade after the final pass, leaving the lower edge crisp.
-    color *= half(smoothstep(transitionHeight * 0.08, transitionHeight * 0.75, y));
-  }
-  return color;
+  return color / half(totalWeight);
 }
