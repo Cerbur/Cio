@@ -105,7 +105,9 @@ struct TabSidebarView: View {
   @State private var isClearHovered = false
   @State private var hoveredNewTabSpaceID: UUID?
   @State private var clearingSpaceID: UUID?
-  @State private var collapsedSpaceIDs: Set<UUID> = []
+  // Collapse hides a snapshot of the pins outside Stage, not every pin that
+  // becomes inactive later. Pins added after that snapshot stay visible.
+  @State private var hiddenSpacePinIDs: [UUID: Set<UUID>] = [:]
   @State private var dumpAngle: Double = 0
   @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -167,6 +169,16 @@ struct TabSidebarView: View {
         Task { @MainActor in tabDrag.gestureDidEnd() }
       }
       .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
+      .onChange(of: spacePinMembership) { _, membership in
+        for spaceID in Array(hiddenSpacePinIDs.keys) {
+          if let pinIDs = membership[spaceID] {
+            // Forget pins that leave so moving them back reveals them too.
+            hiddenSpacePinIDs[spaceID]?.formIntersection(pinIDs)
+          } else {
+            hiddenSpacePinIDs.removeValue(forKey: spaceID)
+          }
+        }
+      }
       .onChange(of: isSidebarHovered) { _, isHovered in
         if !isHovered {
           hoveredNewTabSpaceID = nil
@@ -279,11 +291,15 @@ struct TabSidebarView: View {
     // Keep the viewport behind the header: an inset would clip the blurred
     // content at the header's bottom before it could reach the fade boundary.
     .overlay(alignment: .top) {
-      SidebarSpaceRow(space: space, isCollapsed: collapsedSpaceIDs.contains(space.id),
+      SidebarSpaceRow(space: space, isCollapsed: hiddenSpacePinIDs[space.id] != nil,
                       isTabDragActive: tabDrag.tabID != nil) {
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) {
-          if !collapsedSpaceIDs.insert(space.id).inserted {
-            collapsedSpaceIDs.remove(space.id)
+          if hiddenSpacePinIDs[space.id] != nil {
+            hiddenSpacePinIDs.removeValue(forKey: space.id)
+          } else {
+            let stageID = space.id == workspace.selectedSpaceID ? workspace.selectedTabID : space.selectedTabID
+            let stageIDs = Set(stageID.map { workspace.splitGroup(containing: $0)?.tabIDs ?? [$0] } ?? [])
+            hiddenSpacePinIDs[space.id] = Set(space.pinnedTabIDs).subtracting(stageIDs)
           }
         }
       } onRename: {
@@ -361,13 +377,13 @@ struct TabSidebarView: View {
     .help("Workspace pins stay visible when you switch Spaces")
   }
 
+  private var spacePinMembership: [UUID: Set<UUID>] {
+    Dictionary(uniqueKeysWithValues: workspace.spaces.map { ($0.id, Set($0.pinnedTabIDs)) })
+  }
+
   private func visiblePinnedTabs(in space: BrowserSpace) -> [BrowserTab] {
-    let tabs = space.pinnedTabIDs.compactMap(workspace.tab(withID:))
-    guard collapsedSpaceIDs.contains(space.id) else { return tabs }
-    let stableID = space.id == workspace.selectedSpaceID ? workspace.selectedTabID : space.selectedTabID
-    guard let stableID, space.pinnedTabIDs.contains(stableID) else { return [] }
-    let visibleIDs = Set(workspace.splitGroup(containing: stableID)?.tabIDs ?? [stableID])
-    return tabs.filter { visibleIDs.contains($0.id) }
+    let hiddenIDs = hiddenSpacePinIDs[space.id] ?? []
+    return space.pinnedTabIDs.filter { !hiddenIDs.contains($0) }.compactMap(workspace.tab(withID:))
   }
 
   /// While a tab is lifted it leaves its tier, and the tier it would land in
