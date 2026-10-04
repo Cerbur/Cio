@@ -21,7 +21,7 @@ import SwiftUI
 struct BrowserCommands: Commands {
   /// The workspace/domain owner. Stable for the application's lifetime.
   @ObservedObject var workspace: BrowserWorkspaceStore
-  let runtime: ApplicationRuntime
+  @ObservedObject var runtime: ApplicationRuntime
 
   var body: some Commands {
     CommandGroup(after: .newItem) {
@@ -59,6 +59,15 @@ struct BrowserCommands: Commands {
       }
     }
 
+    CommandGroup(after: .toolbar) {
+      Button("Toggle Sidebar") {
+        guard runtime.presentedInternalPanel == nil else { return }
+        NotificationCenter.default.post(name: .browserToggleSidebar, object: workspace)
+      }
+      .keyboardShortcut("s", modifiers: .command)
+      .disabled(runtime.presentedInternalPanel != nil)
+    }
+
     // Tabs. A dedicated menu keeps the tab lifecycle commands together and keeps
     // them away from AppKit's own File > Close item, which is removed in
     // AppDelegate so that Command-W cannot mean "close the window" while tabs
@@ -74,6 +83,15 @@ struct BrowserCommands: Commands {
       Button("Reopen Closed Tab") { workspace.reopenLastClosedTab() }
         .keyboardShortcut("t", modifiers: [.command, .shift])
         .disabled(!workspace.canReopenClosedTab)
+
+      Button(selectedIsSpacePin ? "Make Temporary" : "Pin in This Space") {
+        guard runtime.presentedInternalPanel == nil, let id = workspace.selectedTabID,
+              workspace.spacePinToggleTarget(for: id) != nil else { return }
+        NotificationCenter.default.post(name: .browserToggleSpacePin, object: workspace,
+                                        userInfo: ["tabID": id])
+      }
+      .keyboardShortcut("d", modifiers: .command)
+      .disabled(runtime.presentedInternalPanel != nil || !canToggleSelectedSpacePin)
 
       Divider()
 
@@ -95,6 +113,14 @@ struct BrowserCommands: Commands {
 
   private var selectedIsLoading: Bool {
     workspace.selectedSession?.isLoading ?? false
+  }
+
+  private var selectedIsSpacePin: Bool {
+    workspace.selectedTabID.map { workspace.selectedSpace?.pinnedTabIDs.contains($0) == true } ?? false
+  }
+
+  private var canToggleSelectedSpacePin: Bool {
+    workspace.selectedTabID.flatMap { workspace.spacePinToggleTarget(for: $0) } != nil
   }
 }
 

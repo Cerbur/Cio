@@ -31,6 +31,7 @@ final class BrowserMainViewController: NSViewController {
   })
   var onToolbarLayoutChange: (() -> Void)?
   private var panelObservation: AnyCancellable?
+  private var sidebarCommandObservation: AnyCancellable?
   private var sidebarCollapseObservation: NSKeyValueObservation?
   private var sidebarWasCollapsedBeforeLibrary = false
   private var wasShowingLibrary = false
@@ -111,6 +112,13 @@ final class BrowserMainViewController: NSViewController {
     panelObservation = runtime.$presentedInternalPanel.receive(on: RunLoop.main).sink { [weak self] panel in
       MainActor.assumeIsolated { self?.showSection(panel) }
     }
+    sidebarCommandObservation = NotificationCenter.default.publisher(
+      for: .browserToggleSidebar, object: runtime.workspaceStore).sink { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self, self.runtime.presentedInternalPanel == nil else { return }
+          self.toggleSpaceSidebar()
+        }
+      }
   }
 
   override func viewDidAppear() {
@@ -184,6 +192,10 @@ final class BrowserMainViewController: NSViewController {
     view.addSubview(overlay, positioned: .above, relativeTo: nil)
     dragOverlay = overlay
     overlayDrag = drag
+    drag.isStableTab = { [weak workspace = runtime.workspaceStore] id in
+      guard let workspace, !workspace.isSpotlightPresented, let selectedID = workspace.selectedTabID else { return false }
+      return workspace.splitGroup(containing: id)?.contains(selectedID) ?? (id == selectedID)
+    }
     drag.externalBounds = { [weak self] in
       guard let self else { return .zero }
       return self.sidebarItem.viewController.view.convert(self.view.bounds, from: self.view)

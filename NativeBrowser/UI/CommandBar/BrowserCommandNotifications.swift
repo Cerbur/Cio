@@ -2,8 +2,8 @@
 //  BrowserCommandNotifications.swift
 //  NativeBrowser
 //
-//  The two notifications the browser command layer and the address field use to
-//  coordinate focus (⌘L, Milestone 2 section 13).
+//  Notifications coordinating browser menu commands with their UI owners,
+//  including address focus (⌘L) and Space's sidebar/pin toggles (⌘S/⌘D).
 //
 //  AppKit menu key equivalents are dispatched by NSMenu before the first
 //  responder sees the event, so ⌘L reaches the application even while the
@@ -15,6 +15,10 @@
 import Foundation
 
 extension Notification.Name {
+  /// Space-only menu commands target the window/sidebar for this workspace.
+  static let browserToggleSidebar = Notification.Name("NativeBrowser.toggleSidebar")
+  static let browserToggleSpacePin = Notification.Name("NativeBrowser.toggleSpacePin")
+
   /// Posted by a browser command (⌘L) to ask the address field to take focus.
   /// The notification's object is the BrowserSession whose field should focus.
   static let browserFocusAddressField = Notification.Name("NativeBrowser.focusAddressField")

@@ -22,8 +22,7 @@ enum BrowserLayout {
   static let sidebarScrollTransitionHeight = sidebarTabRowHeight
   static let sidebarScrollFadeHeight = sidebarScrollTransitionHeight
   static let sidebarScrollBlurRadius: CGFloat = 18
-  static let sidebarSectionDividerHeight: CGFloat = 16
-  static let sidebarEmptyPinDropHeight: CGFloat = 8
+  static let sidebarRowSpacing: CGFloat = 5
   static let chromeControlSize: CGFloat = 36
   static let chromeControlSpacing: CGFloat = 10
   static let pageControlInset: CGFloat = 7

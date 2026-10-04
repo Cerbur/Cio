@@ -65,6 +65,8 @@ final class SidebarTabDrag {
   private(set) var tabID: UUID?
   private(set) var phase = Phase.lifted
   private(set) var isLifted = false
+  /// Captured at lift so the Tab can preserve its initial material treatment.
+  private(set) var startedFromStableTab = false
   /// Where the lifted tab would land; that tier shows a gap there.
   private(set) var target: SidebarTabDropTarget?
   private(set) var style = Style.row
@@ -83,6 +85,7 @@ final class SidebarTabDrag {
   @ObservationIgnored var onPointerMove: ((UUID, CGPoint) -> Void)?
   @ObservationIgnored var onSplitDrop: ((UUID) -> Bool)?
   @ObservationIgnored var onPreviewEnd: (() -> Void)?
+  @ObservationIgnored var isStableTab: ((UUID) -> Bool)?
   @ObservationIgnored var bounds = CGRect.zero
   @ObservationIgnored var topPinFrame = CGRect.zero
   @ObservationIgnored var spaceFrame = CGRect.zero
@@ -104,6 +107,7 @@ final class SidebarTabDrag {
   }
 
   @ObservationIgnored private var items: [ItemKey: Item] = [:]
+  @ObservationIgnored private var panelRows: [SpaceTabPanelRow.ID: (row: SpaceTabPanelRow, frame: CGRect, token: UUID)] = [:]
   @ObservationIgnored private var tierFrames: [WorkspaceCollection.TabTier: CGRect] = [:]
   @ObservationIgnored private var rowSize: CGSize?
   @ObservationIgnored private var layout: SidebarTabDragLayout?
@@ -116,6 +120,7 @@ final class SidebarTabDrag {
   @ObservationIgnored private var homeTarget: SidebarTabDropTarget?
   @ObservationIgnored private var landingTier: WorkspaceCollection.TabTier?
   @ObservationIgnored private var landingFlight = 0
+  @ObservationIgnored private var programmaticLandingPending = false
   @ObservationIgnored private var ignoresGesture = false
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var lastDrop: (tabID: UUID, time: TimeInterval)?
@@ -136,12 +141,55 @@ final class SidebarTabDrag {
     if tier != .global && !isCompact { rowSize = frame.size }
     // Frames arrive while the tier is still animating; each one re-aims the
     // landing so the block meets the slot where it comes to rest.
-    if id == tabID, phase == .landing, tier == landingTier { land(in: frame, style: Style(tier)) }
+    if id == tabID, phase == .landing, tier == landingTier, !programmaticLandingPending {
+      land(in: frame, style: Style(tier))
+    }
   }
 
   func unregister(_ id: UUID, in tier: WorkspaceCollection.TabTier, token: UUID) {
     let key = ItemKey(id: id, tier: tier)
     if items[key]?.token == token { items[key] = nil }
+  }
+
+  /// Rows supply geometry and membership as a unit. A row that changes tier
+  /// retains its identity, so discard its old registration before reattaching.
+  func register(_ row: SpaceTabPanelRow, frame: CGRect, token: UUID) {
+    if let previous = panelRows[row.id], previous.row.tier != row.tier,
+       let id = previous.row.draggableTabID, let tier = previous.row.tier {
+      unregister(id, in: tier, token: previous.token)
+    }
+    panelRows[row.id] = (row, frame, token)
+    if let id = row.draggableTabID, let tier = row.tier {
+      register(id, in: tier, frame: frame, token: token)
+    }
+    switch row.id {
+    case .divider(let spaceID), .newTab(let spaceID), .footer(let spaceID):
+      updatePanelTierFrames(in: spaceID)
+    default: break
+    }
+  }
+
+  func unregister(_ row: SpaceTabPanelRow, token: UUID) {
+    guard let previous = panelRows[row.id], previous.token == token else { return }
+    if let id = previous.row.draggableTabID, let tier = previous.row.tier {
+      unregister(id, in: tier, token: token)
+    }
+    panelRows[row.id] = nil
+  }
+
+  private func updatePanelTierFrames(in spaceID: UUID) {
+    if let divider = panelRows[.divider(spaceID)]?.frame {
+      let top = spaceHeaderFrame.maxY
+      // The divider's upper half remains a pin drop target even with no
+      // visible pins. An empty tier needs no extra blank row in the panel.
+      let bottom = max(top, divider.midY)
+      tierFrames[.space(spaceID)] = CGRect(x: divider.minX, y: top, width: divider.width, height: bottom - top)
+    }
+    if let newTab = panelRows[.newTab(spaceID)]?.frame, let footer = panelRows[.footer(spaceID)]?.frame {
+      let top = newTab.maxY + BrowserLayout.sidebarRowSpacing
+      tierFrames[.temporary(spaceID)] = CGRect(x: newTab.minX, y: top, width: newTab.width,
+                                              height: max(0, footer.maxY - top))
+    }
   }
 
   /// A space tab tier's list. The bottom of space pin's list divides its
@@ -247,6 +295,7 @@ final class SidebarTabDrag {
     finish(animated: false)
     generation += 1
     let id = key.id
+    startedFromStableTab = isStableTab?(id) ?? false
     let tierIDs = layout.tabIDs(in: key.tier)
     let next = tierIDs.firstIndex(of: id).flatMap { index in
       index + 1 < tierIDs.count ? tierIDs[index + 1] : nil
@@ -279,6 +328,49 @@ final class SidebarTabDrag {
   }
 
   // MARK: - Landing
+
+  /// Menu and keyboard moves use the same floating block and landing spring
+  /// as a pointer drop, starting at the tab's existing sidebar frame.
+  func animateMove(_ id: UUID, from source: WorkspaceCollection.TabTier,
+                   to target: SidebarTabDropTarget,
+                   move: @escaping (UUID, SidebarTabDropTarget) -> Bool) {
+    guard !isDragging else { return }
+    finish(animated: false)
+    guard !reduceMotion, let frame = frame(of: id, in: source),
+          frame.intersects(visibleSpaceFrame) else {
+      withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) { _ = move(id, target) }
+      return
+    }
+    generation += 1
+    let generation = generation
+    startedFromStableTab = isStableTab?(id) ?? false
+    sourceTier = source
+    sourceSize = frame.size
+    size = frame.size
+    style = Style(source)
+    grab = CGPoint(x: 0.5, y: 0.5)
+    anchor = CGPoint(x: frame.midX, y: frame.midY)
+    phase = .landing
+    tabID = id
+    isLifted = true
+    programmaticLandingPending = true
+    // Commit immediately so repeated shortcuts always toggle the latest tier.
+    // Keep the overlay at its origin for its first frame before aiming it at
+    // the destination reported by the updated list.
+    var moved = false
+    withAnimation(.smooth(duration: 0.28)) { moved = move(id, target) }
+    landingTier = moved ? target.tier : source
+    Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(16))
+      guard let self, self.generation == generation, self.tabID == id else { return }
+      self.programmaticLandingPending = false
+      if let frame = self.frame(of: id, in: moved ? target.tier : source) {
+        self.land(in: frame, style: Style(moved ? target.tier : source))
+      } else {
+        self.settle(id, in: moved ? target.tier : source)
+      }
+    }
+  }
 
   /// Waits for the tab's view in `tier` to report its new frame.
   private func settle(_ id: UUID, in tier: WorkspaceCollection.TabTier) {
@@ -330,10 +422,12 @@ final class SidebarTabDrag {
     guard tabID != nil else { return }
     onPreviewEnd?()
     landingTier = nil
+    programmaticLandingPending = false
     landingFlight += 1
     setAutoscroll(0)
-    var transaction = Transaction(animation: animated ? .easeOut(duration: 0.18) : nil)
-    transaction.disablesAnimations = !animated
+    let animateHandoff = animated && !reduceMotion
+    var transaction = Transaction(animation: animateHandoff ? .easeOut(duration: 0.18) : nil)
+    transaction.disablesAnimations = !animateHandoff
     withTransaction(transaction) {
       tabID = nil
       target = nil
@@ -400,7 +494,7 @@ final class SidebarTabDrag {
   private func blockSize(for style: Style) -> CGSize {
     if style == Style(sourceTier) { return sourceSize }
     switch style {
-    case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: 36)
+    case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: BrowserLayout.sidebarTabRowHeight)
     case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 40.5)
     case .card: return CGSize(width: 140, height: 140 * 1.4)
     }
@@ -505,6 +599,8 @@ struct SidebarTabDragItem: ViewModifier {
   func body(content: Content) -> some View {
     content
       .opacity(drag.sourceOpacity(of: tabID))
+      // Visibility is a container handoff; the Tab owns material transitions.
+      .animation(nil, value: drag.sourceOpacity(of: tabID))
       .onSidebarFrameChange { frame in
         lastFrame.value = frame
         drag.register(tabID, in: tier, frame: frame, token: token, isCompact: isCompact)
@@ -567,13 +663,17 @@ struct SidebarTabDragOverlay<Label: View>: View {
   var body: some View {
     GlassEffectContainer {
       if let id = drag.tabID {
-        SidebarTabGlassBlock(
-          size: drag.size, grab: drag.grab, isLifted: drag.isLifted && !reduceMotion,
-          glassID: id, namespace: glassNamespace
-        ) {
+        let presentation = SidebarTabPresentation(
+          placement: drag.style == .card ? .splitPreview : (drag.style == .tile ? .topPin : .liftedRow),
+          isDragged: true, isLifted: drag.isLifted,
+          preservesGlassContinuity: drag.startedFromStableTab, grab: drag.grab)
+        SidebarFloatingRowContainer(size: drag.size, grab: drag.grab) {
           label(id, drag.style)
+            .modifier(SidebarTabSurface(usesScrollEdge: false))
+            .glassEffectID(id, in: glassNamespace)
+            .environment(\.sidebarTabPresentation, presentation)
         }
-        .glassEffectTransition(reduceMotion ? .identity : .materialize)
+        .transition(presentation.transition)
         // Pointer updates have no implicit animation. Only the model's explicit
         // morph/lift/landing transactions animate the block.
         .position(drag.anchor)
@@ -591,13 +691,10 @@ struct SidebarTabDragOverlay<Label: View>: View {
   }
 }
 
-/// A lifted tab: the same favicon and title on a free-floating glass block.
-private struct SidebarTabGlassBlock<Content: View>: View, Animatable {
+/// Detached row geometry. The Tab inside owns the glass/lift presentation.
+private struct SidebarFloatingRowContainer<Content: View>: View, Animatable {
   nonisolated var size: CGSize
   let grab: CGPoint
-  let isLifted: Bool
-  let glassID: UUID
-  let namespace: Namespace.ID
   @ViewBuilder let content: Content
 
   nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
@@ -606,18 +703,9 @@ private struct SidebarTabGlassBlock<Content: View>: View, Animatable {
   }
 
   var body: some View {
-    let shape = SidebarTabAppearance.glassShape
     content
       // The material sees the interpolated frame, not an intrinsic-size switch.
       .frame(width: size.width, height: size.height)
-      .clipShape(shape)
-      .glassEffect(.regular, in: shape)
-      .glassEffectID(glassID, in: namespace)
-      .scaleEffect(isLifted ? 1.04 : 1, anchor: UnitPoint(x: grab.x, y: grab.y))
-      .shadow(
-        color: .black.opacity(isLifted ? 0.2 : 0.06),
-        radius: isLifted ? 16 : 5,
-        y: isLifted ? 9 : 2)
       // Use the same interpolated size for the frame and fractional grab.
       .offset(x: (0.5 - grab.x) * size.width, y: (0.5 - grab.y) * size.height)
   }

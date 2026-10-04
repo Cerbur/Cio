@@ -9,11 +9,6 @@
 import AppKit
 import SwiftUI
 
-enum SidebarTabAppearance {
-  static let faviconSize: CGFloat = 18
-  static let glassShape = RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius, style: .continuous)
-}
-
 @MainActor
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
@@ -163,6 +158,9 @@ struct TabSidebarView: View {
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
       .onAppear { chromeLayout.attachTabDrag(tabDrag) }
+      .onReceive(NotificationCenter.default.publisher(for: .browserToggleSpacePin, object: workspace)) { notification in
+        if let id = notification.userInfo?["tabID"] as? UUID { toggleSpacePin(id) }
+      }
       .onChange(of: isTabDragGestureActive) { _, isActive in
         guard !isActive else { return }
         // Runs after `onEnded`, so only a cancelled gesture is still dragging.
@@ -206,79 +204,17 @@ struct TabSidebarView: View {
       .filter { !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) }
       .compactMap(workspace.tab(withID:))
     let clearableCount = temporaryTabs.filter { $0.id != workspace.selectedTabID }.count
-    let pinSlots = slots(pinnedTabs, tier: .space(space.id))
+    let panelRows = SpaceTabPanelRow.make(
+      spaceID: space.id, pinnedIDs: pinnedTabs.map(\.id), temporaryIDs: temporaryTabs.map(\.id),
+      groups: space.splitGroups, liftedID: tabDrag.liftedTabID,
+      drop: tabDrag.target.map { .init(tier: $0.tier, before: $0.before) })
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
 
     return ScrollView {
-      VStack(alignment: .leading, spacing: 4) {
-        tierRows(pinSlots, tier: .space(space.id))
-
-        HStack(spacing: 8) {
-          VStack(spacing: 0) { Divider() }
-            .frame(maxWidth: .infinity)
-          if clearableCount > 0 && (isSidebarHovered || clearingSpaceID == space.id) {
-            Button {
-              animateClear(in: space.id)
-            } label: {
-              ClearTrashIcon(isLidOpen: isClearHovered,
-                             dumpAngle: clearingSpaceID == space.id ? dumpAngle : 0)
-                .frame(width: 28, height: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Clear")
-            .help("Close idle tabs except the active tab")
-            .allowsHitTesting(clearingSpaceID == nil)
-            .onHover { isHovered in
-              withAnimation(.easeOut(duration: 0.18)) { isClearHovered = isHovered }
-            }
-          }
-        }
-        .frame(height: BrowserLayout.sidebarSectionDividerHeight)
-        .padding(.horizontal, 9)
-        .modifier(SidebarScrollEdge())
-
-        Button {
-          workspace.selectSpace(id: space.id)
-          workspace.presentSpotlight()
-        } label: {
-          Label("New Tab", systemImage: "plus")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .frame(height: 34)
-            .contentShape(SidebarTabAppearance.glassShape)
-            .modifier(SidebarScrollEdge())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
-        .background {
-          if spotlightIsActive {
-            Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
-              .modifier(SidebarScrollEdgeSurface())
-          } else if newTabIsHovered {
-            SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
-              .modifier(SidebarScrollEdge())
-          }
-        }
-        .overlay {
-          if spotlightIsActive {
-            SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
-              .modifier(SidebarScrollEdge())
-          }
-        }
-        .onHover { isHovered in
-          if isHovered {
-            hoveredNewTabSpaceID = space.id
-          } else if hoveredNewTabSpaceID == space.id {
-            hoveredNewTabSpaceID = nil
-          }
-        }
-        .help("Open Spotlight to create a tab")
-        .accessibilityAddTraits(spotlightIsActive ? [.isSelected] : [])
-
-        tierRows(slots(temporaryTabs, tier: .temporary(space.id)), tier: .temporary(space.id))
+      SpaceTabPanel(rows: panelRows, drag: tabDrag) { panelRow in
+        panelElement(panelRow, space: space, clearableCount: clearableCount,
+                     spotlightIsActive: spotlightIsActive, newTabIsHovered: newTabIsHovered)
       }
       .padding(.horizontal, BrowserLayout.sidebarContentInset)
       .padding(.bottom, 18)
@@ -314,6 +250,76 @@ struct TabSidebarView: View {
     }
     .coordinateSpace(name: SidebarScrollEdge.coordinateSpace)
     .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
+  }
+
+  @ViewBuilder
+  private func panelElement(_ container: SpaceTabPanelRow, space: BrowserSpace,
+                            clearableCount: Int, spotlightIsActive: Bool, newTabIsHovered: Bool) -> some View {
+    if let group = container.splitGroup, let tier = container.tier {
+      splitTabElement(group, tier: tier)
+    } else if let id = container.draggableTabID, let tab = workspace.tab(withID: id), let tier = container.tier {
+      tabElement(tab, tier: tier)
+    } else if container.elements == [.divider] {
+      dividerElement(in: space, clearableCount: clearableCount)
+    } else if container.elements == [.newTab] {
+      newTabElement(in: space, spotlightIsActive: spotlightIsActive, newTabIsHovered: newTabIsHovered)
+    } else {
+      Color.clear
+    }
+  }
+
+  private func dividerElement(in space: BrowserSpace, clearableCount: Int) -> some View {
+    HStack(spacing: 8) {
+      VStack(spacing: 0) { Divider() }
+        .frame(maxWidth: .infinity)
+      if clearableCount > 0 && (isSidebarHovered || clearingSpaceID == space.id) {
+        Button {
+          animateClear(in: space.id)
+        } label: {
+          ClearTrashIcon(isLidOpen: isClearHovered,
+                         dumpAngle: clearingSpaceID == space.id ? dumpAngle : 0)
+            .frame(width: 28, height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("Clear")
+        .help("Close idle tabs except the active tab")
+        .allowsHitTesting(clearingSpaceID == nil)
+        .onHover { isHovered in
+          withAnimation(.easeOut(duration: 0.18)) { isClearHovered = isHovered }
+        }
+      }
+    }
+    .frame(maxHeight: .infinity)
+    .padding(.horizontal, 9)
+    .modifier(SidebarScrollEdge())
+  }
+
+  private func newTabElement(in space: BrowserSpace, spotlightIsActive: Bool, newTabIsHovered: Bool) -> some View {
+    Button {
+      workspace.selectSpace(id: space.id)
+      workspace.presentSpotlight()
+    } label: {
+      Label("New Tab", systemImage: "plus")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .frame(maxHeight: .infinity)
+        .contentShape(SidebarTabAppearance.glassShape)
+        .modifier(SidebarScrollEdge())
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
+    .modifier(SidebarTabSurface(isStable: spotlightIsActive, isHovered: newTabIsHovered))
+    .onHover { isHovered in
+      if isHovered {
+        hoveredNewTabSpaceID = space.id
+      } else if hoveredNewTabSpaceID == space.id {
+        hoveredNewTabSpaceID = nil
+      }
+    }
+    .help("Open Spotlight to create a tab")
+    .accessibilityAddTraits(spotlightIsActive ? [.isSelected] : [])
   }
 
   private func animateClear(in spaceID: UUID) {
@@ -356,7 +362,9 @@ struct TabSidebarView: View {
             }
             .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
           case .group(let group):
-            splitRow(group, tier: .global)
+            splitTabElement(group, tier: .global)
+              .frame(height: topPinHeight)
+              .modifier(SidebarTabDragItem(drag: tabDrag, tabID: group.leftTabID, tier: .global))
           case .gap:
             Color.clear.frame(height: topPinHeight)
           }
@@ -413,54 +421,25 @@ struct TabSidebarView: View {
     return result
   }
 
-  private func tierRows(_ slots: [SidebarSlot], tier: WorkspaceCollection.TabTier) -> some View {
-    LazyVStack(spacing: 5) {
-      ForEach(slots) { slot in
-        switch slot {
-        case .tab(let tab):
-          row(tab, tier: tier)
-        case .group(let group):
-          splitRow(group, tier: tier)
-        case .gap:
-          Color.clear.frame(height: BrowserLayout.sidebarTabRowHeight)
-        }
-      }
-      if case .space = tier {
-        if slots.isEmpty {
-          // Keep an empty pin tier reachable as a drop target.
-          Color.clear.frame(height: BrowserLayout.sidebarEmptyPinDropHeight)
-        }
-      } else {
-        Color.clear.frame(height: slots.isEmpty ? 16 : 8)
-      }
-    }
-    .onSidebarFrameChange { tabDrag.register(tier, frame: $0) }
-    .animation(.smooth(duration: 0.28), value: slots.map(\.id))
-  }
-
   @ViewBuilder
-  private func splitRow(_ group: BrowserSplitLayout, tier: WorkspaceCollection.TabTier) -> some View {
+  private func splitTabElement(_ group: BrowserSplitLayout, tier: WorkspaceCollection.TabTier) -> some View {
     if let left = workspace.tab(withID: group.leftTabID), let right = workspace.tab(withID: group.rightTabID) {
       let focusedID = group.focusedTabID ?? group.leftTabID
       let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
-      let height: CGFloat? = switch tier {
-      case .global: topPinHeight
-      case .space: BrowserLayout.sidebarTabRowHeight
-      case .temporary: nil
-      }
       SidebarSplitTabRow(group: group, left: left, right: right,
         leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
         selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
-        drag: tabDrag, tier: tier, height: height, onSelect: select, onClose: { workspace.closeTab(id: $0) },
+        isTabDragActive: tabDrag.tabID != nil, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
         onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
         onSwap: { workspace.swapSplitSides(containing: focusedID) },
         onPinGlobally: { workspace.moveSplitGroup(containing: focusedID, to: .global) },
         onPin: { workspace.moveSplitGroup(containing: focusedID, to: .space(tier == .global ? workspace.selectedSpaceID : owner)) },
-        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(tier == .global ? workspace.selectedSpaceID : owner)) })
+        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(tier == .global ? workspace.selectedSpaceID : owner)) },
+        onToggleSpacePin: { toggleSpacePin(focusedID) })
     }
   }
 
-  private func row(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
+  private func tabElement(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
     SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
                   selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
                   tier: tier,
@@ -471,26 +450,15 @@ struct TabSidebarView: View {
     } onPinGlobally: {
       withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .global) }
     } onPinInSpace: {
-      let spaceID: UUID
-      switch tier {
-      case .space(let id), .temporary(let id): spaceID = id
-      case .global: spaceID = workspace.selectedSpaceID
-      }
-      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(spaceID)) }
+      toggleSpacePin(tab.id)
     } onMakeTemporary: {
-      let spaceID: UUID
-      switch tier {
-      case .space(let id), .temporary(let id): spaceID = id
-      case .global: spaceID = workspace.selectedSpaceID
-      }
-      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(spaceID)) }
+      toggleSpacePin(tab.id)
     }
-    .id(tab.id)
-    .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: tier))
   }
 
   private func select(_ id: UUID) {
-    guard !tabDrag.suppressesClick(on: id) else { return }
+    let containerID = workspace.splitGroup(containing: id)?.leftTabID ?? id
+    guard !tabDrag.suppressesClick(on: containerID) else { return }
     // AppKit ends the address field's editing before this button action runs.
     // An explicit sidebar selection supplies the page-focus intent rather than
     // trying to infer it after the old native editor has already resigned.
@@ -507,6 +475,20 @@ struct TabSidebarView: View {
       }
     }
     return moved
+  }
+
+  private func toggleSpacePin(_ id: UUID) {
+    guard let destination = workspace.spacePinToggleTarget(for: id) else { return }
+    let target = SidebarTabDropTarget(tier: destination.tier, before: destination.before)
+    let source: WorkspaceCollection.TabTier = destination.tier == .space(workspace.selectedSpaceID)
+      ? .temporary(workspace.selectedSpaceID) : .space(workspace.selectedSpaceID)
+    let rowID = workspace.splitGroup(containing: id)?.leftTabID ?? id
+    if let splitView = chromeLayout.splitView, let sidebar = splitView.subviews.first,
+       splitView.isSubviewCollapsed(sidebar) {
+      _ = move(rowID, to: target)
+    } else {
+      tabDrag.animateMove(rowID, from: source, to: target, move: move)
+    }
   }
 
   private func tabDragGesture(width: CGFloat) -> some Gesture {
@@ -712,19 +694,8 @@ private struct PinnedTile: View {
         .contentShape(SidebarTabAppearance.glassShape)
     }
     .buttonStyle(.plain)
-    .background {
-      if selected {
-        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
-      } else {
-        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : 0.04))
-      }
-    }
-    .overlay {
-      if selected || showsHover {
-        SidebarTabAppearance.glassShape.strokeBorder(
-          .white.opacity(selected ? 0.5 : 0.25), lineWidth: 1)
-      }
-    }
+    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover, idleFill: 0.04,
+                                usesScrollEdge: false, stableBorderOpacity: 0.5, hoverBorderOpacity: 0.25))
     .scaleEffect(selected ? 1.02 : 1)
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
@@ -779,9 +750,8 @@ private struct SidebarSplitTabRow: View {
   let leftSession: BrowserSession?
   let rightSession: BrowserSession?
   let selectedTabID: UUID?
-  let drag: SidebarTabDrag
+  let isTabDragActive: Bool
   let tier: WorkspaceCollection.TabTier
-  let height: CGFloat?
   let onSelect: (UUID) -> Void
   let onClose: (UUID) -> Void
   let onUngroup: () -> Void
@@ -789,11 +759,12 @@ private struct SidebarSplitTabRow: View {
   let onPinGlobally: () -> Void
   let onPin: () -> Void
   let onMakeTemporary: () -> Void
+  let onToggleSpacePin: () -> Void
   @State private var isHovered = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var selected: Bool { group.contains(selectedTabID) }
-  private var showsHover: Bool { isHovered && drag.tabID == nil }
+  private var showsHover: Bool { isHovered && !isTabDragActive }
   private var isPinned: Bool {
     if case .temporary = tier { return false }
     return true
@@ -805,33 +776,24 @@ private struct SidebarSplitTabRow: View {
       member(left, session: leftSession)
       member(right, session: rightSession)
     }
-    .frame(height: height.map { $0 - 2 * contentInset })
     .padding(contentInset)
     .frame(maxWidth: .infinity)
     .containerShape(SidebarTabAppearance.glassShape)
     .modifier(SidebarScrollEdge(isEnabled: tier != .global))
-    .background {
-      if selected {
-        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
-          .modifier(SidebarScrollEdgeSurface(isEnabled: tier != .global))
-      } else {
-        SidebarTabAppearance.glassShape.fill(.primary.opacity(showsHover ? 0.06 : (tier == .global ? 0.04 : 0.035)))
-          .modifier(SidebarScrollEdge(isEnabled: tier != .global))
-      }
-    }
-    .overlay {
-      if selected {
-        SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
-          .modifier(SidebarScrollEdge(isEnabled: tier != .global))
-      }
-    }
+    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover,
+                                idleFill: tier == .global ? 0.04 : 0.035, usesScrollEdge: tier != .global))
     .scaleEffect(tier == .global && selected ? 1.02 : 1)
     .contextMenu {
       Button("Ungroup Tabs", action: onUngroup)
       Button("Swap Sides", action: onSwap)
       Button("Pin Group for All Spaces", action: onPinGlobally)
-      Button("Pin Group in This Space", action: onPin)
-      Button("Make Group Temporary", action: onMakeTemporary)
+      if tier == .global {
+        Button("Pin Group in This Space", action: onPin)
+        Button("Make Group Temporary", action: onMakeTemporary)
+      } else {
+        Button(isPinned ? "Make Group Temporary" : "Pin Group in This Space", action: onToggleSpacePin)
+          .keyboardShortcut("d", modifiers: .command)
+      }
     }
     .overlay(alignment: .topLeading) {
       Button(action: onUngroup) {
@@ -855,7 +817,6 @@ private struct SidebarSplitTabRow: View {
     .onHover { isHovered = $0 }
     .accessibilityIdentifier("split-group-\(group.id.uuidString)")
     .help("\(left.displayTitle) | \(right.displayTitle)")
-    .modifier(SidebarTabDragItem(drag: drag, tabID: group.leftTabID, tier: tier))
   }
 
   private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
@@ -863,7 +824,6 @@ private struct SidebarSplitTabRow: View {
     let showsClose = showsHover && tier != .global
     return HStack(spacing: 0) {
       Button {
-        guard !drag.suppressesClick(on: group.leftTabID) else { return }
         onSelect(tab.id)
       } label: {
         HStack(spacing: 4) {
@@ -878,7 +838,7 @@ private struct SidebarSplitTabRow: View {
           }
         }
         .padding(.leading, tier == .global ? 0 : 5)
-        .frame(maxWidth: .infinity, minHeight: 30, maxHeight: height == nil ? nil : .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -888,7 +848,8 @@ private struct SidebarSplitTabRow: View {
         Button { onClose(tab.id) } label: {
           Image(systemName: "xmark")
             .font(.system(size: 8, weight: .semibold))
-            .frame(width: 18, height: 30)
+            .frame(width: 18)
+            .frame(maxHeight: .infinity)
         }
         .buttonStyle(.plain)
         .opacity(showsClose ? 0.65 : 0)
@@ -896,7 +857,7 @@ private struct SidebarSplitTabRow: View {
         .accessibilityLabel("Close \(tab.displayTitle)")
       }
     }
-    .frame(maxWidth: .infinity, maxHeight: height == nil ? nil : .infinity)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background {
       if isPinned {
         ContainerRelativeShape().fill(.primary.opacity(showsHover ? 0.06 : 0.04))
@@ -941,7 +902,7 @@ private struct SidebarRowLabel<Icon: View>: View {
       Spacer(minLength: 0)
     }
     .padding(.leading, 11)
-    .frame(maxWidth: .infinity, minHeight: BrowserLayout.sidebarTabRowHeight)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
   }
 }
@@ -968,6 +929,7 @@ private struct SidebarSpaceRow: View {
           .accessibilityHidden(true)
       }
       .padding(.trailing, 3)
+      .frame(height: BrowserLayout.sidebarTabRowHeight)
       .contentShape(SidebarTabAppearance.glassShape)
     }
     .buttonStyle(.plain)
@@ -1012,7 +974,8 @@ private struct SidebarTabRow: View {
       Button(action: onClose) {
         Image(systemName: "xmark")
           .font(.system(size: 10, weight: .semibold))
-          .frame(width: 29, height: 32)
+          .frame(width: 29)
+          .frame(maxHeight: .infinity)
       }
       .buttonStyle(.plain)
       .opacity(showsCloseButton ? 0.7 : 0)
@@ -1021,26 +984,17 @@ private struct SidebarTabRow: View {
     }
     .padding(.trailing, 3)
     .modifier(SidebarScrollEdge())
-    .background {
-      if selected {
-        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
-          .modifier(SidebarScrollEdgeSurface())
-      } else if showsHover {
-        SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
-          .modifier(SidebarScrollEdge())
-      }
-    }
-    .overlay {
-      if selected {
-        SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
-          .modifier(SidebarScrollEdge())
-      }
-    }
+    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover))
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
       Button("Pin for All Spaces", action: onPinGlobally)
-      Button("Pin in This Space", action: onPinInSpace)
-      if case .space = tier { Button("Make Temporary", action: onMakeTemporary) }
+      if case .space = tier {
+        Button("Make Temporary", action: onMakeTemporary)
+          .keyboardShortcut("d", modifiers: .command)
+      } else {
+        Button("Pin in This Space", action: onPinInSpace)
+          .keyboardShortcut("d", modifiers: .command)
+      }
       Button("Close Tab", action: onClose)
     }
     .help(tab.displayTitle)

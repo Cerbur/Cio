@@ -369,6 +369,19 @@ final class BrowserWorkspaceStore: ObservableObject {
     return moved
   }
 
+  /// Space's pin toggle leaves Top Pins alone and returns unpinned tabs to
+  /// the front of the temporary order. Split rows move as one unit.
+  func spacePinToggleTarget(for id: UUID) -> (tier: WorkspaceCollection.TabTier, before: UUID?)? {
+    guard !isTerminating, let space = selectedSpace,
+          space.tabIDs.contains(id), !workspace.globalPinnedTabIDs.contains(id) else { return nil }
+    if space.pinnedTabIDs.contains(id) {
+      let movingIDs = Set(splitGroup(containing: id)?.tabIDs ?? [id])
+      let firstTemporary = temporaryTabs.first { !movingIDs.contains($0.id) }?.id
+      return (.temporary(space.id), firstTemporary)
+    }
+    return (.space(space.id), nil)
+  }
+
   @discardableResult
   func selectTab(at index: Int) -> Bool {
     guard currentTabIDs.indices.contains(index) else { return false }
