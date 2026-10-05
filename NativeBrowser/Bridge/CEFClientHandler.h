@@ -16,6 +16,8 @@
 #include <map>
 
 #include "include/cef_client.h"
+#include "include/cef_context_menu_handler.h"
+#include "include/cef_devtools_message_observer.h"
 #include "include/cef_jsdialog_handler.h"
 #include "include/cef_request_handler.h"
 
@@ -28,7 +30,9 @@ class CEFClientHandler final : public CefClient,
                                public CefLoadHandler,
                                public CefDownloadHandler,
                                public CefJSDialogHandler,
-                               public CefRequestHandler {
+                               public CefRequestHandler,
+                               public CefContextMenuHandler,
+                               public CefDevToolsMessageObserver {
  public:
   explicit CEFClientHandler(BrowserBridge *bridge);
 
@@ -44,6 +48,7 @@ class CEFClientHandler final : public CefClient,
   /// Resolves the one pending beforeunload callback. The CEF callback remains
   /// inside this class so no CEF type crosses the Objective-C/Swift bridge.
   void ContinueBeforeUnload(bool accept);
+  void InspectElementAtPoint(int x, int y);
 
   // CefClient
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
@@ -53,6 +58,16 @@ class CEFClientHandler final : public CefClient,
   CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+  CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+
+  void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                           CefRefPtr<CefContextMenuParams> params,
+                           CefRefPtr<CefMenuModel> model) override;
+  bool OnContextMenuCommand(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                            CefRefPtr<CefContextMenuParams> params,
+                            int command_id, EventFlags event_flags) override;
+  void OnDevToolsMethodResult(CefRefPtr<CefBrowser> browser, int message_id,
+                              bool success, const void* result, size_t result_size) override;
 
   // CefFocusHandler
   bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override;
@@ -131,6 +146,8 @@ class CEFClientHandler final : public CefClient,
   __weak BrowserBridge *bridge_;
 
   CefRefPtr<CefBrowser> browser_;
+  CefRefPtr<CefRegistration> inspection_registration_;
+  int inspection_message_id_ = 0;
   std::map<uint32_t, CefRefPtr<CefDownloadItemCallback>> active_downloads_;
   CefRefPtr<CefJSDialogCallback> before_unload_callback_;
 

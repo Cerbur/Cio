@@ -12,6 +12,7 @@
 
 #include <cstdio>
 #include <set>
+#include "../Bridge/InspectorFrontend.h"
 
 #include "include/cef_app.h"
 #include "include/cef_frame.h"
@@ -23,8 +24,6 @@
 #endif
 
 namespace {
-constexpr char kInspectorURL[] = "devtools://devtools/bundled/devtools_app.html";
-constexpr char kInspectorMessage[] = "NativeBrowser.Inspector";
 
 class InspectorSendHandler final : public CefV8Handler {
  public:
@@ -68,21 +67,113 @@ class HelperApp final : public CefApp, public CefRenderProcessHandler {
     CefRefPtr<CefV8Value> result;
     CefRefPtr<CefV8Exception> error;
     context->Eval(R"JS(
+      let nextCall = 0;
+      let nextProtocolCall = -1;
+      let frontendZoom = 1;
+      const callbacks = new Map();
+      const protocolCallbacks = new Map();
+      const request = (method, params, callback) => {
+        const id = ++nextCall;
+        if (callback) callbacks.set(id, callback);
+        nativeBrowserInspectorSend('host', JSON.stringify({id, method, params}));
+      };
+      globalThis.nativeBrowserInspectorReply = (id, value) => {
+        const callback = callbacks.get(id);
+        callbacks.delete(id);
+        callback?.(value);
+      };
+      globalThis.nativeBrowserInspectorSetZoom = factor => {
+        frontendZoom = factor;
+        window.dispatchEvent(new Event('resize'));
+      };
+      // Source maps and other developer resources use the inspected page's
+      // network context. Private CDP replies never enter the frontend's queue.
+      const protocol = (method, params) => new Promise((resolve, reject) => {
+        const id = nextProtocolCall--;
+        protocolCallbacks.set(id, {resolve, reject});
+        nativeBrowserInspectorSend('protocol', JSON.stringify({id, method, params}));
+      });
+      globalThis.nativeBrowserInspectorDispatch = message => {
+        const data = JSON.parse(message);
+        const callback = protocolCallbacks.get(data.id);
+        if (callback) {
+          protocolCallbacks.delete(data.id);
+          data.error ? callback.reject(data.error) : callback.resolve(data.result);
+        } else {
+          globalThis.InspectorFrontendAPI?.dispatchMessage(message);
+        }
+      };
+      const preferences = () => {
+        const result = {};
+        for (let i = 0; i < localStorage.length; ++i) {
+          const key = localStorage.key(i);
+          if (key.startsWith('cio.devtools.')) result[key.slice(13)] = localStorage.getItem(key);
+        }
+        result['currentDockState'] ||= JSON.stringify('bottom');
+        result['current-dock-state'] ||= JSON.stringify('bottom');
+        return result;
+      };
       const overrides = {
         platform: () => 'mac', isHostedMode: () => false,
         sendMessageToBackend: message => nativeBrowserInspectorSend('protocol', message),
         closeWindow: () => nativeBrowserInspectorSend('close', ''),
         getHostConfig: callback => callback({}),
-        getPreferences: callback => callback(Object.assign({}, localStorage)),
-        getPreference: (name, callback) => callback(localStorage.getItem(name) || ''),
-        setPreference: (name, value) => localStorage.setItem(name, value),
-        removePreference: name => localStorage.removeItem(name),
-        clearPreferences: () => localStorage.clear(),
+        getPreferences: callback => callback(preferences()),
+        getPreference: (name, callback) => callback(preferences()[name] || ''),
+        setPreference: (name, value) => localStorage.setItem('cio.devtools.' + name, value),
+        removePreference: name => localStorage.removeItem('cio.devtools.' + name),
+        clearPreferences: () => {
+          for (const key of Object.keys(preferences())) localStorage.removeItem('cio.devtools.' + key);
+        },
         getSyncInformation: callback => callback({isSyncActive:false, arePreferencesSynced:false}),
-        loadCompleted: () => {}, bringToFront: () => {},
-        inspectedURLChanged: () => {}, setInspectedPageBounds: () => {},
-        setIsDocked: (_, callback) => callback && callback(),
-        zoomFactor: () => 1,
+        loadCompleted: () => request('ready', []),
+        bringToFront: () => request('front', []),
+        inspectedURLChanged: () => {},
+        setInspectedPageBounds: bounds => request('bounds', [bounds]),
+        setIsDocked: (docked, callback) => {
+          const side = docked ? (['bottom', 'left', 'right'].find(side => document.body.classList.contains(side)) || 'bottom') : 'undocked';
+          request('dock', [side], callback);
+        },
+        copyText: text => request('copy', [text || '']),
+        openInNewTab: url => request('open', [url]),
+        openSearchResultsInNewTab: query => request('open', ['https://www.google.com/search?q=' + encodeURIComponent(query)]),
+        save: (url, content, forceSaveAs, isBase64) => request('save', [url, content, forceSaveAs, isBase64]),
+        append: (url, content) => request('append', [url, content]),
+        zoomFactor: () => frontendZoom,
+        zoomIn: () => request('zoom', [1]),
+        zoomOut: () => request('zoom', [-1]),
+        resetZoom: () => request('zoom', [0]),
+        reattach: callback => callback?.(),
+        // CEF supplies page/worker targets through CDP. It has no Chrome
+        // profile workspace service; finish discovery instead of hanging boot.
+        requestFileSystems: () => globalThis.InspectorFrontendAPI?.fileSystemsLoaded([]),
+        loadNetworkResource: async (url, headers, streamId, callback) => {
+          let stream;
+          try {
+            const {frameTree} = await protocol('Page.getFrameTree', {});
+            const {resource} = await protocol('Network.loadNetworkResource', {
+              frameId:frameTree.frame.id, url, options: {disableCache:false, includeCredentials:true},
+            });
+            stream = resource.stream;
+            if (resource.success && stream) {
+              const decoder = new TextDecoder();
+              for (;;) {
+                const part = await protocol('IO.read', {handle:stream});
+                const text = part.base64Encoded
+                  ? decoder.decode(Uint8Array.from(atob(part.data), c => c.charCodeAt(0)), {stream:!part.eof}) : part.data;
+                globalThis.InspectorFrontendAPI.streamWrite(streamId, text);
+                if (part.eof) break;
+              }
+            }
+            callback({statusCode:resource.httpStatusCode || (resource.success ? 200 : 0),
+              headers:resource.headers || {}, netError:resource.netError || 0,
+              netErrorName:resource.netErrorName || '', urlValid:true});
+          } catch (error) {
+            callback({statusCode:0, netError:-2, netErrorName:error.message || 'Resource load failed', urlValid:true});
+          } finally {
+            if (stream) await protocol('IO.close', {handle:stream}).catch(() => {});
+          }
+        },
       };
       // Blink installs devtools_compatibility.js after OnContextCreated. Keep
       // its complete Chromium host, replacing only our in-process transport

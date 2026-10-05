@@ -12,8 +12,11 @@
 #include "include/cef_browser.h"
 #include "include/cef_download_item.h"
 #include "include/cef_frame.h"
+#include "include/cef_parser.h"
 
 namespace {
+
+constexpr int kInspectElementCommand = MENU_ID_USER_FIRST;
 
 /// Converts a CEF string to an NSString (empty string when it cannot be
 /// converted).
@@ -38,6 +41,62 @@ void OnMainThread(void (^block)(void)) {
 }  // namespace
 
 CEFClientHandler::CEFClientHandler(BrowserBridge *bridge) : bridge_(bridge) {}
+
+void CEFClientHandler::OnBeforeContextMenu(
+    CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefContextMenuParams> params, CefRefPtr<CefMenuModel> model) {
+  // Keep Chromium's link, image and editing actions, then append development tools.
+  model->Remove(MENU_ID_VIEW_SOURCE);
+  if (model->GetCount() > 0 && model->GetTypeAt(model->GetCount() - 1) != MENUITEMTYPE_SEPARATOR)
+    model->AddSeparator();
+  // CEF's accelerator API has no Command modifier. The native Develop menu
+  // owns the real key equivalent; show the same shortcut here as a caption.
+  model->AddItem(MENU_ID_VIEW_SOURCE, "查看源代码　⌥⌘U");
+  model->SetEnabled(MENU_ID_VIEW_SOURCE, !browser->GetMainFrame()->GetURL().empty());
+  model->AddItem(kInspectElementCommand, "检查");
+}
+
+bool CEFClientHandler::OnContextMenuCommand(
+    CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+    CefRefPtr<CefContextMenuParams> params, int command_id, EventFlags event_flags) {
+  if (command_id == MENU_ID_VIEW_SOURCE) {
+    [bridge_ viewPageSource];
+    return true;
+  }
+  if (command_id == kInspectElementCommand) {
+    InspectElementAtPoint(params->GetXCoord(), params->GetYCoord());
+    return true;
+  }
+  return false;
+}
+
+void CEFClientHandler::InspectElementAtPoint(int x, int y) {
+  if (!browser_ || !browser_->IsValid() || [bridge_ isClosed]) return;
+  inspection_registration_ = browser_->GetHost()->AddDevToolsMessageObserver(this);
+  auto params = CefDictionaryValue::Create();
+  params->SetInt("x", x);
+  params->SetInt("y", y);
+  params->SetBool("includeUserAgentShadowDOM", true);
+  // Resolve before opening/docking DevTools changes the page's viewport.
+  inspection_message_id_ = browser_->GetHost()->ExecuteDevToolsMethod(
+      0, "DOM.getNodeForLocation", params);
+  if (!inspection_message_id_) inspection_registration_ = nullptr;
+}
+
+void CEFClientHandler::OnDevToolsMethodResult(
+    CefRefPtr<CefBrowser> browser, int message_id, bool success,
+    const void* result, size_t result_size) {
+  if (!inspection_message_id_ || message_id != inspection_message_id_) return;
+  inspection_message_id_ = 0;
+  inspection_registration_ = nullptr;
+  int node = 0;
+  if (success && result) {
+    auto value = CefParseJSON(std::string(static_cast<const char*>(result), result_size), JSON_PARSER_RFC);
+    auto dictionary = value ? value->GetDictionary() : nullptr;
+    if (dictionary) node = dictionary->GetInt("backendNodeId");
+  }
+  [bridge_ browserDidRequestInspectNode:node];
+}
 
 void CEFClientHandler::CancelActiveDownloads() {
   for (auto &entry : active_downloads_) {
@@ -180,6 +239,8 @@ bool CEFClientHandler::DoClose(CefRefPtr<CefBrowser> browser) {
 
 void CEFClientHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   fprintf(stderr, "[browser] OnBeforeClose\n");
+  inspection_message_id_ = 0;
+  inspection_registration_ = nullptr;
   browser_ = nullptr;
   __weak BrowserBridge *bridge = bridge_;
   OnMainThread(^{

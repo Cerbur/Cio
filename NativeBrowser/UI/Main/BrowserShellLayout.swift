@@ -33,6 +33,7 @@ enum BrowserLayout {
   static let sidebarWidthPreferenceKey = "cio.sidebar.width"
   static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
   static let devToolsDefaultFraction: CGFloat = 0.5
+  static let devToolsWindowSize = CGSize(width: 960, height: 640)
   static let devToolsMinimumHeight: CGFloat = 160
   static let inspectedPageMinimumHeight: CGFloat = 120
 }

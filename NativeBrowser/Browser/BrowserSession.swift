@@ -96,6 +96,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// True once the Chromium browser object exists.
   @Published private(set) var hasBrowser = false
   @Published private(set) var isDevToolsOpen = false
+  private var devToolsWindow: NSWindow?
   /// True once Chromium destroyed the browser; the session cannot be reused.
   private(set) var isClosed = false
   /// True after the first load finished (successfully or not).
@@ -264,7 +265,13 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       bridge?.reparent(to: view.pageContentView)
       if isDevToolsOpen {
         view.showDevToolsPane()
-        bridge?.reparentDevTools(to: view.devToolsHostView)
+        bridge?.setDevToolsEmulationHostView(view.devToolsEmulationHostView)
+        if let host = devToolsWindow?.contentView {
+          view.setDevToolsDocked(false)
+          bridge?.reparentDevTools(to: host)
+        } else {
+          bridge?.reparentDevTools(to: view.devToolsHostView)
+        }
         existing.hideDevToolsPane()
       }
       return
@@ -378,14 +385,32 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   func toggleDevTools() {
-    guard closeState == .open, let bridge, let containerView else { return }
+    guard closeState == .open, let bridge else { return }
     if isDevToolsOpen {
       bridge.closeDevTools()
     } else {
-      containerView.showDevToolsPane()
-      isDevToolsOpen = bridge.showDevTools(in: containerView.devToolsHostView)
-      if !isDevToolsOpen { containerView.hideDevToolsPane() }
+      showDevTools()
     }
+  }
+
+  private func showDevTools() {
+    guard closeState == .open, !isDevToolsOpen, let bridge, let containerView else { return }
+    containerView.showDevToolsPane()
+    bridge.setDevToolsEmulationHostView(containerView.devToolsEmulationHostView)
+    isDevToolsOpen = bridge.showDevTools(in: containerView.devToolsHostView)
+    if !isDevToolsOpen { containerView.hideDevToolsPane() }
+  }
+
+  func viewPageSource() {
+    guard closeState == .open else { return }
+    bridge?.viewPageSource()
+  }
+
+  func browserBridge(_ bridge: BrowserBridge, didRequestInspectNode backendNodeID: Int) {
+    guard acceptsCallback(from: bridge), isSurfaceVisible else { return }
+    showDevTools()
+    bridge.revealDevToolsNode(backendNodeID)
+    devToolsWindow?.makeKeyAndOrderFront(nil)
   }
 
   /// Starts a download through CEF's browser host. This is used only by the
@@ -601,6 +626,10 @@ extension BrowserSession: ChromiumContainerViewDelegate {
   }
 
   func containerViewDidChangeVisibility(_ view: ChromiumContainerView, isVisible: Bool) {
+    if isDevToolsOpen, let devToolsWindow {
+      if isVisible { devToolsWindow.orderFront(nil) }
+      else { devToolsWindow.orderOut(nil) }
+    }
     // Hiding a container must not suspend its browser (Milestone 3 section 34):
     // the view stays in the hierarchy and Chromium keeps running. Coming back,
     // the browser is simply told its geometry again so the first frame after the
@@ -614,9 +643,42 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 // MARK: - BrowserBridgeDelegate
 
 extension BrowserSession: BrowserBridgeDelegate {
+  func browserBridge(_ bridge: BrowserBridge, didSetInspectedPageBounds bounds: NSRect) {
+    guard acceptsCallback(from: bridge) else { return }
+    containerView?.setInspectedPageBounds(bounds)
+  }
+
+  func browserBridge(_ bridge: BrowserBridge, didSetDevToolsDocked docked: Bool) {
+    guard acceptsCallback(from: bridge), closeState == .open,
+          let containerView else { return }
+    if docked {
+      bridge.reparentDevTools(to: containerView.devToolsHostView)
+      devToolsWindow?.orderOut(nil)
+      devToolsWindow?.delegate = nil
+      devToolsWindow?.close()
+      devToolsWindow = nil
+    } else {
+      if devToolsWindow == nil {
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: BrowserLayout.devToolsWindowSize),
+          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.title = "DevTools — \(title.isEmpty ? "NativeBrowser" : title)"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        devToolsWindow = window
+      }
+      if let host = devToolsWindow?.contentView { bridge.reparentDevTools(to: host) }
+      if isSurfaceVisible { devToolsWindow?.makeKeyAndOrderFront(nil) }
+    }
+    containerView.setDevToolsDocked(docked)
+  }
+
   func browserBridgeDidCloseDevTools(_ bridge: BrowserBridge) {
     guard acceptsCallback(from: bridge) else { return }
     isDevToolsOpen = false
+    devToolsWindow?.delegate = nil
+    devToolsWindow?.close()
+    devToolsWindow = nil
     containerView?.hideDevToolsPane()
     if closeState == .open, isSurfaceVisible, !isEditingAddressField { focusPage() }
   }
@@ -891,5 +953,20 @@ extension BrowserSession: BrowserBridgeDelegate {
   /// download state.
   private func acceptsCallback(from bridge: BrowserBridge) -> Bool {
     !isClosed && self.bridge === bridge
+  }
+}
+
+// Closing the detached inspector follows the same asynchronous CEF teardown as
+// the frontend's Close button and the application menu shortcut.
+extension BrowserSession: NSWindowDelegate {
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    guard sender === devToolsWindow else { return true }
+    bridge?.closeDevTools()
+    return false
+  }
+
+  func windowDidResize(_ notification: Notification) {
+    guard let window = notification.object as? NSWindow, window === devToolsWindow else { return }
+    bridge?.resizeDevTools()
   }
 }

@@ -50,6 +50,11 @@ struct BrowserCommands: Commands {
     }
 
     CommandMenu("Develop") {
+      Button("View Page Source") { workspace.selectedSession?.viewPageSource() }
+        .keyboardShortcut("u", modifiers: [.command, .option])
+        .disabled(!(workspace.selectedSession?.hasBrowser ?? false)
+                  || (workspace.selectedSession?.isClosed ?? true))
+      Divider()
       if let session = workspace.selectedSession {
         WebInspectorMenuItem(session: session)
       } else {

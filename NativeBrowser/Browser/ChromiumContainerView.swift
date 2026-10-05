@@ -3,8 +3,8 @@
 //  NativeBrowser
 //
 //  AppKit container that hosts one CEF browser view (ARCHITECTURE.md section 9).
-//  It owns page/inspector geometry: CEF renders into stable child hosts inside
-//  a native NSSplitView, and BrowserSession owns both browser lifetimes.
+//  Chromium supplies page/inspector geometry to stable native child hosts;
+//  BrowserSession owns the browser and detached inspector window lifetimes.
 //
 //  Milestone 3: the container is created and destroyed by
 //  BrowserSessionManager, one per live BrowserSession, and a tab switch only
@@ -25,42 +25,36 @@ protocol ChromiumContainerViewDelegate: AnyObject {
   func containerViewDidChangeVisibility(_ view: ChromiumContainerView, isVisible: Bool)
 }
 
-final class ChromiumContainerView: NSView, NSSplitViewDelegate {
+/// Chromium's AdvancedApp owns the splitter, device toolbar and responsive
+/// viewport. Its inspected-page placeholder is covered by our stable page host.
+/// The real page continues receiving native input and rendering through CEF.
+final class ChromiumContainerView: NSView {
   weak var delegate: ChromiumContainerViewDelegate?
-
-  /// Stable native parents; opening the inspector never reparents the page.
   let pageContentView = NSView()
   let devToolsHostView = NSView()
-  private let splitView = ChromiumPageSplitView()
-  private var devToolsFraction = BrowserLayout.devToolsDefaultFraction
-  private var isUpdatingLayout = false
+  let devToolsEmulationHostView = NSView()
+  private var inspectedPageBounds: CGRect?
   private(set) var isDevToolsVisible = false
-
-  /// Whether this container is the selected tab's surface. Hidden containers
-  /// keep their browser alive; they simply do not draw.
   private(set) var isSurfaceVisible = true
+
+  override var isFlipped: Bool { true }
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
     wantsLayer = true
-    splitView.frame = bounds
-    splitView.autoresizingMask = [.width, .height]
-    splitView.isVertical = false
-    splitView.dividerStyle = .thin
-    splitView.delegate = self
-    splitView.addArrangedSubview(pageContentView)
-    addSubview(splitView)
-    pageContentView.frame = splitView.bounds
-    splitView.setAccessibilityLabel("Page and Web Inspector")
+    for host in [devToolsHostView, devToolsEmulationHostView, pageContentView] {
+      host.frame = bounds
+      addSubview(host)
+    }
+    devToolsHostView.isHidden = true
+    devToolsEmulationHostView.isHidden = true
     updateBackgroundColor()
     ApplicationRuntime.shared.record("appkit:chromium-container-created")
     AppLog.browser.debug("ChromiumContainerView created")
   }
 
   @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) is not supported")
-  }
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
   override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
@@ -76,75 +70,48 @@ final class ChromiumContainerView: NSView, NSSplitViewDelegate {
   func showDevToolsPane() {
     guard !isDevToolsVisible else { return }
     isDevToolsVisible = true
-    isUpdatingLayout = true
-    splitView.addArrangedSubview(devToolsHostView)
-    isUpdatingLayout = false
+    // Leave room for the frontend until its first placeholder update arrives.
+    inspectedPageBounds = CGRect(x: 0, y: 0, width: bounds.width,
+      height: bounds.height * (1 - BrowserLayout.devToolsDefaultFraction))
+    devToolsHostView.isHidden = false
     layoutPanes()
   }
 
-  /// Called only after Chromium released the inspector's child view.
+  /// Called only after Chromium released both inspector and toolbox children.
   func hideDevToolsPane() {
-    guard isDevToolsVisible else { return }
-    isUpdatingLayout = true
     isDevToolsVisible = false
-    splitView.removeArrangedSubview(devToolsHostView)
-    devToolsHostView.removeFromSuperview()
-    isUpdatingLayout = false
+    inspectedPageBounds = nil
+    devToolsHostView.isHidden = true
+    devToolsEmulationHostView.isHidden = true
     layoutPanes()
   }
 
-  private var availablePaneHeight: CGFloat {
-    max(0, splitView.bounds.height - splitView.dividerThickness)
+  func setDevToolsDocked(_ docked: Bool) {
+    devToolsHostView.isHidden = !docked
+    devToolsEmulationHostView.isHidden = docked
+    if !docked { inspectedPageBounds = bounds }
+    layoutPanes()
   }
 
-  private var minimumPageHeight: CGFloat {
-    min(BrowserLayout.inspectedPageMinimumHeight, availablePaneHeight * 0.4)
+  func setInspectedPageBounds(_ rect: CGRect) {
+    guard isDevToolsVisible, rect.origin.x.isFinite, rect.origin.y.isFinite,
+          rect.width.isFinite, rect.height.isFinite,
+          inspectedPageBounds != rect else { return }
+    inspectedPageBounds = rect
+    layoutPanes()
   }
 
-  private var minimumDevToolsHeight: CGFloat {
-    min(BrowserLayout.devToolsMinimumHeight, availablePaneHeight * 0.4)
+  override func layout() {
+    super.layout()
+    layoutPanes()
   }
 
   private func layoutPanes() {
-    guard !isUpdatingLayout else { return }
-    isUpdatingLayout = true
-    if isDevToolsVisible {
-      let height = availablePaneHeight
-      let inspectorHeight = min(max(height * devToolsFraction, minimumDevToolsHeight),
-                                height - minimumPageHeight)
-      let pageHeight = height - inspectorHeight
-      pageContentView.frame = CGRect(x: 0, y: 0, width: splitView.bounds.width, height: pageHeight)
-      devToolsHostView.frame = CGRect(x: 0, y: pageHeight + splitView.dividerThickness,
-        width: splitView.bounds.width, height: inspectorHeight)
-    } else {
-      pageContentView.frame = splitView.bounds
-    }
-    isUpdatingLayout = false
+    devToolsHostView.frame = bounds
+    devToolsEmulationHostView.frame = bounds
+    let rect = isDevToolsVisible ? (inspectedPageBounds ?? bounds).intersection(bounds) : bounds
+    pageContentView.frame = rect.isNull ? .zero : rect
     delegate?.containerViewDidResize(self)
-  }
-
-  func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
-    layoutPanes()
-  }
-
-  func splitViewDidResizeSubviews(_ notification: Notification) {
-    guard !isUpdatingLayout else { return }
-    if isDevToolsVisible, availablePaneHeight > 0 {
-      devToolsFraction = devToolsHostView.frame.height / availablePaneHeight
-    }
-    delegate?.containerViewDidResize(self)
-  }
-
-  func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
-
-  func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
-                 ofSubviewAt dividerIndex: Int) -> CGFloat {
-    minimumPageHeight
-  }
-
-  func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat,
-                 ofSubviewAt dividerIndex: Int) -> CGFloat {
-    availablePaneHeight - minimumDevToolsHeight
   }
 
   /// Shows or hides this container as the selected tab surface.
@@ -169,16 +136,10 @@ final class ChromiumContainerView: NSView, NSSplitViewDelegate {
     let changed = frame.size != newSize
     super.setFrameSize(newSize)
     guard changed else { return }
-    delegate?.containerViewDidResize(self)
+    layoutPanes()
   }
 
   deinit {
     AppLog.browser.debug("ChromiumContainerView released")
   }
-}
-
-/// NSSplitView handles dragging, cursor feedback and accessibility. A flipped
-/// coordinate system places its first (page) pane above the inspector.
-private final class ChromiumPageSplitView: NSSplitView {
-  override var isFlipped: Bool { true }
 }

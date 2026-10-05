@@ -9,6 +9,9 @@
 
 #import "CEFClientHandler.h"
 #import "ShutdownTiming.h"
+#include "InspectorFrontend.h"
+#include <algorithm>
+#include <cmath>
 
 #include <cstdio>
 #include <string>
@@ -28,6 +31,21 @@ namespace {
 constexpr int kInitialWidth = 1280;
 constexpr int kInitialHeight = 800;
 
+// Alloy's request-context color scheme does not update renderer media queries.
+// Each page, including the independent inspector frontend, needs this override.
+bool NBApplyDarkAppearance(CefRefPtr<CefBrowser> browser, bool dark) {
+  if (!browser || !browser->IsValid()) return false;
+  auto feature = CefDictionaryValue::Create();
+  feature->SetString("name", "prefers-color-scheme");
+  feature->SetString("value", dark ? "dark" : "light");
+  auto features = CefListValue::Create();
+  features->SetDictionary(0, feature);
+  auto params = CefDictionaryValue::Create();
+  params->SetList("features", features);
+  return browser->GetHost()->ExecuteDevToolsMethod(
+      0, "Emulation.setEmulatedMedia", params) != 0;
+}
+
 /// YES when `responder` is `view` or lives inside its subtree.
 ///
 /// The window's shared field editor is deliberately not treated as part of any
@@ -44,17 +62,78 @@ BOOL NBResponderBelongsToView(NSResponder *responder, NSView *view) {
   return NO;
 }
 
-/// The inspector has independent callbacks and a child view, never a native
-/// top-level window. Handle its close ourselves so CEF cannot close the shell.
+/// CEF owns only child views; AppKit owns the shell and detached window.
+/// Inspector and device-toolbox lifetimes finish before the page can close.
 class NativeBrowserDevToolsClient final : public CefClient,
                                          public CefLifeSpanHandler,
                                          public CefFocusHandler,
                                          public CefRequestHandler,
                                          public CefDevToolsMessageObserver {
  public:
-  NativeBrowserDevToolsClient(BrowserBridge *bridge, CefRefPtr<CefBrowser> inspected)
-      : bridge_(bridge), inspected_(inspected), pending_ids_([NSMutableDictionary dictionary]) {}
+  NativeBrowserDevToolsClient(BrowserBridge *bridge, CefRefPtr<CefBrowser> inspected, bool dark)
+      : bridge_(bridge), inspected_(inspected), dark_appearance_(dark),
+        saved_paths_([NSMutableDictionary dictionary]), pending_ids_([NSMutableDictionary dictionary]) {}
   CefRefPtr<CefBrowser> browser() const { return browser_; }
+  void RevealNode(int backendNodeID) {
+    pending_node_id_ = backendNodeID;
+    RevealPendingNode();
+  }
+  void SetDarkAppearance(bool dark) {
+    if (closing_) return;
+    dark_appearance_ = dark;
+    NBApplyDarkAppearance(browser_, dark);
+    NBApplyDarkAppearance(emulation_browser_, dark);
+    // The custom frontend has no Chrome DevToolsWindow to deliver this event.
+    // Refresh host colors without overwriting the user's Auto/Light/Dark choice.
+    if (frontend_ready_) Event(@"colorThemeChanged", @[]);
+  }
+  void ReleaseFocus(bool clearResponder) {
+    for (const auto &browser : {browser_, emulation_browser_}) {
+      if (!browser) continue;
+      browser->GetHost()->SetFocus(false);
+      NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+      if (clearResponder && NBResponderBelongsToView(view.window.firstResponder, view))
+        [view.window makeFirstResponder:nil];
+    }
+  }
+  void Close() {
+    closing_ = true;
+    if (inspected_ && inspected_->IsValid()) {
+      // Restore page emulation on close; appearance is owned by the shell.
+      auto host = inspected_->GetHost();
+      auto empty = CefDictionaryValue::Create();
+      host->ExecuteDevToolsMethod(0, "Emulation.clearDeviceMetricsOverride", empty);
+      auto touch = CefDictionaryValue::Create(); touch->SetBool("enabled", false);
+      host->ExecuteDevToolsMethod(0, "Emulation.setTouchEmulationEnabled", touch);
+      host->ExecuteDevToolsMethod(0, "Emulation.setEmitTouchEventsForMouse", touch);
+      auto userAgent = CefDictionaryValue::Create(); userAgent->SetString("userAgent", "");
+      host->ExecuteDevToolsMethod(0, "Emulation.setUserAgentOverride", userAgent);
+      auto cpu = CefDictionaryValue::Create(); cpu->SetDouble("rate", 1);
+      host->ExecuteDevToolsMethod(0, "Emulation.setCPUThrottlingRate", cpu);
+      auto network = CefDictionaryValue::Create();
+      network->SetBool("offline", false);
+      network->SetDouble("latency", 0);
+      network->SetDouble("downloadThroughput", -1);
+      network->SetDouble("uploadThroughput", -1);
+      host->ExecuteDevToolsMethod(0, "Network.emulateNetworkConditions", network);
+      host->ExecuteDevToolsMethod(0, "Emulation.clearGeolocationOverride", empty);
+      host->ExecuteDevToolsMethod(0, "Emulation.resetPageScaleFactor", empty);
+      host->ExecuteDevToolsMethod(0, "Debugger.resume", empty);
+    }
+    Disconnect();
+    if (emulation_browser_) emulation_browser_->GetHost()->CloseBrowser(true);
+    if (browser_) browser_->GetHost()->CloseBrowser(true);
+  }
+  void ResizeEmulation() {
+    if (!emulation_browser_ || closing_) return;
+    NSView *parent = [bridge_ devToolsEmulationHostView];
+    if (!parent) return;
+    NSView *child = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(emulation_browser_->GetHost()->GetWindowHandle());
+    if (child.superview != parent) { [child removeFromSuperview]; [parent addSubview:child]; }
+    child.frame = parent.bounds;
+    child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    emulation_browser_->GetHost()->WasResized();
+  }
   void Disconnect() {
     registration_ = nullptr;
     inspected_ = nullptr;
@@ -66,7 +145,8 @@ class NativeBrowserDevToolsClient final : public CefClient,
 
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                       CefRefPtr<CefRequest> request, bool user_gesture, bool is_redirect) override {
-    return request->GetURL().ToString() != "devtools://devtools/bundled/devtools_app.html";
+    const auto url = request->GetURL().ToString();
+    return url != kInspectorURL && url != kEmulationURL;
   }
 
   bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
@@ -75,17 +155,42 @@ class NativeBrowserDevToolsClient final : public CefClient,
                      const CefPopupFeatures& features, CefWindowInfo& info,
                      CefRefPtr<CefClient>& client, CefBrowserSettings& settings,
                      CefRefPtr<CefDictionaryValue>& extra_info, bool* no_javascript_access) override {
-    return true;
+    NSView *parent = [bridge_ devToolsEmulationHostView];
+    if (closing_ || !browser_ || !browser_->IsSame(browser) ||
+        target_url.ToString() != kEmulationURL || !parent || !parent.window ||
+        emulation_browser_ || popup_pending_) return true;
+    // Only Chromium's device-mode document may retain its opener. Ordinary
+    // DevTools links are routed to managed tabs through the host API instead.
+    info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    info.SetAsChild(CAST_NSVIEW_TO_CEF_WINDOW_HANDLE(parent),
+      CefRect(0, 0, (int)NSWidth(parent.bounds), (int)NSHeight(parent.bounds)));
+    client = this;
+    *no_javascript_access = false;
+    popup_pending_ = true;
+    return false;
+  }
+
+  void OnBeforePopupAborted(CefRefPtr<CefBrowser> browser, int popup_id) override {
+    popup_pending_ = false;
+    FinishClose();
   }
 
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
                                 CefProcessId source, CefRefPtr<CefProcessMessage> message) override {
-    if (source != PID_RENDERER || message->GetName() != "NativeBrowser.Inspector" ||
+    if (source != PID_RENDERER || message->GetName() != kInspectorMessage ||
         !browser_ || !browser_->IsSame(browser) || !frame->IsMain() ||
-        frame->GetURL().ToString() != "devtools://devtools/bundled/devtools_app.html") return false;
+        frame->GetURL().ToString() != kInspectorURL) return false;
     auto args = message->GetArgumentList();
     if (args->GetSize() != 2) return true;
     if (args->GetString(0) == "close") { [bridge_ closeDevTools]; return true; }
+    if (closing_) return true;
+    if (args->GetString(0) == "host") {
+      NSString *payload = [NSString stringWithUTF8String:args->GetString(1).ToString().c_str()];
+      NSDictionary *request = [NSJSONSerialization JSONObjectWithData:[payload dataUsingEncoding:NSUTF8StringEncoding]
+        options:0 error:nil];
+      if ([request isKindOfClass:NSDictionary.class]) HandleHostRequest(request);
+      return true;
+    }
     if (args->GetString(0) != "protocol" || !inspected_ || !inspected_->IsValid()) return true;
     // The shell also uses CDP for appearance. Keep its response IDs separate
     // from the frontend, which starts its own sequence at 1 on every reopen.
@@ -93,6 +198,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
     auto dictionary = value ? value->GetDictionary() : nullptr;
     if (!dictionary || !dictionary->HasKey("id")) return true;
     const int id = next_id_++;
+    if (dictionary->GetString("method") == "DOM.enable") dom_enable_id_ = id;
     pending_ids_[@(id)] = @(dictionary->GetInt("id"));
     dictionary->SetInt("id", id);
     std::string json = CefWriteJSON(value, JSON_WRITER_DEFAULT).ToString();
@@ -108,6 +214,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
           options:NSJSONReadingMutableContainers error:nil];
       if (![json isKindOfClass:[NSMutableDictionary class]]) return true;
       if (NSNumber* id = json[@"id"]) {
+        if (id.intValue == dom_enable_id_ && json[@"result"]) dom_ready_ = true;
         NSNumber* original = pending_ids_[id];
         if (!original) return true;
         json[@"id"] = original;
@@ -116,22 +223,35 @@ class NativeBrowserDevToolsClient final : public CefClient,
       NSData* payload = [NSJSONSerialization dataWithJSONObject:json options:0 error:nil];
       NSString* encoded = [payload base64EncodedStringWithOptions:0];
       NSString* script = [NSString stringWithFormat:
-          @"globalThis.InspectorFrontendAPI?.dispatchMessage(new TextDecoder().decode(Uint8Array.from(atob('%@'),c=>c.charCodeAt(0))))", encoded];
+          @"globalThis.nativeBrowserInspectorDispatch?.(new TextDecoder().decode(Uint8Array.from(atob('%@'),c=>c.charCodeAt(0))))", encoded];
       browser_->GetMainFrame()->ExecuteJavaScript(std::string(script.UTF8String), "", 0);
+      RevealPendingNode();
     }
     return true;
   }
 
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    if (popup_pending_) {
+      popup_pending_ = false;
+      emulation_browser_ = browser;
+      browser->GetHost()->SetAccessibilityState(STATE_ENABLED);
+      NBApplyDarkAppearance(browser, dark_appearance_);
+      ResizeEmulation();
+      if (closing_) browser->GetHost()->CloseBrowser(true);
+      return;
+    }
     browser_ = browser;
+    if (closing_) { browser->GetHost()->CloseBrowser(true); return; }
     if (inspected_ && inspected_->IsValid())
       registration_ = inspected_->GetHost()->AddDevToolsMessageObserver(this);
     browser->GetHost()->SetAccessibilityState(STATE_ENABLED);
+    NBApplyDarkAppearance(browser, dark_appearance_);
     [bridge_ devToolsDidCreate];
   }
 
   bool OnSetFocus(CefRefPtr<CefBrowser> browser, FocusSource source) override {
-    return ![bridge_ devToolsAllowsFocus];
+    NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+    return closing_ || !view.window || view.isHiddenOrHasHiddenAncestor || ![bridge_ devToolsAllowsFocus];
   }
 
   bool DoClose(CefRefPtr<CefBrowser> browser) override {
@@ -148,15 +268,141 @@ class NativeBrowserDevToolsClient final : public CefClient,
   }
 
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
-    Disconnect();
-    browser_ = nullptr;
-    [bridge_ devToolsDidClose];
+    if (emulation_browser_ && emulation_browser_->IsSame(browser)) {
+      emulation_browser_ = nullptr;
+    } else {
+      browser_ = nullptr;
+      closing_ = true;
+      Disconnect();
+      if (emulation_browser_) emulation_browser_->GetHost()->CloseBrowser(true);
+    }
+    FinishClose();
   }
 
  private:
+  void RevealPendingNode() {
+    if (!dom_ready_ || !pending_node_id_ || closing_) return;
+    // Reuse Chromium's normal element-picking event and its Elements revealer.
+    NSDictionary *event = @{@"method": @"Overlay.inspectNodeRequested",
+                             @"params": @{@"backendNodeId": @(pending_node_id_)}};
+    pending_node_id_ = 0;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
+    FrontendCall(@"nativeBrowserInspectorDispatch",
+                 @[[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]]);
+    if ([bridge_ devToolsAllowsFocus]) {
+      NSView *child = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser_->GetHost()->GetWindowHandle());
+      [child.window makeKeyAndOrderFront:nil];
+      browser_->GetHost()->SetFocus(true);
+    }
+  }
+  void FinishClose() {
+    if (closing_ && !browser_ && !emulation_browser_ && !popup_pending_)
+      [bridge_ devToolsDidClose];
+  }
+  void FrontendCall(NSString *method, NSArray *arguments) {
+    if (!browser_ || closing_) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:arguments options:0 error:nil];
+    NSString *encoded = [data base64EncodedStringWithOptions:0];
+    NSString *script = [NSString stringWithFormat:
+      @"globalThis.%@?.(...JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('%@'),c=>c.charCodeAt(0)))))",
+      method, encoded];
+    browser_->GetMainFrame()->ExecuteJavaScript(script.UTF8String, "", 0);
+  }
+  void Event(NSString *name, NSArray *arguments) {
+    FrontendCall([@"InspectorFrontendAPI." stringByAppendingString:name], arguments);
+  }
+  void HandleHostRequest(NSDictionary *request) {
+    NSString *method = request[@"method"];
+    NSArray *params = request[@"params"];
+    NSNumber *id = request[@"id"];
+    if (![method isKindOfClass:NSString.class] || ![params isKindOfClass:NSArray.class] ||
+        ![id isKindOfClass:NSNumber.class]) return;
+    if ([method isEqualToString:@"bounds"] && params.count == 1 && [params[0] isKindOfClass:NSDictionary.class]) {
+      NSDictionary *rect = params[0];
+      for (NSString *key in @[@"x", @"y", @"width", @"height"])
+        if (![rect[key] isKindOfClass:NSNumber.class] || !std::isfinite([rect[key] doubleValue])) return;
+      [bridge_.delegate browserBridge:bridge_ didSetInspectedPageBounds:
+        NSMakeRect([rect[@"x"] doubleValue], [rect[@"y"] doubleValue],
+                   MAX(0, [rect[@"width"] doubleValue]), MAX(0, [rect[@"height"] doubleValue]))];
+    } else if ([method isEqualToString:@"dock"] && params.count == 1 && [params[0] isKindOfClass:NSString.class]) {
+      if (![@[@"bottom", @"left", @"right", @"undocked"] containsObject:params[0]]) return;
+      [bridge_.delegate browserBridge:bridge_ didSetDevToolsDocked:![params[0] isEqualToString:@"undocked"]];
+    } else if ([method isEqualToString:@"front"] || [method isEqualToString:@"ready"]) {
+      if ([method isEqualToString:@"ready"]) {
+        frontend_ready_ = true;
+        // Creation precedes the initial navigation. Reapply now that the
+        // renderer and ThemeSupport listeners exist, including after reload.
+        SetDarkAppearance(dark_appearance_);
+      }
+      if ([bridge_ devToolsAllowsFocus]) {
+        NSView *child = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser_->GetHost()->GetWindowHandle());
+        [child.window makeKeyAndOrderFront:nil];
+      }
+    } else if ([method isEqualToString:@"copy"] && params.count == 1 && [params[0] isKindOfClass:NSString.class]) {
+      [NSPasteboard.generalPasteboard clearContents];
+      [NSPasteboard.generalPasteboard setString:params[0] forType:NSPasteboardTypeString];
+    } else if ([method isEqualToString:@"open"] && params.count == 1 && [params[0] isKindOfClass:NSString.class]) {
+      [bridge_ browserDidRequestPopup:params[0]];
+    } else if ([method isEqualToString:@"zoom"] && params.count == 1 && [params[0] isKindOfClass:NSNumber.class]) {
+      double delta = [params[0] doubleValue];
+      double level = delta == 0 ? 0 : std::clamp(browser_->GetHost()->GetZoomLevel() + delta, -3.0, 5.0);
+      FrontendCall(@"nativeBrowserInspectorSetZoom", @[@(std::pow(1.2, level))]);
+      browser_->GetHost()->SetZoomLevel(level);
+    } else if ([method isEqualToString:@"save"] && params.count == 4 &&
+        [params[0] isKindOfClass:NSString.class] && [params[1] isKindOfClass:NSString.class] &&
+        [params[2] isKindOfClass:NSNumber.class] && [params[3] isKindOfClass:NSNumber.class]) {
+      Save(params[0], params[1], [params[2] boolValue], [params[3] boolValue]);
+    } else if ([method isEqualToString:@"append"] && params.count == 2 &&
+        [params[0] isKindOfClass:NSString.class] && [params[1] isKindOfClass:NSString.class]) {
+      NSString *path = saved_paths_[params[0]];
+      if (path) {
+        NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:path];
+        NSError *error = nil;
+        if (file && [file seekToEndReturningOffset:nil error:&error] &&
+            [file writeData:[params[1] dataUsingEncoding:NSUTF8StringEncoding] error:&error])
+          Event(@"appendedToURL", @[params[0]]);
+        [file closeAndReturnError:nil];
+      }
+    }
+    FrontendCall(@"nativeBrowserInspectorReply", @[id, NSNull.null]);
+  }
+  void Save(NSString *url, NSString *content, bool forceSaveAs, bool isBase64) {
+    NSData *data = isBase64 ? [[NSData alloc] initWithBase64EncodedString:content options:0]
+                           : [content dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) { Event(@"canceledSaveURL", @[url]); return; }
+    CefRefPtr<NativeBrowserDevToolsClient> retained = this;
+    auto write = ^(NSURL *destination) {
+      if (!retained->browser_ || retained->closing_) return;
+      if (destination && [data writeToURL:destination options:NSDataWritingAtomic error:nil]) {
+        retained->saved_paths_[url] = destination.path;
+        retained->Event(@"savedURL", @[url, destination.path]);
+      } else retained->Event(@"canceledSaveURL", @[url]);
+    };
+    if (!forceSaveAs && saved_paths_[url]) { write([NSURL fileURLWithPath:saved_paths_[url]]); return; }
+    // AppKit panels run asynchronously, outside the CEF callback stack.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (!retained->browser_ || retained->closing_) return;
+      NSSavePanel *panel = [NSSavePanel savePanel];
+      panel.nameFieldStringValue = [NSURL URLWithString:url].lastPathComponent ?: @"DevTools export";
+      NSView *child = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(retained->browser_->GetHost()->GetWindowHandle());
+      void (^complete)(NSModalResponse) = ^(NSModalResponse result) { write(result == NSModalResponseOK ? panel.URL : nil); };
+      if (child.window) [panel beginSheetModalForWindow:child.window completionHandler:complete];
+      else [panel beginWithCompletionHandler:complete];
+    });
+  }
+
   __weak BrowserBridge *bridge_;
   CefRefPtr<CefBrowser> browser_;
   CefRefPtr<CefBrowser> inspected_;
+  CefRefPtr<CefBrowser> emulation_browser_;
+  bool popup_pending_ = false;
+  bool closing_ = false;
+  bool frontend_ready_ = false;
+  bool dark_appearance_;
+  bool dom_ready_ = false;
+  int dom_enable_id_ = 0;
+  int pending_node_id_ = 0;
+  __strong NSMutableDictionary<NSString*, NSString*>* saved_paths_;
   CefRefPtr<CefRegistration> registration_;
   __strong NSMutableDictionary<NSNumber*, NSNumber*>* pending_ids_;
   int next_id_ = 1000000000;
@@ -180,6 +426,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
   CefRefPtr<CEFClientHandler> _client;
   CefRefPtr<NativeBrowserDevToolsClient> _devToolsClient;
   __weak NSView *_devToolsParentView;
+  __weak NSView *_devToolsEmulationParentView;
   BOOL _devToolsCloseRequested;
   BOOL _closePageAfterDevTools;
   BOOL _closeNotificationDelivered;
@@ -273,6 +520,28 @@ class NativeBrowserDevToolsClient final : public CefClient,
   }
 }
 
+- (void)viewPageSource {
+  if (_closed || _closeRequested || _ordinaryCloseRequested) return;
+  auto browser = _client->browser();
+  if (!browser || !browser->IsValid()) return;
+  NSString *url = [NSString stringWithUTF8String:browser->GetMainFrame()->GetURL().ToString().c_str()];
+  if (url.length == 0) return;
+  // Let Chromium render its source viewer in a managed tab, with normal
+  // selection, search and syntax highlighting. Avoid nesting view-source:.
+  if (![url hasPrefix:@"view-source:"]) url = [@"view-source:" stringByAppendingString:url];
+  [self browserDidRequestPopup:url];
+}
+
+- (void)browserDidRequestInspectNode:(NSInteger)backendNodeID {
+  if (_closed || _closeRequested || _ordinaryCloseRequested) return;
+  [self.delegate browserBridge:self didRequestInspectNode:backendNodeID];
+}
+
+- (void)revealDevToolsNode:(NSInteger)backendNodeID {
+  if (_devToolsClient && !_devToolsCloseRequested && backendNodeID > 0)
+    _devToolsClient->RevealNode(static_cast<int>(backendNodeID));
+}
+
 - (BOOL)showDevToolsInView:(NSView *)view {
   if (_closed || _closeRequested || _ordinaryCloseRequested ||
       _devToolsCloseRequested || view.window == nil) return NO;
@@ -280,7 +549,9 @@ class NativeBrowserDevToolsClient final : public CefClient,
   if (!browser) return NO;
   _devToolsParentView = view;
   if (_devToolsClient) return YES;
-  _devToolsClient = new NativeBrowserDevToolsClient(self, browser);
+  const bool dark = [[view.effectiveAppearance bestMatchFromAppearancesWithNames:
+      @[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]] isEqualToString:NSAppearanceNameDarkAqua];
+  _devToolsClient = new NativeBrowserDevToolsClient(self, browser, dark);
   CefWindowInfo windowInfo;
   windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
   windowInfo.SetAsChild(CAST_NSVIEW_TO_CEF_WINDOW_HANDLE(view),
@@ -293,7 +564,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
   auto extraInfo = CefDictionaryValue::Create();
   extraInfo->SetBool("nativeBrowserInspector", true);
   bool created = CefBrowserHost::CreateBrowser(windowInfo, _devToolsClient,
-      "devtools://devtools/bundled/devtools_app.html", settings, extraInfo,
+      kInspectorURL, settings, extraInfo,
       browser->GetHost()->GetRequestContext());
   if (!created) {
     _devToolsClient = nullptr;
@@ -305,15 +576,13 @@ class NativeBrowserDevToolsClient final : public CefClient,
 - (void)closeDevTools {
   if (!_devToolsClient) return;
   _devToolsCloseRequested = YES;
-  _devToolsClient->Disconnect();
-  if (CefRefPtr<CefBrowser> inspector = _devToolsClient->browser()) {
-    inspector->GetHost()->CloseBrowser(/*force_close=*/true);
-  }
+  _devToolsClient->Close();
   // A close before OnAfterCreated is remembered and completed by that callback.
 }
 
 - (void)resizeDevTools {
   if (!_devToolsClient || _devToolsCloseRequested) return;
+  _devToolsClient->ResizeEmulation();
   CefRefPtr<CefBrowser> inspector = _devToolsClient->browser();
   NSView *parent = _devToolsParentView;
   if (!inspector || !parent) return;
@@ -335,6 +604,13 @@ class NativeBrowserDevToolsClient final : public CefClient,
   }
 }
 
+- (void)setDevToolsEmulationHostView:(NSView *)view {
+  _devToolsEmulationParentView = view;
+  if (_devToolsClient) _devToolsClient->ResizeEmulation();
+}
+
+- (NSView *)devToolsEmulationHostView { return _devToolsEmulationParentView; }
+
 - (void)devToolsDidCreate {
   if (_closed || _closeRequested || _ordinaryCloseRequested || _devToolsCloseRequested) {
     [self closeDevTools];
@@ -353,6 +629,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
   _devToolsClient = nullptr;
   _devToolsCloseRequested = NO;
   _devToolsParentView = nil;
+  _devToolsEmulationParentView = nil;
   [self.delegate browserBridgeDidCloseDevTools:self];
   if (_closePageAfterDevTools) {
     _closePageAfterDevTools = NO;
@@ -442,13 +719,7 @@ class NativeBrowserDevToolsClient final : public CefClient,
   // Returning to the page, switching tabs or editing the address must also
   // release the inspector's CEF focus. It shares this session's native shell.
   if (_devToolsClient) {
-    if (CefRefPtr<CefBrowser> inspector = _devToolsClient->browser()) {
-      inspector->GetHost()->SetFocus(false);
-      NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(inspector->GetHost()->GetWindowHandle());
-      if (!focused && NBResponderBelongsToView(view.window.firstResponder, view)) {
-        [view.window makeFirstResponder:nil];
-      }
-    }
+    _devToolsClient->ReleaseFocus(!focused);
   }
   host->SetFocus(focused);
 
@@ -477,18 +748,8 @@ class NativeBrowserDevToolsClient final : public CefClient,
     return NO;
   }
 
-  // The request-context color variant changes Chromium's own theme, but in
-  // Alloy it does not update a page's prefers-color-scheme media query. Set
-  // that media feature through Chromium's supported DevTools protocol instead.
-  CefRefPtr<CefDictionaryValue> feature = CefDictionaryValue::Create();
-  feature->SetString("name", "prefers-color-scheme");
-  feature->SetString("value", dark ? "dark" : "light");
-  CefRefPtr<CefListValue> features = CefListValue::Create();
-  features->SetDictionary(0, feature);
-  CefRefPtr<CefDictionaryValue> params = CefDictionaryValue::Create();
-  params->SetList("features", features);
-  return browser->GetHost()->ExecuteDevToolsMethod(
-             0, "Emulation.setEmulatedMedia", params) != 0;
+  if (_devToolsClient) _devToolsClient->SetDarkAppearance(dark);
+  return NBApplyDarkAppearance(browser, dark);
 }
 
 - (void)resizeToBounds:(NSRect)bounds {

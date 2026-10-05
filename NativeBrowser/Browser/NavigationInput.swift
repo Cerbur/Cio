@@ -124,7 +124,7 @@ private func isLocalAddress(_ host: String?) -> Bool {
 /// Schemes that are navigation targets without an authority. Kept deliberately
 /// short: anything else that looks like `word:word` is treated as a search
 /// rather than being handed to Chromium as a scheme it will refuse.
-private let knownSchemes: Set<String> = ["http", "https", "file", "about", "chrome", "data"]
+private let knownSchemes: Set<String> = ["http", "https", "file", "about", "chrome", "data", "view-source"]
 
 /// Whether the text is an address with an explicit scheme.
 ///

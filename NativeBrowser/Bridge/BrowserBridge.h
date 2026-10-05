@@ -119,6 +119,9 @@ NS_SWIFT_UI_ACTOR
 
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 - (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
+- (void)browserBridge:(BrowserBridge *)bridge didSetInspectedPageBounds:(NSRect)bounds;
+- (void)browserBridge:(BrowserBridge *)bridge didSetDevToolsDocked:(BOOL)docked;
+- (void)browserBridge:(BrowserBridge *)bridge didRequestInspectNode:(NSInteger)backendNodeID;
 
 @end
 
@@ -150,13 +153,17 @@ NS_SWIFT_UI_ACTOR
 - (void)goForward;
 - (void)reload;
 - (void)stopLoading;
+- (void)viewPageSource;
 
 /// Embeds Chromium's DevTools frontend in an application-owned native view.
 /// Returns NO when the request cannot be accepted (e.g. during teardown).
 - (BOOL)showDevToolsInView:(NSView *)view;
 - (void)closeDevTools;
 - (void)resizeDevTools;
+- (void)revealDevToolsNode:(NSInteger)backendNodeID;
 - (void)reparentDevToolsToView:(NSView *)view;
+/// The device-mode toolbox remains in the page shell when the inspector undocks.
+- (void)setDevToolsEmulationHostView:(NSView *)view;
 
 /// Reads the visible entry on CEF's UI thread. Certificates are DER bytes;
 /// no CEF objects escape the bridge and no second network request is made.
@@ -259,8 +266,10 @@ NS_SWIFT_UI_ACTOR
                                      errorCode:(NSInteger)errorCode;
 - (void)browserDidClose;
 - (void)devToolsDidCreate;
+- (void)browserDidRequestInspectNode:(NSInteger)backendNodeID;
 - (void)devToolsDidClose;
 - (BOOL)devToolsAllowsFocus;
+- (nullable NSView *)devToolsEmulationHostView;
 
 @end
 
