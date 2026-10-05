@@ -9,6 +9,7 @@ enum BrowserSplitRevealTransition {
   static let cardSize = CGSize(width: 140, height: 196)
   static let duration: TimeInterval = 0.48
   static let exitDuration: TimeInterval = 0.22
+  static let layoutDuration: TimeInterval = 0.26
   static let sampleCount = 120
   static let glassHoldFraction = 0.08
   static let glassFadeFraction = 0.92
@@ -16,14 +17,18 @@ enum BrowserSplitRevealTransition {
   private static let exitEasing: (Float, Float, Float, Float) = (0.3, 0, 0.65, 1)
 
   enum Direction {
-    case enter, exit
+    case enter, exit, layout
     var duration: TimeInterval {
-      self == .enter ? BrowserSplitRevealTransition.duration : exitDuration
+      switch self {
+      case .enter: BrowserSplitRevealTransition.duration
+      case .exit: exitDuration
+      case .layout: layoutDuration
+      }
     }
     private var controlPoints: (Float, Float, Float, Float) {
       // Reverse the geometry, but settle both ends of the quick exit. A literal
       // mirrored entry curve finishes at high speed and makes the hide snap.
-      self == .enter ? easing : exitEasing
+      self == .exit ? exitEasing : easing
     }
     var timingFunction: CAMediaTimingFunction {
       let (x1, y1, x2, y2) = controlPoints
@@ -60,7 +65,7 @@ enum BrowserSplitRevealTransition {
   private static let enterSamples = (0...sampleCount).map { Direction.enter.progress(at: Double($0) / Double(sampleCount)) }
   private static let exitSamples = (0...sampleCount).map { Direction.exit.progress(at: Double($0) / Double(sampleCount)) }
   static func progressSamples(_ direction: Direction) -> [CGFloat] {
-    direction == .enter ? enterSamples : exitSamples
+    direction == .exit ? exitSamples : enterSamples
   }
 
   /// Geometry is expressed in host coordinates, so an interrupted flight can
@@ -189,12 +194,12 @@ enum BrowserSplitRevealTransition {
     let animation = CAKeyframeAnimation(keyPath: "opacity")
     animation.values = (0...sampleCount).map { step in
       let time = Double(step) / Double(sampleCount)
-      let entryTime = direction == .enter ? time : 1 - time
+      let entryTime = direction == .exit ? 1 - time : time
       let fade = min(1, max(0, (entryTime - glassHoldFraction) / (glassFadeFraction - glassHoldFraction)))
       // Continuous opacity slope avoids the visible speed changes between the
       // old opacity keyframes. Reversal retains the captured material opacity.
       let dissolve = fade * fade * (3 - 2 * fade)
-      let progress = direction == .enter ? dissolve : 1 - dissolve
+      let progress = direction == .exit ? 1 - dissolve : dissolve
       return Double(from) + Double(to - from) * progress
     }
     animation.duration = direction.duration

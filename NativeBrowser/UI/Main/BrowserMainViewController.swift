@@ -240,9 +240,12 @@ final class BrowserMainViewController: NSViewController {
       }
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
-      self.splitDropTarget = canSplit ? (self.runtime.workspaceStore.activeSplit?.dropTarget(at: local.x, in: browser.bounds)
-        ?? BrowserSplitLayout.DropTarget(side: BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds))) : nil
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
+      self.splitDropTarget = canSplit ? (self.runtime.workspaceStore.activeSplit?.dropTarget(
+        at: local.x, in: browser.bounds, previous: self.splitDropTarget)
+        ?? BrowserSplitLayout.DropTarget(side: BrowserSplitLayout.dropSide(
+          at: local.x, in: browser.bounds, previous: self.splitDropTarget?.side,
+          incomingPaneCount: count))) : nil
       self.runtime.workspaceStore.sessionManager.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
     }
     drag.onSplitRevealFrame = { [weak self] frame in

@@ -120,6 +120,7 @@ final class BrowserSurfaceHostView: NSView {
   private let secondDivider = BrowserSplitDividerView()
   private let preview = BrowserSplitPreviewView()
   private var previewFrameTarget: CGRect?
+  private var previewMaterialTarget = false
   private var previewFlightToken: UUID?
   nonisolated(unsafe) private var paneClickMonitor: Any?
 
@@ -267,6 +268,7 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     var previewFrame: CGRect?
+    var previewHasMaterial = false
     setDividerFrames([])
     var next: [UUID: PagePlacement] = [:]
     if let id = liftedPaneID, let split, split.contains(id) {
@@ -277,6 +279,7 @@ final class BrowserSurfaceHostView: NSView {
         for (position, member) in shown.tabIDs.enumerated() {
           if member == id {
             previewFrame = frames.panes[position]
+            previewHasMaterial = true
 
           } else {
             next[member] = PagePlacement(frame: frames.panes[position],
@@ -303,10 +306,16 @@ final class BrowserSurfaceHostView: NSView {
       let frames = shown.paneFrames(in: bounds)
       let targetIndex = shown.tabIDs.firstIndex(of: placeholderID)!
       previewFrame = frames.panes[targetIndex]
+      previewHasMaterial = !target.replacesPane && split.middleTabID == nil
 
       setDividerFrames(frames.dividers)
       for id in split.tabIDs {
-        if let destination = shown.tabIDs.firstIndex(of: id) {
+        if !previewHasMaterial, let index = split.tabIDs.firstIndex(of: id) {
+          // Replacement highlights the live page until release. Hovering must
+          // not hide it, contract it into a card, or change either divider.
+          next[id] = PagePlacement(frame: frames.panes[index],
+            roundedEdge: roundedEdge(at: index, count: frames.panes.count))
+        } else if let destination = shown.tabIDs.firstIndex(of: id) {
           next[id] = PagePlacement(frame: frames.panes[destination],
             roundedEdge: roundedEdge(at: destination, count: frames.panes.count))
         } else {
@@ -321,6 +330,7 @@ final class BrowserSurfaceHostView: NSView {
 
         next[selectedTabID] = PagePlacement(frame: bounds)
       } else if incomingPaneCount == 2 {
+        previewHasMaterial = true
         let shown = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: 1.0 / 3,
                                        middleTabID: UUID(), secondFraction: 2.0 / 3)
         let frames = shown.paneFrames(in: bounds)
@@ -332,6 +342,7 @@ final class BrowserSurfaceHostView: NSView {
         next[selectedTabID] = PagePlacement(frame: frames.panes[survivorIndex],
           roundedEdge: roundedEdge(at: survivorIndex, count: 3))
       } else {
+        previewHasMaterial = true
         let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
           maximumSurvivorWidth: pages[selectedTabID]?.surface.frame.width ?? bounds.width)
         previewFrame = frames.target
@@ -353,34 +364,44 @@ final class BrowserSurfaceHostView: NSView {
       next[selectedTabID] = PagePlacement(frame: bounds)
     }
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
-    updatePreviewFrame(previewFrame, animated: animatedPresentation)
+    updatePreviewFrame(previewFrame, hasMaterial: previewHasMaterial, animated: animatedPresentation)
   }
 
   /// Grow the native drop region from the outer edge while the survivor loses
   /// exactly that width. Use the page motion curve and duration so both sides
   /// of the boundary travel together; cancel from the current visible frame.
-  private func updatePreviewFrame(_ destination: CGRect?, animated: Bool) {
-    guard previewFrameTarget != destination else { return }
+  private func updatePreviewFrame(_ destination: CGRect?, hasMaterial: Bool, animated: Bool) {
+    guard previewFrameTarget != destination || previewMaterialTarget != hasMaterial else { return }
     let previous = previewFrameTarget
+    let hadMaterial = previewMaterialTarget
     previewFrameTarget = destination
+    previewMaterialTarget = hasMaterial
     guard let layer = preview.layer else { return }
     let shown = preview.isHidden ? nil : (layer.presentation() ?? layer).frame
+    let shownOpacity = preview.isHidden ? 0 : (layer.presentation() ?? layer).opacity
     layer.removeAnimation(forKey: "split-preview-bounds")
     layer.removeAnimation(forKey: "split-preview-position")
+    layer.removeAnimation(forKey: "split-preview-opacity")
     let token = UUID()
     previewFlightToken = token
-    let canAnimate = animated && window != nil
+    let canAnimate = animated && !isCommittingSplitPreview && window != nil
       && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    guard canAnimate, let region = destination ?? previous, region != bounds else {
+    preview.setMaterialVisible(destination == nil ? hadMaterial : hasMaterial)
+    layer.opacity = destination == nil ? 0 : 1
+    guard canAnimate, let region = destination ?? previous else {
       preview.isHidden = destination == nil
       if let destination { preview.frame = destination }
       if let destination { preview.prepareMaterial(size: destination.size) }
       return
     }
-    let collapsed = CGRect(x: region.midX < bounds.midX ? bounds.minX : bounds.maxX - 1,
+    let insertionOrigin: CGFloat
+    if region.minX <= bounds.minX { insertionOrigin = bounds.minX }
+    else if region.maxX >= bounds.maxX { insertionOrigin = bounds.maxX - 1 }
+    else { insertionOrigin = split?.paneFrames(in: bounds).dividers.first?.midX ?? region.midX }
+    let collapsed = CGRect(x: insertionOrigin,
                            y: region.minY, width: 1, height: region.height)
-    let source = shown ?? collapsed
-    let final = destination ?? collapsed
+    let source = shown ?? (hasMaterial ? collapsed : region)
+    let final = destination ?? (hadMaterial ? collapsed : region)
     preview.frame = final
     preview.prepareMaterial(size: CGSize(width: max(source.width, final.width), height: final.height))
     preview.isHidden = false
@@ -392,6 +413,10 @@ final class BrowserSurfaceHostView: NSView {
                          y: layer.position.y - final.minY - anchor.y * final.height)
     let sizes = CAKeyframeAnimation(keyPath: "bounds")
     let positions = CAKeyframeAnimation(keyPath: "position")
+    let opacity = CABasicAnimation(keyPath: "opacity")
+    opacity.fromValue = shownOpacity
+    opacity.toValue = layer.opacity
+    opacity.timingFunction = BrowserSplitRevealTransition.Direction.layout.timingFunction
     var boundsValues: [NSValue] = []
     var positionValues: [NSValue] = []
     for amount in BrowserSplitRevealTransition.progressSamples(.enter) {
@@ -404,7 +429,7 @@ final class BrowserSurfaceHostView: NSView {
     }
     sizes.values = boundsValues
     positions.values = positionValues
-    let direction = BrowserSplitRevealTransition.Direction.enter
+    let direction = BrowserSplitRevealTransition.Direction.layout
     let beginTime = CACurrentMediaTime()
     for animation in [sizes, positions] {
       animation.duration = direction.duration
@@ -415,11 +440,15 @@ final class BrowserSurfaceHostView: NSView {
     }
     layer.add(sizes, forKey: "split-preview-bounds")
     layer.add(positions, forKey: "split-preview-position")
+    opacity.duration = direction.duration
+    opacity.beginTime = beginTime
+    layer.add(opacity, forKey: "split-preview-opacity")
     DispatchQueue.main.asyncAfter(deadline: .now() + direction.duration) { [weak self] in
       guard let self, self.previewFlightToken == token else { return }
       self.previewFlightToken = nil
       self.preview.layer?.removeAnimation(forKey: "split-preview-bounds")
       self.preview.layer?.removeAnimation(forKey: "split-preview-position")
+      self.preview.layer?.removeAnimation(forKey: "split-preview-opacity")
       self.preview.isHidden = destination == nil
     }
   }
@@ -477,7 +506,8 @@ final class BrowserSurfaceHostView: NSView {
     applyPlacements(next, animatedVisibility: animatedVisibility && window != nil)
     for (id, source) in entries {
       guard let placement = next[id] else { continue }
-      startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame), direction: .enter)
+      startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame),
+        direction: source.glassOpacity > 0 ? .enter : .layout)
     }
   }
 
@@ -615,6 +645,10 @@ private final class BrowserSplitPreviewView: NSView {
     // the backdrop. Only a larger target or a window-height change resizes it.
     let frame = CGRect(origin: .zero, size: CGSize(width: max(material.frame.width, size.width), height: size.height))
     if material.frame != frame { material.frame = frame }
+  }
+
+  func setMaterialVisible(_ visible: Bool) {
+    material.isHidden = !visible
   }
 
   @available(*, unavailable)

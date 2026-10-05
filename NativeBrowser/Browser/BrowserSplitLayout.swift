@@ -67,24 +67,59 @@ struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
     return min(max(fraction, minimum), 1 - minimum)
   }
 
-  /// A single page has two split zones and a central selection/return zone.
-  static func dropSide(at x: CGFloat, in bounds: CGRect) -> Side {
+  static let dropBoundarySlop: CGFloat = 8
+
+  /// Enter through the outer thirds; keep an open slot until the pointer
+  /// leaves its final preview frame. Trigger geometry never follows animation.
+  static func dropSide(at x: CGFloat, in bounds: CGRect, previous: Side? = nil,
+                       incomingPaneCount: Int = 1) -> Side {
+    if let previous, previous != .middle {
+      let width = max(0, bounds.width - CGFloat(incomingPaneCount) * dividerWidth)
+      let slotWidth = width * CGFloat(incomingPaneCount) / CGFloat(incomingPaneCount + 1)
+        + CGFloat(incomingPaneCount - 1) * dividerWidth
+      let start = previous == .left ? bounds.minX : bounds.maxX - slotWidth
+      if x >= start - dropBoundarySlop && x <= start + slotWidth + dropBoundarySlop {
+        return previous
+      }
+    }
     let fraction = (x - bounds.minX) / max(1, bounds.width)
     return fraction < 1.0 / 3 ? .left : (fraction < 2.0 / 3 ? .middle : .right)
   }
 
   /// Resolve against committed geometry, so moving a preview cannot move its
   /// own trigger zone. The middle insertion zone straddles the existing divider.
-  func dropTarget(at x: CGFloat, in bounds: CGRect) -> DropTarget {
+  func dropTarget(at x: CGFloat, in bounds: CGRect, previous: DropTarget? = nil) -> DropTarget {
     let frames = paneFrames(in: bounds)
     if middleTabID == nil {
+      if let previous, !previous.replacesPane {
+        let placeholder = UUID()
+        let shown = placingPane(placeholder, at: previous)
+        let index = shown.tabIDs.firstIndex(of: placeholder)!
+        let slot = shown.paneFrames(in: bounds).panes[index]
+        if x >= slot.minX - Self.dropBoundarySlop && x <= slot.maxX + Self.dropBoundarySlop {
+          return previous
+        }
+      }
       // Reserve narrow strips for insertion, leaving each pane's body available
-      // for replacement. Even an uneven pair retains all five distinct zones.
-      let insertionWidth = min(frames.panes[0].width, frames.panes[1].width) / 5
-      if x < bounds.minX + insertionWidth { return DropTarget(side: .left) }
-      if x >= bounds.maxX - insertionWidth { return DropTarget(side: .right) }
-      if abs(x - frames.dividers[0].midX) <= insertionWidth {
+      // for replacement. Size outer strips from their own pane so a narrow
+      // neighbour cannot make the wider pane's edge difficult to acquire.
+      func insertionWidth(_ width: CGFloat) -> CGFloat {
+        min(width / 4, min(96, max(44, width / 5)))
+      }
+      let leftWidth = insertionWidth(frames.panes[0].width)
+      let rightWidth = insertionWidth(frames.panes[1].width)
+      let dividerZoneWidth = min(leftWidth, rightWidth)
+      if x < bounds.minX + leftWidth { return DropTarget(side: .left) }
+      if x >= bounds.maxX - rightWidth { return DropTarget(side: .right) }
+      if abs(x - frames.dividers[0].midX) <= dividerZoneWidth {
         return DropTarget(side: .middle)
+      }
+    }
+    if middleTabID != nil, let previous, previous.replacesPane {
+      let index = previous.side == .left ? 0 : (previous.side == .middle ? 1 : 2)
+      let pane = frames.panes[index]
+      if x >= pane.minX - Self.dropBoundarySlop && x <= pane.maxX + Self.dropBoundarySlop {
+        return previous
       }
     }
     let index = dropPaneIndex(at: x, in: bounds)
