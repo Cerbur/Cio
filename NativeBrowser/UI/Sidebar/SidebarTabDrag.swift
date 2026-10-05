@@ -296,7 +296,7 @@ final class SidebarTabDrag {
     let liftTimer = Timer(timeInterval: 0.016, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self, self.generation == generation, self.isPaneDrag, self.isDragging else { return }
-        withAnimation(self.reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.84)) {
+        withAnimation(self.reduceMotion ? nil : BrowserSplitRevealTransition.Direction.exit.animation) {
           self.size = self.blockSize(for: self.style)
           self.paneSnapshotOpacity = 0
           self.isLifted = true
@@ -506,7 +506,11 @@ final class SidebarTabDrag {
     withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) {
       phase = .landing
     }
-    if isPaneDrag {
+    if isPaneDrag, onSplitLandingFrame?() != nil, !reduceMotion {
+      // Cancellation hands the floating glass back to the live page animator,
+      // just like a successful split drop; no separate snapshot landing spring.
+      expandIntoSplit()
+    } else if isPaneDrag {
       land(in: paneSourceFrame, style: .card)
     } else {
       settle(id, in: sourceTier)
@@ -621,7 +625,7 @@ final class SidebarTabDrag {
     switch style {
     case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: BrowserLayout.sidebarTabRowHeight)
     case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 40.5)
-    case .card: return CGSize(width: 140, height: 140 * 1.4)
+    case .card: return BrowserSplitRevealTransition.cardSize
     }
   }
 

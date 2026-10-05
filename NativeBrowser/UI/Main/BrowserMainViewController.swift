@@ -193,6 +193,7 @@ final class BrowserMainViewController: NSViewController {
     view.addSubview(overlay, positioned: .above, relativeTo: nil)
     dragOverlay = overlay
     overlayDrag = drag
+    var splitLandingTabIDs: [UUID] = []
     runtime.workspaceStore.sessionManager.onSplitPaneDrag = { [weak self, weak drag] id, event in
       guard let self, let drag else { return false }
       let sidebar = self.sidebarItem.viewController.view
@@ -206,6 +207,7 @@ final class BrowserMainViewController: NSViewController {
         guard drag.beginPane(id, tier: tier, at: sidebar.convert(point, from: nil),
                              frame: sidebar.convert(frame, from: nil), snapshot: snapshot,
                              groupTabIDs: group.tabIDs) else { return false }
+        splitLandingTabIDs = [id]
         self.paneDropIndex = nil
         workspace.sessionManager.previewPaneDrag(id)
         return true
@@ -243,7 +245,6 @@ final class BrowserMainViewController: NSViewController {
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
       self.runtime.workspaceStore.sessionManager.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
     }
-    var splitLandingTabIDs: [UUID] = []
     drag.onSplitRevealFrame = { [weak self] frame in
       guard let self else { return }
       let windowFrame = frame.flatMap { frame in

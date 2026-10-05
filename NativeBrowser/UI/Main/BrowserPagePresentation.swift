@@ -12,7 +12,11 @@ final class BrowserPagePresentation {
   private(set) var toolbar: BrowserToolbarController?
   let splitControl = BrowserSplitPaneControl(frame: .zero)
   private var splitRevealGlass: SplitRevealGlassView?
-  nonisolated(unsafe) private var splitRevealGlassTimer: Timer?
+  nonisolated(unsafe) private var splitRevealDisplayLink: CADisplayLink?
+  private var splitRevealGlassFrames: [CGRect] = []
+  private var splitRevealGlassRadii: [CGFloat] = []
+  private var splitRevealGlassBeginTime: CFTimeInterval = 0
+  private var splitRevealGlassDuration: TimeInterval = 0
   private weak var installedWindow: NSWindow?
 
   init(tabID: UUID, surface: ChromiumContainerView, viewport: NSView) {
@@ -51,12 +55,12 @@ final class BrowserPagePresentation {
   }
 
   func layout(in contentHost: NSView, chromeHost: NSView?, frame: CGRect,
-              cropOnly: Bool, toolbarVisible: Bool, toolbarLayoutFrame: CGRect, animatedVisibility: Bool) {
+              toolbarVisible: Bool, toolbarLayoutFrame: CGRect, animatedVisibility: Bool) {
     viewport.isHidden = false
     if viewport.frame != frame { viewport.frame = frame }
-    // Preview only resizes the outer crop. Chromium receives its committed
-    // viewport size after the transition settles, or immediately for divider drags.
-    if !cropOnly, surface.frame != viewport.bounds { surface.frame = viewport.bounds }
+    // Assign the final render size once. Split motion happens on the shared
+    // viewport layer, never by repeatedly resizing Chromium during a flight.
+    if surface.frame != viewport.bounds { surface.frame = viewport.bounds }
     guard let toolbar else { return }
     guard toolbarVisible else {
       // Keep outgoing chrome and its independent address overlay at their last
@@ -88,53 +92,82 @@ final class BrowserPagePresentation {
 
   /// Chromium stays mounted at its target size. The glass is a sibling inside
   /// the same viewport, so the parent's transform and mask affect both together.
-  func beginSplitRevealGlass(at beginTime: CFTimeInterval, crop: CGRect, scale: CGFloat) {
-    endSplitRevealGlass()
-    let glass = SplitRevealGlassView(frame: crop)
-    glass.style = .regular
-    glass.cornerRadius = BrowserLayout.contentCornerRadius / scale
-    glass.wantsLayer = true
-    glass.setAccessibilityElement(false)
-    viewport.addSubview(glass, positioned: .above, relativeTo: surface)
-    splitRevealGlass = glass
-    guard let layer = glass.layer else { return }
-    layer.opacity = 0
-    let fade = CAKeyframeAnimation(keyPath: "opacity")
-    fade.values = [1, 1, 0.85, 0.4, 0]
-    fade.keyTimes = [0, 0.15, 0.4, 0.75, 1]
-    fade.beginTime = beginTime
-    fade.duration = BrowserSplitRevealTransition.glassFadeDuration
-    fade.timingFunction = BrowserSplitRevealTransition.glassFadeTimingFunction
-    layer.add(fade, forKey: "split-reveal-glass-fade")
-    // A full-size material clipped by a smaller outline loses its native rim.
-    // Track the shared parent's *presentation* crop for the glass shape only;
-    // Chromium's layout and the compositor transform remain untouched.
-    let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-      MainActor.assumeIsolated {
-        guard let self, let glass = self.splitRevealGlass,
-              let parent = self.viewport.layer?.presentation(),
-              let mask = parent.mask as? CAShapeLayer,
-              let crop = mask.path?.boundingBoxOfPath else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        glass.frame = crop
-        glass.cornerRadius = BrowserLayout.contentCornerRadius / max(0.001, parent.transform.m11)
-        glass.layoutSubtreeIfNeeded()
-        CATransaction.commit()
-      }
+  var splitGlassOpacity: Float {
+    guard let glass = splitRevealGlass, !glass.isHidden, let layer = glass.layer else { return 0 }
+    return (layer.presentation() ?? layer).opacity
+  }
+
+  func beginSplitRevealGlass(at beginTime: CFTimeInterval, frames: [CGRect], radii: [CGFloat],
+                            direction: BrowserSplitRevealTransition.Direction,
+                            fromOpacity: Float, toOpacity: Float) {
+    guard let frame = frames.first, let radius = radii.first else { return }
+    splitRevealDisplayLink?.invalidate()
+    // Reuse the native material on reversal; rebuilding its effect tree at the
+    // precise handoff can make an otherwise continuous page animation hitch.
+    let glass: SplitRevealGlassView
+    if let existing = splitRevealGlass {
+      glass = existing
+    } else {
+      glass = SplitRevealGlassView(frame: frame)
+      glass.style = .regular
+      glass.wantsLayer = true
+      glass.setAccessibilityElement(false)
+      viewport.addSubview(glass, positioned: .above, relativeTo: surface)
+      splitRevealGlass = glass
     }
-    splitRevealGlassTimer = timer
-    RunLoop.main.add(timer, forMode: .common)
+    glass.frame = frame
+    glass.cornerRadius = radius
+    glass.isHidden = false
+    splitRevealGlassFrames = frames
+    splitRevealGlassRadii = radii
+    splitRevealGlassBeginTime = beginTime
+    splitRevealGlassDuration = direction.duration
+    guard let layer = glass.layer else { return }
+    layer.opacity = toOpacity
+    let fade = BrowserSplitRevealTransition.glassOpacityAnimation(direction, from: fromOpacity, to: toOpacity)
+    fade.beginTime = beginTime
+    layer.add(fade, forKey: "split-reveal-glass-fade")
+    let target = SplitRevealDisplayLinkTarget(page: self)
+    let displayLink = viewport.displayLink(target: target, selector: #selector(SplitRevealDisplayLinkTarget.update(_:)))
+    splitRevealDisplayLink = displayLink
+    displayLink.add(to: .main, forMode: .common)
+  }
+
+  fileprivate func updateSplitRevealGlass(_ displayLink: CADisplayLink) {
+    guard let glass = splitRevealGlass, !glass.isHidden,
+          splitRevealGlassFrames.count > 1 else { return }
+    // A Timer samples the previous compositor frame and can run multiple times
+    // between refreshes. Target the upcoming refresh using the parent's exact
+    // wall-clock geometry samples, keeping the native rim with its outline.
+    let amount = min(1, max(0, (displayLink.targetTimestamp - splitRevealGlassBeginTime) / splitRevealGlassDuration))
+    let position = amount * Double(splitRevealGlassFrames.count - 1)
+    let index = min(splitRevealGlassFrames.count - 2, Int(position))
+    let fraction = CGFloat(position - Double(index))
+    let a = splitRevealGlassFrames[index]
+    let b = splitRevealGlassFrames[index + 1]
+    func blend(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * fraction }
+    let frame = CGRect(x: blend(a.minX, b.minX), y: blend(a.minY, b.minY),
+                       width: blend(a.width, b.width), height: blend(a.height, b.height))
+    let radius = blend(splitRevealGlassRadii[index], splitRevealGlassRadii[index + 1])
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if glass.frame != frame { glass.frame = frame }
+    if glass.cornerRadius != radius { glass.cornerRadius = radius }
+    // Let AppKit coalesce material layout with its normal display pass. Forcing
+    // layoutSubtreeIfNeeded on every tick competes with Chromium for the frame.
+    CATransaction.commit()
   }
 
   func endSplitRevealGlass() {
-    splitRevealGlassTimer?.invalidate()
-    splitRevealGlassTimer = nil
-    splitRevealGlass?.removeFromSuperview()
-    splitRevealGlass = nil
+    splitRevealDisplayLink?.invalidate()
+    splitRevealDisplayLink = nil
+    splitRevealGlassFrames = []
+    splitRevealGlassRadii = []
+    splitRevealGlass?.layer?.removeAnimation(forKey: "split-reveal-glass-fade")
+    splitRevealGlass?.isHidden = true
   }
 
-  deinit { splitRevealGlassTimer?.invalidate() }
+  deinit { splitRevealDisplayLink?.invalidate() }
 
   func dispose() {
     endSplitRevealGlass()
@@ -147,4 +180,13 @@ final class BrowserPagePresentation {
 /// The transition material never intercepts Chromium's native input.
 private final class SplitRevealGlassView: NSGlassEffectView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// CADisplayLink retains its target; a weak forwarding target keeps page
+/// retirement independent of the display callback's lifetime.
+@MainActor
+private final class SplitRevealDisplayLinkTarget: NSObject {
+  weak var page: BrowserPagePresentation?
+  init(page: BrowserPagePresentation) { self.page = page }
+  @objc func update(_ displayLink: CADisplayLink) { page?.updateSplitRevealGlass(displayLink) }
 }
