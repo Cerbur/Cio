@@ -12,6 +12,7 @@ final class BrowserWindowChromeView: NSView {
 
   private var trafficLights: [NSButton] = []
   private weak var installedWindow: NSWindow?
+  private var fullScreenDelegate: BrowserFullScreenWindowDelegate?
   private var windowObservations = Set<AnyCancellable>()
   private var frameBeforeMaximizing: NSRect?
 
@@ -46,6 +47,9 @@ final class BrowserWindowChromeView: NSView {
     BrowserTrafficLightLayout.installTitlebar(in: window)
 
     if installedWindow !== window {
+      if let installedWindow {
+        fullScreenDelegate?.restoreDelegate(in: installedWindow)
+      }
       installedWindow = window
       frameBeforeMaximizing = nil
       windowObservations.removeAll()
@@ -59,6 +63,10 @@ final class BrowserWindowChromeView: NSView {
           }
           .store(in: &windowObservations)
       }
+    }
+    if fullScreenDelegate == nil || window.delegate !== fullScreenDelegate {
+      fullScreenDelegate = BrowserFullScreenWindowDelegate(sceneDelegate: window.delegate)
+      window.delegate = fullScreenDelegate
     }
     layoutTrafficLights()
   }
