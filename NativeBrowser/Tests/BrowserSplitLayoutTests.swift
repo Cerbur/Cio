@@ -60,4 +60,36 @@ final class BrowserSplitLayoutTests: XCTestCase {
     }
   }
 
+  func testDropZonesAreEqualThirdsWithOffsetBounds() {
+    let bounds = CGRect(x: 100, y: 20, width: 900, height: 700)
+    XCTAssertEqual(BrowserSplitLayout.dropSide(at: 100, in: bounds), .left)
+    XCTAssertEqual(BrowserSplitLayout.dropSide(at: 399, in: bounds), .left)
+    XCTAssertEqual(BrowserSplitLayout.dropSide(at: 400, in: bounds), .middle)
+    XCTAssertEqual(BrowserSplitLayout.dropSide(at: 699, in: bounds), .middle)
+    XCTAssertEqual(BrowserSplitLayout.dropSide(at: 700, in: bounds), .right)
+  }
+
+  func testTriplePanesFillBoundsAndClampBothDividers() {
+    for width: CGFloat in [0, 8, 160, 700, 1000, 1440] {
+      for first: CGFloat in [0.01, 1.0 / 3, 0.9] {
+        let bounds = CGRect(x: 11, y: 7, width: width, height: 800)
+        let split = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: first,
+                                       middleTabID: UUID(), secondFraction: 0.95)
+        let frames = split.paneFrames(in: bounds)
+        XCTAssertEqual(frames.panes.count, 3)
+        XCTAssertEqual(frames.dividers.count, 2)
+        XCTAssertEqual(frames.panes[0].minX, bounds.minX)
+        XCTAssertEqual(frames.panes[2].maxX, bounds.maxX, accuracy: 0.001)
+        for index in 0..<2 {
+          XCTAssertEqual(frames.panes[index].maxX, frames.dividers[index].minX)
+          XCTAssertEqual(frames.dividers[index].maxX, frames.panes[index + 1].minX)
+        }
+        for pane in frames.panes {
+          XCTAssertGreaterThanOrEqual(pane.width, 0)
+          if width >= 736 { XCTAssertGreaterThanOrEqual(pane.width, 239) }
+        }
+      }
+    }
+  }
+
 }

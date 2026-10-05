@@ -258,8 +258,8 @@ final class BrowserSessionManager: ObservableObject {
     syncSurface()
   }
 
-  func previewSplit(on side: BrowserSplitLayout.Side?) {
-    surfaceHost?.previewSplit(on: side)
+  func previewSplit(on side: BrowserSplitLayout.Side?, incomingPaneCount: Int = 1) {
+    surfaceHost?.previewSplit(on: side, incomingPaneCount: incomingPaneCount)
   }
 
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {

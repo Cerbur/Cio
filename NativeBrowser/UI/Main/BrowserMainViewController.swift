@@ -206,10 +206,9 @@ final class BrowserMainViewController: NSViewController {
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
-      let boundary = self.runtime.workspaceStore.activeSplit?.frames(in: browser.bounds).divider.midX
-        ?? browser.bounds.midX
-      self.splitDropSide = canSplit ? (local.x < boundary ? .left : .right) : nil
-      self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide)
+      self.splitDropSide = canSplit ? BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds) : nil
+      let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
+      self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide, incomingPaneCount: count)
     }
     drag.onSplitDrop = { [weak self] id in
       guard let self, let side = self.splitDropSide else { return false }
@@ -290,8 +289,9 @@ private struct BrowserTabDragPresentation: View {
     SidebarTabDragOverlay(drag: drag) { id, style in
       if let group = workspace.splitGroup(containing: id) {
         HStack(spacing: 2) {
-          dragLabel(group.leftTabID, style: style)
-          dragLabel(group.rightTabID, style: style)
+          ForEach(group.tabIDs, id: \.self) { memberID in
+            dragLabel(memberID, style: style)
+          }
         }
       } else {
         dragLabel(id, style: style)

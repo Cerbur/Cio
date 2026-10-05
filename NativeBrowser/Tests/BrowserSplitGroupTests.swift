@@ -27,6 +27,107 @@ final class BrowserSplitGroupTests: XCTestCase {
     XCTAssertTrue(workspace.validateInvariants())
   }
 
+  func testSinglePageMiddleDropSelectsTheIncomingPageWithoutGrouping() throws {
+    var (workspace, tabs) = fixture()
+    XCTAssertTrue(workspace.createSplit(with: tabs[1].id, on: .middle))
+    XCTAssertEqual(workspace.selectedTabID, tabs[1].id)
+    XCTAssertNil(workspace.activeSplit)
+    XCTAssertEqual(workspace.allTabIDs, tabs.map(\.id))
+  }
+
+  func testMiddleDropAddsThirdPaneForEveryPinCombination() throws {
+    for groupTier in 0...2 {
+      for incomingTier in 0...2 {
+        var (workspace, tabs) = fixture()
+        let spaceID = workspace.selectedSpaceID
+        let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+        _ = workspace.createSplit(with: tabs[1].id, on: .right)
+        if groupTier != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[groupTier]) }
+        if incomingTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[incomingTier]) }
+        let original = try XCTUnwrap(workspace.activeSplit)
+        let count = workspace.allTabs.count
+        XCTAssertTrue(workspace.createSplit(with: tabs[2].id, on: .middle))
+        let group = try XCTUnwrap(workspace.activeSplit)
+        XCTAssertEqual(group.tabIDs.compactMap { workspace.tab(withID: $0)?.url },
+                       [tabs[0].url, tabs[2].url, tabs[1].url])
+        XCTAssertEqual(group.focusedTabID, group.middleTabID)
+        XCTAssertEqual(workspace.allTabs.count, count + (groupTier == 0 ? 0 : 2) + (incomingTier == 0 ? 0 : 1))
+        XCTAssertTrue(group.tabIDs.allSatisfy { workspace.tabIDs(in: .temporary(spaceID)).contains($0) })
+        if groupTier != 0 { XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original) }
+        let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+        XCTAssertEqual(restored.activeSplit, group)
+        XCTAssertTrue(restored.validateInvariants())
+      }
+    }
+  }
+
+  func testDraggingPairIntoSinglePageMakesTripleInTheDropOrder() throws {
+    for side in [BrowserSplitLayout.Side.left, .right] {
+      for groupTier in 0...2 {
+        for survivorTier in 0...2 {
+          var (workspace, tabs) = fixture()
+          let spaceID = workspace.selectedSpaceID
+          let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+          _ = workspace.createSplit(with: tabs[1].id, on: .right)
+          if groupTier != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[groupTier]) }
+          let original = workspace.activeSplit
+          if survivorTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[survivorTier]) }
+          _ = workspace.selectTab(id: tabs[2].id)
+          XCTAssertTrue(workspace.canSplit(with: tabs[0].id))
+          XCTAssertTrue(workspace.createSplit(with: tabs[0].id, on: side))
+          let group = try XCTUnwrap(workspace.activeSplit)
+          let expected = side == .left ? [tabs[0].url, tabs[1].url, tabs[2].url]
+            : [tabs[2].url, tabs[0].url, tabs[1].url]
+          XCTAssertEqual(group.tabIDs.compactMap { workspace.tab(withID: $0)?.url }, expected)
+          if groupTier != 0 { XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original) }
+          XCTAssertTrue(group.tabIDs.allSatisfy { workspace.tabIDs(in: .temporary(spaceID)).contains($0) },
+            "side=\(side) groupTier=\(groupTier) survivorTier=\(survivorTier) ids=\(group.tabIDs) temp=\(workspace.tabIDs(in: .temporary(spaceID)))")
+          XCTAssertTrue(workspace.validateInvariants())
+        }
+      }
+    }
+  }
+
+  func testPairMiddleDropIntoSinglePageReturnsToThePairWithoutMerging() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.createSplit(with: tabs[1].id, on: .right)
+    let original = workspace.activeSplit
+    _ = workspace.selectTab(id: tabs[2].id)
+    XCTAssertTrue(workspace.createSplit(with: tabs[0].id, on: .middle))
+    XCTAssertEqual(workspace.activeSplit?.tabIDs, original?.tabIDs)
+    XCTAssertEqual(workspace.selectedSpace?.splitGroups.count, 1)
+    XCTAssertNil(workspace.splitGroup(containing: tabs[2].id))
+  }
+
+  func testTripleReplacementSwapResizeAndWholeGroupMovement() throws {
+    for side in [BrowserSplitLayout.Side.left, .middle, .right] {
+      var (workspace, tabs) = fixture()
+      _ = workspace.createSplit(with: tabs[1].id, on: .right)
+      _ = workspace.createSplit(with: tabs[2].id, on: .middle)
+      let original = try XCTUnwrap(workspace.activeSplit)
+      let index = side == .left ? 0 : (side == .middle ? 1 : 2)
+      var expected = original.tabIDs
+      let displaced = expected[index]
+      expected[index] = tabs[3].id
+      XCTAssertTrue(workspace.createSplit(with: tabs[3].id, on: side))
+      XCTAssertEqual(workspace.activeSplit?.tabIDs, expected)
+      XCTAssertEqual(workspace.activeSplit?.id, original.id)
+      XCTAssertNil(workspace.splitGroup(containing: displaced))
+      XCTAssertEqual(workspace.currentTabIDs.prefix(4), expected + [displaced])
+      XCTAssertTrue(workspace.setSplitFraction(0.25))
+      XCTAssertTrue(workspace.setSplitFraction(0.7, divider: 1))
+      XCTAssertTrue(workspace.swapSplitSides(containing: tabs[3].id))
+      XCTAssertEqual(workspace.activeSplit?.tabIDs, Array(expected.reversed()))
+      XCTAssertEqual(workspace.activeSplit!.fraction, 0.3, accuracy: 0.001)
+      XCTAssertEqual(workspace.activeSplit!.secondFraction!, 0.75, accuracy: 0.001)
+      XCTAssertTrue(workspace.moveSplitGroup(containing: tabs[3].id, to: .global))
+      XCTAssertEqual(workspace.globalPinnedTabIDs, Array(expected.reversed()))
+      let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+      XCTAssertEqual(restored.activeSplit, workspace.activeSplit)
+      XCTAssertTrue(restored.validateInvariants())
+    }
+  }
+
   private func fixture() -> (WorkspaceCollection, [BrowserTab]) {
     let tabs = (0..<5).map { BrowserTab(title: "Page \($0)", url: URL(string: "https://example.com/\($0)")) }
     var workspace = WorkspaceCollection(initialTab: tabs[0])

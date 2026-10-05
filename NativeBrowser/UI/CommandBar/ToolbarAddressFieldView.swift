@@ -68,6 +68,16 @@ struct ToolbarAddressFieldView: View {
 
   private var rowCount: Int { interaction.isFocused ? autocomplete.suggestions.count : 0 }
 
+  private var isActiveSplitPane: Bool {
+    guard let session, let split = workspace.activeSplit else { return false }
+    return split.contains(session.tabID) && workspace.selectedTabID == session.tabID
+      && !workspace.isSpotlightPresented
+  }
+
+  private var focusRingOpacity: Double {
+    interaction.isFocused ? 1 : isActiveSplitPane ? 0.5 : 0
+  }
+
   var body: some View {
     GeometryReader { geometry in
       let width = siteInformation.width(in: geometry.size.width, focused: interaction.isFocused)
@@ -102,8 +112,13 @@ struct ToolbarAddressFieldView: View {
         .shadow(color: .black.opacity(rowCount > 0 || siteInformation.isPresented ? 0.18 : 0),
                 radius: 16, y: 8)
         .overlay {
-          NativeAddressFocusRing(isFocused: interaction.isFocused, cornerRadius: radius)
+          NativeAddressFocusRing(cornerRadius: radius)
             .padding(-NativeAddressFocusRing.inset)
+            // Keep the native ring mounted so losing focus can finish fading
+            // out. Scope the animation to opacity, preserving capsule geometry.
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { content in
+              content.opacity(focusRingOpacity)
+            }
             .allowsHitTesting(false)
         }
         // One visibility animation for the entire first-level capsule, after
@@ -360,36 +375,27 @@ private struct AddressReloadButton: View {
   }
 }
 
-/// A shared AppKit outline keeps the focus colour and width consistent across
-/// the capsule and suggestion panel. Its bounds follow every spring frame.
+/// AppKit draws the system focus ring from the capsule mask, including the
+/// user's accent colour. The same ring identifies the active split pane at a
+/// lower opacity; address editing always takes precedence at full strength.
 private struct NativeAddressFocusRing: NSViewRepresentable {
   static let inset: CGFloat = 6
-  static let lineWidth: CGFloat = 3
-  static let colour = NSColor(srgbRed: 0.58, green: 0.70, blue: 0.84, alpha: 1)
 
-  let isFocused: Bool
   let cornerRadius: CGFloat
 
   func makeNSView(context: Context) -> FocusRingView {
     let view = FocusRingView()
     view.cornerRadius = cornerRadius
-    view.isFocused = isFocused
     return view
   }
 
   func updateNSView(_ view: FocusRingView, context: Context) {
     view.cornerRadius = cornerRadius
-    view.isFocused = isFocused
   }
 
   final class FocusRingView: NSView {
     var cornerRadius: CGFloat = AddressCapsuleLayout.cornerRadius {
       didSet { if oldValue != cornerRadius { needsDisplay = true } }
-    }
-    var isFocused = false {
-      didSet {
-        if oldValue != isFocused { needsDisplay = true }
-      }
     }
 
     override var isOpaque: Bool { false }
@@ -400,19 +406,12 @@ private struct NativeAddressFocusRing: NSViewRepresentable {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-      guard isFocused else { return }
       NSGraphicsContext.saveGraphicsState()
       let capsule = bounds.insetBy(dx: NativeAddressFocusRing.inset,
                                    dy: NativeAddressFocusRing.inset)
-      // Centre the stroke outside the glass, preserving the system halo's
-      // footprint without its backdrop-dependent colour and compositing.
-      let offset = NativeAddressFocusRing.lineWidth / 2
-      let outline = NSBezierPath(roundedRect: capsule.insetBy(dx: -offset, dy: -offset),
-                                 xRadius: cornerRadius + offset,
-                                 yRadius: cornerRadius + offset)
-      outline.lineWidth = NativeAddressFocusRing.lineWidth
-      NativeAddressFocusRing.colour.setStroke()
-      outline.stroke()
+      NSFocusRingPlacement.only.set()
+      NSBezierPath(roundedRect: capsule, xRadius: cornerRadius,
+                   yRadius: cornerRadius).fill()
       NSGraphicsContext.restoreGraphicsState()
     }
 

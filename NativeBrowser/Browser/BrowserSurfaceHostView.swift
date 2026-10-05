@@ -12,8 +12,10 @@ final class BrowserSurfaceHostView: NSView {
   private var previewSide: BrowserSplitLayout.Side?
   private var isCommittingSplitPreview = false
   private var resizingFraction: CGFloat?
+  private var resizingSecondFraction: CGFloat?
+  private var incomingPaneCount = 1
 
-  private enum RoundedEdge: Equatable { case none, left, right }
+  private enum RoundedEdge: Equatable { case none, left, right, both }
 
   private struct PagePlacement: Equatable {
     var frame: CGRect
@@ -30,6 +32,7 @@ final class BrowserSurfaceHostView: NSView {
   private weak var workspace: BrowserWorkspaceStore?
   private var history: HistoryService?
   private let divider = BrowserSplitDividerView()
+  private let secondDivider = BrowserSplitDividerView()
   private let preview = NSVisualEffectView()
   nonisolated(unsafe) private var paneClickMonitor: Any?
 
@@ -71,8 +74,11 @@ final class BrowserSurfaceHostView: NSView {
         guard let self, event.window === self.window, let split = self.split,
               !self.isCovered, self.workspace?.isSpotlightPresented != true, self.preview.isHidden else { return event }
         let point = self.convert(event.locationInWindow, from: nil)
-        guard self.bounds.contains(point), !self.divider.frame.contains(point) else { return event }
-        self.workspace?.selectTab(id: point.x < self.divider.frame.minX ? split.leftTabID : split.rightTabID)
+        guard self.bounds.contains(point) else { return event }
+        let frames = split.paneFrames(in: self.bounds)
+        if let index = frames.panes.firstIndex(where: { $0.contains(point) }) {
+          self.workspace?.selectTab(id: split.tabIDs[index])
+        }
         return event
       }
     }
@@ -130,9 +136,10 @@ final class BrowserSurfaceHostView: NSView {
     applySurfaceLayout()
   }
 
-  func previewSplit(on side: BrowserSplitLayout.Side?) {
-    guard previewSide != side else { return }
+  func previewSplit(on side: BrowserSplitLayout.Side?, incomingPaneCount: Int = 1) {
+    guard previewSide != side || self.incomingPaneCount != incomingPaneCount else { return }
     previewSide = side
+    self.incomingPaneCount = incomingPaneCount
     applySurfaceLayout(animatedPresentation: true)
   }
 
@@ -153,44 +160,78 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     preview.isHidden = previewSide == nil
-    if let side = previewSide {
-      applyCornerClipping(to: preview, roundedEdge: side == .left ? .right : .left)
-    }
+    setDividerFrames([])
     var next: [UUID: PagePlacement] = [:]
     if let side = previewSide, let split {
-      let frames = split.frames(in: bounds)
-      let survivorID = side == .left ? split.rightTabID : split.leftTabID
-      preview.frame = side == .left ? frames.left : frames.right
-      divider.frame = frames.divider
-      divider.isHidden = false
-      for id in split.tabIDs {
-        let survivor = id == survivorID
-        next[id] = PagePlacement(frame: survivor ? (side == .left ? frames.right : frames.left)
-          : collapsedFrame(for: id), cropOnly: true, toolbarVisible: survivor,
-          roundedEdge: id == split.leftTabID ? .right : .left)
+      var shown = split
+      if side == .middle, split.middleTabID == nil {
+        shown.middleTabID = UUID()
+        shown.fraction = 1.0 / 3
+        shown.secondFraction = 2.0 / 3
+      }
+      let frames = shown.paneFrames(in: bounds)
+      let targetIndex = side == .left ? 0 : (side == .right ? frames.panes.count - 1 : 1)
+      preview.frame = frames.panes[targetIndex]
+      applyCornerClipping(to: preview, roundedEdge: roundedEdge(at: targetIndex, count: frames.panes.count))
+      setDividerFrames(frames.dividers)
+      for (index, id) in split.tabIDs.enumerated() {
+        let inserting = side == .middle && split.middleTabID == nil
+        let destination = inserting && index == 1 ? 2 : index
+        let visible = inserting || destination != targetIndex
+        next[id] = PagePlacement(frame: visible ? frames.panes[destination] : collapsedFrame(for: id),
+          cropOnly: true, toolbarVisible: visible,
+          roundedEdge: roundedEdge(at: destination, count: frames.panes.count))
       }
     } else if let side = previewSide, let selectedTabID {
-      let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
-        maximumSurvivorWidth: pages[selectedTabID]?.surface.frame.width ?? bounds.width)
-      preview.frame = frames.target
-      divider.isHidden = true
-      next[selectedTabID] = PagePlacement(frame: frames.survivor, cropOnly: true,
-        roundedEdge: side == .left ? .left : .right)
+      if side == .middle {
+        // The central return zone preserves the full-page presentation.
+        preview.frame = bounds
+        applyCornerClipping(to: preview, roundedEdge: .none)
+        next[selectedTabID] = PagePlacement(frame: bounds, cropOnly: true)
+      } else if incomingPaneCount == 2 {
+        let shown = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: 1.0 / 3,
+                                       middleTabID: UUID(), secondFraction: 2.0 / 3)
+        let frames = shown.paneFrames(in: bounds)
+        let survivorIndex = side == .left ? 2 : 0
+        preview.frame = side == .left ? frames.panes[0].union(frames.panes[1])
+          : frames.panes[1].union(frames.panes[2])
+        applyCornerClipping(to: preview, roundedEdge: side == .left ? .right : .left)
+        setDividerFrames(frames.dividers)
+        next[selectedTabID] = PagePlacement(frame: frames.panes[survivorIndex], cropOnly: true,
+          roundedEdge: roundedEdge(at: survivorIndex, count: 3))
+      } else {
+        let frames = BrowserSplitLayout.previewFrames(in: bounds, on: side,
+          maximumSurvivorWidth: pages[selectedTabID]?.surface.frame.width ?? bounds.width)
+        preview.frame = frames.target
+        applyCornerClipping(to: preview, roundedEdge: side == .left ? .right : .left)
+        next[selectedTabID] = PagePlacement(frame: frames.survivor, cropOnly: true,
+          roundedEdge: side == .left ? .left : .right)
+      }
     } else if let split {
       var shown = split
       shown.fraction = resizingFraction ?? split.fraction
-      let frames = shown.frames(in: bounds)
-      divider.frame = frames.divider
-      divider.isHidden = false
-      next[split.leftTabID] = PagePlacement(frame: frames.left, cropOnly: false, roundedEdge: .right)
-      next[split.rightTabID] = PagePlacement(frame: frames.right, cropOnly: false, roundedEdge: .left)
-    } else {
-      divider.isHidden = true
-      if let selectedTabID, pages[selectedTabID] != nil {
-        next[selectedTabID] = PagePlacement(frame: bounds, cropOnly: false)
+      shown.secondFraction = resizingSecondFraction ?? split.secondFraction
+      let frames = shown.paneFrames(in: bounds)
+      setDividerFrames(frames.dividers)
+      for (index, id) in split.tabIDs.enumerated() {
+        next[id] = PagePlacement(frame: frames.panes[index], cropOnly: false,
+                                 roundedEdge: roundedEdge(at: index, count: split.tabIDs.count))
       }
+    } else if let selectedTabID, pages[selectedTabID] != nil {
+      next[selectedTabID] = PagePlacement(frame: bounds, cropOnly: false)
     }
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
+  }
+
+  private func roundedEdge(at index: Int, count: Int) -> RoundedEdge {
+    index == 0 ? .right : (index == count - 1 ? .left : .both)
+  }
+
+  private func setDividerFrames(_ frames: [CGRect]) {
+    for (index, view) in [divider, secondDivider].enumerated() {
+      view.isHidden = index >= frames.count
+      if index < frames.count { view.frame = frames[index] }
+    }
   }
 
   private func collapsedFrame(for id: UUID) -> CGRect {
@@ -302,6 +343,8 @@ final class BrowserSurfaceHostView: NSView {
     case .none: layer.maskedCorners = []
     case .left: layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
     case .right: layer.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+    case .both: layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner,
+                                      .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
     }
   }
 
@@ -320,19 +363,34 @@ final class BrowserSurfaceHostView: NSView {
     preview.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
     preview.isHidden = true
     addSubview(divider)
+    addSubview(secondDivider)
     addSubview(preview, positioned: .above, relativeTo: nil)
-    divider.isHidden = true
-    divider.setAccessibilityRole(.splitter)
-    divider.setAccessibilityLabel("Resize Split View")
-    divider.onDrag = { [weak self] x, finished in
-      guard let self, self.split != nil else { return }
-      let fraction = BrowserSplitLayout.clampedFraction(
-        x / max(1, self.bounds.width - BrowserSplitLayout.dividerWidth), width: self.bounds.width)
-      self.resizingFraction = fraction
-      self.applySurfaceLayout()
-      if finished {
-        self.resizingFraction = nil
-        self.workspace?.setSplitFraction(fraction)
+    for (index, view) in [divider, secondDivider].enumerated() {
+      view.isHidden = true
+      view.setAccessibilityRole(.splitter)
+      view.setAccessibilityLabel("Resize Split View \(index + 1)")
+      view.onDrag = { [weak self] x, finished in
+        guard let self, let split = self.split else { return }
+        let dividerCount = split.tabIDs.count - 1
+        let usable = max(1, self.bounds.width - CGFloat(dividerCount) * BrowserSplitLayout.dividerWidth)
+        let proposed = (x - CGFloat(index) * BrowserSplitLayout.dividerWidth) / usable
+        let fraction: CGFloat
+        if split.middleTabID != nil {
+          let minimum = min(1.0 / 3, BrowserSplitLayout.minimumPaneWidth / usable)
+          let current = split.clampedFractions(width: self.bounds.width)
+          fraction = index == 0 ? min(max(proposed, minimum), current.second - minimum)
+            : min(max(proposed, current.first + minimum), 1 - minimum)
+        } else {
+          fraction = BrowserSplitLayout.clampedFraction(proposed, width: self.bounds.width)
+        }
+        if index == 0 { self.resizingFraction = fraction }
+        else { self.resizingSecondFraction = fraction }
+        self.applySurfaceLayout()
+        if finished {
+          self.resizingFraction = nil
+          self.resizingSecondFraction = nil
+          self.workspace?.setSplitFraction(fraction, divider: index)
+        }
       }
     }
   }

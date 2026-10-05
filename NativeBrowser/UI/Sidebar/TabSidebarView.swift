@@ -428,6 +428,8 @@ struct TabSidebarView: View {
       let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
       SidebarSplitTabRow(group: group, left: left, right: right,
         leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
+        middle: group.middleTabID.flatMap { workspace.tab(withID: $0) },
+        middleSession: group.middleTabID.flatMap { workspace.session(for: $0) },
         selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
         isTabDragActive: tabDrag.tabID != nil, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
         onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
@@ -506,8 +508,8 @@ struct TabSidebarView: View {
   private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
     let space = workspace.spaces.first { $0.id == workspace.selectedSpaceID }
     let globalIDs = workspace.globalPinnedTabs.map(\.id)
-    let globalRightIDs = Set(globalIDs.compactMap { workspace.splitGroup(containing: $0)?.rightTabID })
-    let groupedRightIDs = Set(space?.splitGroups.map(\.rightTabID) ?? [])
+    let globalRightIDs = Set(globalIDs.flatMap { workspace.splitGroup(containing: $0)?.tabIDs.dropFirst() ?? [] })
+    let groupedRightIDs = Set(space?.splitGroups.flatMap { $0.tabIDs.dropFirst() } ?? [])
     let pinIDs = (space.map { visiblePinnedTabs(in: $0).map(\.id) } ?? [])
       .filter { !groupedRightIDs.contains($0) }
     let columns = CGFloat(columns(for: width))
@@ -516,6 +518,9 @@ struct TabSidebarView: View {
       globalTabIDs: globalIDs.filter { !globalRightIDs.contains($0) },
       globalPinnedTabCount: globalIDs.count,
       groupedTabIDs: Set(workspace.spaces.flatMap { $0.splitGroups.flatMap(\.tabIDs) }),
+      groupSizes: Dictionary(uniqueKeysWithValues: workspace.spaces.flatMap {
+        $0.splitGroups.map { ($0.leftTabID, $0.tabIDs.count) }
+      }),
       spacePinTabIDs: pinIDs,
       temporaryTabIDs: (space?.tabIDs ?? []).filter {
         !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0) && !groupedRightIDs.contains($0)
@@ -749,6 +754,8 @@ private struct SidebarSplitTabRow: View {
   let right: BrowserTab
   let leftSession: BrowserSession?
   let rightSession: BrowserSession?
+  let middle: BrowserTab?
+  let middleSession: BrowserSession?
   let selectedTabID: UUID?
   let isTabDragActive: Bool
   let tier: WorkspaceCollection.TabTier
@@ -774,6 +781,7 @@ private struct SidebarSplitTabRow: View {
   var body: some View {
     HStack(spacing: isPinned ? 3 : 2) {
       member(left, session: leftSession)
+      if let middle { member(middle, session: middleSession) }
       member(right, session: rightSession)
     }
     .padding(contentInset)
@@ -816,7 +824,7 @@ private struct SidebarSplitTabRow: View {
     }
     .onHover { isHovered = $0 }
     .accessibilityIdentifier("split-group-\(group.id.uuidString)")
-    .help("\(left.displayTitle) | \(right.displayTitle)")
+    .help(([left] + (middle.map { [$0] } ?? []) + [right]).map(\.displayTitle).joined(separator: " | "))
   }
 
   private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {

@@ -256,65 +256,70 @@ struct WorkspaceCollection: Equatable, Sendable {
     guard let selectedTabID, selectedTabID != tabID,
           tabsByID[tabID] != nil,
           globalPinnedTabIDs.contains(tabID) || selectedSpace?.tabIDs.contains(tabID) == true,
-          splitGroup(containing: tabID) == nil else { return false }
-    return activeSplit?.contains(tabID) != true
+          activeSplit?.contains(tabID) != true else { return false }
+    // A two-page incoming row can join a single page. Larger combinations
+    // have no placement in the three-pane layout.
+    let incomingCount = splitGroup(containing: tabID)?.tabIDs.count ?? 1
+    return incomingCount == 1 || (activeSplit == nil && incomingCount == 2)
   }
 
   @discardableResult
   mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
     guard canSplit(with: tabID), let selectedTabID,
           let spaceIndex = index(of: selectedSpaceID) else { return false }
-    if let prior = activeSplit {
-      return replaceSplit(prior, with: tabID, on: side, in: spaceIndex)
-    }
-    let pinnedIDs = Set(globalPinnedTabIDs + spaces[spaceIndex].pinnedTabIDs)
-    let selectedIsPinned = pinnedIDs.contains(selectedTabID)
-    let incomingIsPinned = pinnedIDs.contains(tabID)
-    // Pin pages get independent identities/runtimes. Existing pins and their
-    // groups remain untouched; a temporary member supplies the combined row.
-    let survivorID = selectedIsPinned ? duplicateForSplit(selectedTabID) : selectedTabID
-    let incomingID = incomingIsPinned ? duplicateForSplit(tabID) : tabID
-    let anchorID = selectedIsPinned ? incomingID : survivorID
-    let prior = splitGroup(containing: anchorID)
-    let group = BrowserSplitLayout(id: prior?.id ?? UUID(),
-      leftTabID: side == .left ? incomingID : survivorID,
-      rightTabID: side == .right ? incomingID : survivorID,
-      focusedTabID: incomingID)
-    let space = spaces[spaceIndex]
-    let oldIndex = space.tabIDs.firstIndex(of: anchorID)!
-    let insertAt = space.tabIDs.prefix(oldIndex).filter { !group.contains($0) }.count
-    spaces[spaceIndex].splitGroups.removeAll { $0.contains(incomingID) || $0.contains(survivorID) }
-    spaces[spaceIndex].tabIDs.removeAll { group.contains($0) }
-    spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs, at: insertAt)
-    spaces[spaceIndex].splitGroups.append(group)
-    _ = selectTab(id: incomingID)
-    validateInvariants()
-    return true
-  }
+    let prior = activeSplit
+    // The middle of a single page is the return/selection zone, including
+    // when the dragged row represents an existing group.
+    if side == .middle, prior == nil { return selectTab(id: tabID) }
 
-  private mutating func replaceSplit(_ prior: BrowserSplitLayout, with tabID: UUID,
-                                    on side: BrowserSplitLayout.Side, in spaceIndex: Int) -> Bool {
+    let incomingGroup = splitGroup(containing: tabID)
     let pinnedIDs = Set(globalPinnedTabIDs + spaces[spaceIndex].pinnedTabIDs)
-    let pinnedGroup = pinnedIDs.contains(prior.leftTabID)
-    let incomingID = pinnedIDs.contains(tabID) ? duplicateForSplit(tabID) : tabID
-    let retainedID = side == .left ? prior.rightTabID : prior.leftTabID
-    let displacedID = side == .left ? prior.leftTabID : prior.rightTabID
-    let survivorID = pinnedGroup ? duplicateForSplit(retainedID) : retainedID
-    let group = BrowserSplitLayout(id: pinnedGroup ? UUID() : prior.id,
-      leftTabID: side == .left ? incomingID : survivorID,
-      rightTabID: side == .right ? incomingID : survivorID,
-      fraction: prior.fraction, focusedTabID: incomingID)
+    let originalIncoming = incomingGroup?.tabIDs ?? [tabID]
+    let originalExisting = prior?.tabIDs ?? [selectedTabID]
+    let existingIsPinned = pinnedIDs.contains(originalExisting[0])
+    let incomingIsPinned = pinnedIDs.contains(originalIncoming[0])
+    var displaced: [UUID] = []
+    var retained = originalExisting
+    if prior != nil {
+      if side == .middle, retained.count == 2 {
+        // Insert into the middle, preserving both existing panes.
+      } else {
+        let index = side == .left ? 0 : (side == .right ? retained.count - 1 : 1)
+        displaced = [retained.remove(at: index)]
+      }
+    }
+    let existingIDs = retained.map { existingIsPinned ? duplicateForSplit($0) : $0 }
+    let incomingIDs = originalIncoming.map { incomingIsPinned ? duplicateForSplit($0) : $0 }
+    let memberIDs: [UUID]
+    switch side {
+    case .left: memberIDs = incomingIDs + existingIDs
+    case .middle: memberIDs = [existingIDs[0]] + incomingIDs + Array(existingIDs.dropFirst())
+    case .right: memberIDs = existingIDs + incomingIDs
+    }
+    let focusedID = incomingIDs[originalIncoming.firstIndex(of: tabID) ?? 0]
+    let isTriple = memberIDs.count == 3
+    let groupID = !existingIsPinned && prior != nil ? prior!.id
+      : (!incomingIsPinned ? incomingGroup?.id : nil) ?? UUID()
+    let group = BrowserSplitLayout(id: groupID,
+      leftTabID: memberIDs[0], rightTabID: memberIDs.last!,
+      fraction: isTriple ? (prior?.middleTabID == nil ? 1.0 / 3 : prior!.fraction) : (prior?.fraction ?? 0.5),
+      focusedTabID: focusedID, middleTabID: isTriple ? memberIDs[1] : nil,
+      secondFraction: isTriple ? (prior?.secondFraction ?? 2.0 / 3) : nil)
+
+    let removedIDs = Set((existingIsPinned ? [] : originalExisting)
+      + (incomingIsPinned ? [] : originalIncoming) + memberIDs)
+    let anchorID = existingIsPinned ? incomingIDs[0] : originalExisting[0]
     let space = spaces[spaceIndex]
-    let removedIDs = Set(pinnedGroup ? group.tabIDs : prior.tabIDs + [incomingID])
-    let anchorIndex = pinnedGroup ? newTabInsertionIndex(in: space.id)
-      : space.tabIDs.firstIndex(where: { prior.contains($0) })!
+    let anchorIndex = existingIsPinned && prior != nil ? newTabInsertionIndex(in: space.id)
+      : (space.tabIDs.firstIndex(of: anchorID) ?? newTabInsertionIndex(in: space.id))
     let insertAt = space.tabIDs.prefix(anchorIndex).filter { !removedIDs.contains($0) }.count
-    if !pinnedGroup { spaces[spaceIndex].splitGroups.removeAll { $0.id == prior.id } }
+    spaces[spaceIndex].splitGroups.removeAll {
+      (!existingIsPinned && $0.id == prior?.id) || (!incomingIsPinned && $0.id == incomingGroup?.id)
+    }
     spaces[spaceIndex].tabIDs.removeAll { removedIDs.contains($0) }
-    // The displaced temporary page follows the updated combined row.
-    spaces[spaceIndex].tabIDs.insert(contentsOf: group.tabIDs + (pinnedGroup ? [] : [displacedID]), at: insertAt)
+    spaces[spaceIndex].tabIDs.insert(contentsOf: memberIDs + (existingIsPinned ? [] : displaced), at: insertAt)
     spaces[spaceIndex].splitGroups.append(group)
-    _ = selectTab(id: incomingID)
+    _ = selectTab(id: focusedID)
     validateInvariants()
     return true
   }
@@ -328,11 +333,18 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func setSplitFraction(_ fraction: CGFloat) -> Bool {
+  mutating func setSplitFraction(_ fraction: CGFloat, divider: Int = 0) -> Bool {
     guard fraction.isFinite, let selectedTabID,
           let owner = spaceID(containing: selectedTabID), let spaceIndex = index(of: owner),
           let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(selectedTabID) }) else { return false }
-    spaces[spaceIndex].splitGroups[groupIndex].fraction = min(max(fraction, 0.01), 0.99)
+    let value = min(max(fraction, 0.01), 0.99)
+    if divider == 1, spaces[spaceIndex].splitGroups[groupIndex].middleTabID != nil {
+      guard value > spaces[spaceIndex].splitGroups[groupIndex].fraction else { return false }
+      spaces[spaceIndex].splitGroups[groupIndex].secondFraction = value
+    } else {
+      guard value < (spaces[spaceIndex].splitGroups[groupIndex].secondFraction ?? 1) else { return false }
+      spaces[spaceIndex].splitGroups[groupIndex].fraction = value
+    }
     return true
   }
 
@@ -367,7 +379,13 @@ struct WorkspaceCollection: Equatable, Sendable {
     let left = group.leftTabID
     group.leftTabID = group.rightTabID
     group.rightTabID = left
-    group.fraction = 1 - group.fraction
+    if group.middleTabID != nil {
+      let first = group.fraction
+      group.fraction = 1 - (group.secondFraction ?? 2.0 / 3)
+      group.secondFraction = 1 - first
+    } else {
+      group.fraction = 1 - group.fraction
+    }
     spaces[spaceIndex].splitGroups[groupIndex] = group
     return true
   }
@@ -884,10 +902,13 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   private static func validGroup(_ group: BrowserSplitLayout, in space: BrowserSpace, globals: [UUID]) -> Bool {
-    group.leftTabID != group.rightTabID && group.fraction.isFinite && group.fraction > 0 && group.fraction < 1
+    Set(group.tabIDs).count == group.tabIDs.count && group.fraction.isFinite && group.fraction > 0 && group.fraction < 1
       && group.tabIDs.allSatisfy({ space.tabIDs.contains($0) })
-      && globals.contains(group.leftTabID) == globals.contains(group.rightTabID)
-      && space.pinnedTabIDs.contains(group.leftTabID) == space.pinnedTabIDs.contains(group.rightTabID)
+      && group.tabIDs.allSatisfy { globals.contains($0) == globals.contains(group.leftTabID)
+        && space.pinnedTabIDs.contains($0) == space.pinnedTabIDs.contains(group.leftTabID) }
+      && (group.middleTabID == nil || (group.secondFraction.map {
+        $0.isFinite && $0 > group.fraction && $0 < 1
+      } ?? true))
       && (group.focusedTabID.map { group.contains($0) } ?? true)
   }
 

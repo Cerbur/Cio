@@ -178,9 +178,9 @@ final class BrowserWorkspaceStore: ObservableObject {
     return committed
   }
 
-  func setSplitFraction(_ fraction: CGFloat) {
+  func setSplitFraction(_ fraction: CGFloat, divider: Int = 0) {
     let before = sessionSnapshot
-    guard workspace.setSplitFraction(fraction) else { return }
+    guard workspace.setSplitFraction(fraction, divider: divider) else { return }
     persistIfNeeded(comparedTo: before)
     publishWorkspace()
   }

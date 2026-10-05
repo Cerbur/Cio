@@ -28,6 +28,7 @@ struct SidebarTabDragLayout {
   var globalTabIDs: [UUID]
   var globalPinnedTabCount: Int
   var groupedTabIDs: Set<UUID>
+  var groupSizes: [UUID: Int] = [:]
   var spacePinTabIDs: [UUID]
   var temporaryTabIDs: [UUID]
   var tileSize: CGSize
@@ -502,7 +503,7 @@ final class SidebarTabDrag {
 
   private func topPinTarget(for id: UUID, in layout: SidebarTabDragLayout) -> SidebarTabDropTarget? {
     let ids = layout.globalTabIDs
-    let requiredPins = layout.groupedTabIDs.contains(id) ? 2 : 1
+    let requiredPins = layout.groupSizes[id] ?? 1
     guard ids.contains(id) || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
       return nil
     }
