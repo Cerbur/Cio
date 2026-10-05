@@ -35,28 +35,89 @@ final class BrowserSplitGroupTests: XCTestCase {
     XCTAssertEqual(workspace.allTabIDs, tabs.map(\.id))
   }
 
-  func testMiddleDropAddsThirdPaneForEveryPinCombination() throws {
-    for groupTier in 0...2 {
-      for incomingTier in 0...2 {
-        var (workspace, tabs) = fixture()
-        let spaceID = workspace.selectedSpaceID
-        let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
-        _ = workspace.createSplit(with: tabs[1].id, on: .right)
-        if groupTier != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[groupTier]) }
-        if incomingTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[incomingTier]) }
-        let original = try XCTUnwrap(workspace.activeSplit)
-        let count = workspace.allTabs.count
-        XCTAssertTrue(workspace.createSplit(with: tabs[2].id, on: .middle))
-        let group = try XCTUnwrap(workspace.activeSplit)
-        XCTAssertEqual(group.tabIDs.compactMap { workspace.tab(withID: $0)?.url },
-                       [tabs[0].url, tabs[2].url, tabs[1].url])
-        XCTAssertEqual(group.focusedTabID, group.middleTabID)
-        XCTAssertEqual(workspace.allTabs.count, count + (groupTier == 0 ? 0 : 2) + (incomingTier == 0 ? 0 : 1))
-        XCTAssertTrue(group.tabIDs.allSatisfy { workspace.tabIDs(in: .temporary(spaceID)).contains($0) })
-        if groupTier != 0 { XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original) }
-        let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
-        XCTAssertEqual(restored.activeSplit, group)
-        XCTAssertTrue(restored.validateInvariants())
+  func testEveryDropSideAddsThirdPaneForEveryPinCombination() throws {
+    for side in [BrowserSplitLayout.Side.left, .middle, .right] {
+      for groupTier in 0...2 {
+        for incomingTier in 0...2 {
+          var (workspace, tabs) = fixture()
+          let spaceID = workspace.selectedSpaceID
+          let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+          _ = workspace.createSplit(with: tabs[1].id, on: .right)
+          if groupTier != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[groupTier]) }
+          if incomingTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[incomingTier]) }
+          let original = try XCTUnwrap(workspace.activeSplit)
+          let count = workspace.allTabs.count
+          let bounds = CGRect(x: 100, y: 20, width: 1200, height: 700)
+          let x = side == .left ? bounds.minX + 1 : (side == .right ? bounds.maxX - 1 : original.paneFrames(in: bounds).dividers[0].midX)
+          let target = original.dropTarget(at: x, in: bounds)
+          XCTAssertEqual(target, .init(side: side))
+          XCTAssertTrue(workspace.createSplit(with: tabs[2].id, at: target))
+          let group = try XCTUnwrap(workspace.activeSplit)
+          XCTAssertEqual(group.tabIDs.compactMap { workspace.tab(withID: $0)?.url },
+                         side == .left ? [tabs[2].url, tabs[0].url, tabs[1].url]
+                           : (side == .middle ? [tabs[0].url, tabs[2].url, tabs[1].url] : [tabs[0].url, tabs[1].url, tabs[2].url]))
+          XCTAssertEqual(group.focusedTabID, side == .left ? group.leftTabID : (side == .middle ? group.middleTabID : group.rightTabID))
+          XCTAssertEqual(group.fraction, 1.0 / 3)
+          XCTAssertEqual(group.secondFraction, 2.0 / 3)
+          XCTAssertEqual(workspace.allTabs.count, count + (groupTier == 0 ? 0 : 2) + (incomingTier == 0 ? 0 : 1))
+          XCTAssertTrue(group.tabIDs.allSatisfy { workspace.tabIDs(in: .temporary(spaceID)).contains($0) })
+          if groupTier != 0 { XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original) }
+          let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+          XCTAssertEqual(restored.activeSplit, group)
+          XCTAssertTrue(restored.validateInvariants())
+        }
+      }
+    }
+  }
+
+  func testPaneBodyDropReplacesPairForEveryPinCombination() throws {
+    for side in [BrowserSplitLayout.Side.left, .right] {
+      for groupTier in 0...2 {
+        for incomingTier in 0...2 {
+          var (workspace, tabs) = fixture()
+          let spaceID = workspace.selectedSpaceID
+          let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+          _ = workspace.createSplit(with: tabs[1].id, on: .right)
+          _ = workspace.setSplitFraction(0.65)
+          if groupTier != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[groupTier]) }
+          if incomingTier != 0 { _ = workspace.moveTab(tabs[2].id, to: tiers[incomingTier]) }
+          let original = try XCTUnwrap(workspace.activeSplit)
+          let count = workspace.allTabs.count
+          let globals = workspace.globalPinnedTabIDs
+          let pins = workspace.selectedSpace?.pinnedTabIDs
+          let bounds = CGRect(x: 100, y: 20, width: 1200, height: 700)
+          let index = side == .left ? 0 : 1
+          let x = original.paneFrames(in: bounds).panes[index].midX
+          let target = original.dropTarget(at: x, in: bounds)
+          XCTAssertEqual(target, .init(side: side, replacesPane: true))
+          let preview = original.placingPane(tabs[2].id, at: target)
+          XCTAssertEqual(preview.tabIDs.count, 2)
+          XCTAssertEqual(preview.fraction, original.fraction)
+          XCTAssertTrue(workspace.createSplit(with: tabs[2].id, at: target))
+          let group = try XCTUnwrap(workspace.activeSplit)
+          XCTAssertEqual(group.tabIDs.compactMap { workspace.tab(withID: $0)?.url },
+                         side == .left ? [tabs[2].url, tabs[1].url] : [tabs[0].url, tabs[2].url])
+          XCTAssertEqual(group.tabIDs.count, 2)
+          XCTAssertEqual(group.fraction, original.fraction)
+          XCTAssertNil(group.secondFraction)
+          XCTAssertEqual(group.focusedTabID, side == .left ? group.leftTabID : group.rightTabID)
+          XCTAssertEqual(workspace.selectedTabID, group.focusedTabID)
+          XCTAssertEqual(workspace.allTabs.count, count + (groupTier == 0 ? 0 : 1) + (incomingTier == 0 ? 0 : 1))
+          XCTAssertEqual(workspace.globalPinnedTabIDs, globals)
+          XCTAssertEqual(workspace.selectedSpace?.pinnedTabIDs, pins)
+          if groupTier == 0 {
+            XCTAssertEqual(group.id, original.id)
+            XCTAssertNil(workspace.splitGroup(containing: original.tabIDs[index]))
+            let order = workspace.tabIDs(in: .temporary(spaceID))
+            let start = try XCTUnwrap(order.firstIndex(of: group.leftTabID))
+            XCTAssertEqual(Array(order[start..<(start + 3)]), group.tabIDs + [original.tabIDs[index]])
+          } else {
+            XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original)
+          }
+          XCTAssertTrue(workspace.validateInvariants())
+          let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+          XCTAssertEqual(restored.activeSplit, group)
+        }
       }
     }
   }
@@ -302,18 +363,18 @@ final class BrowserSplitGroupTests: XCTestCase {
     XCTAssertEqual(restored.activeSplit, group)
   }
 
-  func testReplacingAnActiveGroupReleasesOnlyItsFormerOtherMember() throws {
+  func testLeftInsertionKeepsBothOriginalMembers() throws {
     var (workspace, tabs) = fixture()
     _ = workspace.createSplit(with: tabs[1].id, on: .right)
     let identity = workspace.activeSplit?.id
     _ = workspace.createSplit(with: tabs[2].id, on: .left)
     XCTAssertEqual(workspace.activeSplit?.id, identity)
-    XCTAssertEqual(workspace.activeSplit?.tabIDs, [tabs[2].id, tabs[1].id])
-    XCTAssertNil(workspace.splitGroup(containing: tabs[0].id))
+    XCTAssertEqual(workspace.activeSplit?.tabIDs, [tabs[2].id, tabs[0].id, tabs[1].id])
+    XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id)?.id, identity)
     XCTAssertEqual(workspace.allTabs.count, tabs.count)
   }
 
-  func testTemporaryReplacementUsesDropSideAndPlacesDisplacedPageAfterGroup() throws {
+  func testTripleTemporaryReplacementUsesDropSideAndPlacesDisplacedPageAfterGroup() throws {
     for focusedIndex in 0...1 {
       for side in [BrowserSplitLayout.Side.left, .right] {
         for incomingTier in 0...2 {
@@ -321,6 +382,7 @@ final class BrowserSplitGroupTests: XCTestCase {
             var (workspace, tabs) = fixture()
             let spaceID = workspace.selectedSpaceID
             _ = workspace.createSplit(with: tabs[1].id, on: .right)
+            _ = workspace.createSplit(with: tabs[3].id, on: .middle)
             _ = workspace.setSplitFraction(0.3)
             if incomingBeforeGroup {
               _ = workspace.moveSplitGroup(containing: tabs[0].id, to: .temporary(spaceID), before: tabs[4].id)
@@ -331,7 +393,7 @@ final class BrowserSplitGroupTests: XCTestCase {
             _ = workspace.selectTab(id: tabs[focusedIndex].id)
             let prior = try XCTUnwrap(workspace.activeSplit)
             let beforeOrder = workspace.tabIDs(in: .temporary(spaceID))
-            let beforeRows = beforeOrder.filter { $0 != prior.rightTabID && $0 != incoming.id }
+            let beforeRows = beforeOrder.filter { $0 != prior.rightTabID && $0 != prior.middleTabID && $0 != incoming.id }
             let globals = workspace.globalPinnedTabIDs
             let pins = workspace.selectedSpace!.pinnedTabIDs
             XCTAssertTrue(workspace.createSplit(with: incoming.id, on: side))
@@ -340,6 +402,7 @@ final class BrowserSplitGroupTests: XCTestCase {
             let retainedID = side == .left ? prior.rightTabID : prior.leftTabID
             let incomingID = side == .left ? group.leftTabID : group.rightTabID
             XCTAssertEqual(side == .left ? group.rightTabID : group.leftTabID, retainedID)
+            XCTAssertEqual(group.middleTabID, prior.middleTabID)
             XCTAssertEqual(workspace.tab(withID: incomingID)?.url, incoming.url)
             XCTAssertEqual(incomingID == incoming.id, incomingTier == 0)
             XCTAssertEqual(group.id, prior.id)
@@ -362,7 +425,7 @@ final class BrowserSplitGroupTests: XCTestCase {
     }
   }
 
-  func testPinnedReplacementCreatesNewTemporaryGroupAtFrontAndPreservesOriginal() throws {
+  func testTriplePinnedReplacementCreatesNewTemporaryGroupAtFrontAndPreservesOriginal() throws {
     for global in [false, true] {
       for focusedIndex in 0...1 {
         for side in [BrowserSplitLayout.Side.left, .right] {
@@ -370,6 +433,7 @@ final class BrowserSplitGroupTests: XCTestCase {
             var (workspace, tabs) = fixture()
             let owner = workspace.selectedSpaceID
             _ = workspace.createSplit(with: tabs[1].id, on: .right)
+            _ = workspace.createSplit(with: tabs[3].id, on: .middle)
             _ = workspace.setSplitFraction(0.65)
             _ = workspace.moveSplitGroup(containing: tabs[0].id, to: global ? .global : .space(owner))
             if global {
@@ -399,7 +463,7 @@ final class BrowserSplitGroupTests: XCTestCase {
             XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original)
             XCTAssertEqual(workspace.globalPinnedTabIDs, globals)
             XCTAssertEqual(workspace.space(withID: owner)?.pinnedTabIDs, pins)
-            XCTAssertEqual(workspace.allTabs.count, count + 1 + (incomingTier == 0 ? 0 : 1))
+            XCTAssertEqual(workspace.allTabs.count, count + 2 + (incomingTier == 0 ? 0 : 1))
             XCTAssertTrue(workspace.validateInvariants())
             let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
             XCTAssertEqual(restored.activeSplit, group)
@@ -527,7 +591,8 @@ final class BrowserSplitGroupTests: XCTestCase {
       XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id), original)
       XCTAssertNotEqual(workspace.activeSplit?.id, original.id)
       XCTAssertTrue(workspace.activeSplit!.contains(tabs[2].id))
-      XCTAssertEqual(workspace.allTabs.count, tabs.count + 1)
+      XCTAssertEqual(workspace.allTabs.count, tabs.count + 2)
+      XCTAssertEqual(workspace.activeSplit?.tabIDs.count, 3)
       XCTAssertTrue(workspace.validateInvariants())
     }
   }

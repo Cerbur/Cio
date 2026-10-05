@@ -265,9 +265,15 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   @discardableResult
   mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
+    createSplit(with: tabID, at: BrowserSplitLayout.DropTarget(side: side))
+  }
+
+  @discardableResult
+  mutating func createSplit(with tabID: UUID, at target: BrowserSplitLayout.DropTarget) -> Bool {
     guard canSplit(with: tabID), let selectedTabID,
           let spaceIndex = index(of: selectedSpaceID) else { return false }
     let prior = activeSplit
+    let side = target.side
     // The middle of a single page is the return/selection zone, including
     // when the dragged row represents an existing group.
     if side == .middle, prior == nil { return selectTab(id: tabID) }
@@ -280,13 +286,10 @@ struct WorkspaceCollection: Equatable, Sendable {
     let incomingIsPinned = pinnedIDs.contains(originalIncoming[0])
     var displaced: [UUID] = []
     var retained = originalExisting
-    if prior != nil {
-      if side == .middle, retained.count == 2 {
-        // Insert into the middle, preserving both existing panes.
-      } else {
-        let index = side == .left ? 0 : (side == .right ? retained.count - 1 : 1)
-        displaced = [retained.remove(at: index)]
-      }
+    if let prior {
+      let placement = prior.placingPane(tabID, at: target)
+      displaced = retained.filter { !placement.contains($0) }
+      retained = retained.filter { placement.contains($0) }
     }
     let existingIDs = retained.map { existingIsPinned ? duplicateForSplit($0) : $0 }
     let incomingIDs = originalIncoming.map { incomingIsPinned ? duplicateForSplit($0) : $0 }

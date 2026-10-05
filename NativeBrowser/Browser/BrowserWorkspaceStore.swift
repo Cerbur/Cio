@@ -164,11 +164,11 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   @discardableResult
-  func splitTab(_ tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
+  func splitTab(_ tabID: UUID, at target: BrowserSplitLayout.DropTarget) -> Bool {
     guard canSplit(with: tabID) else { return false }
     var committed = false
     withSelectionTransition {
-      committed = workspace.createSplit(with: tabID, on: side)
+      committed = workspace.createSplit(with: tabID, at: target)
       if committed { ensureSelectedPresentationSessions() }
     }
     if committed {

@@ -20,7 +20,7 @@ final class BrowserMainViewController: NSViewController {
   private let sidebarChromeLayout: SidebarChromeLayout
   private var dragOverlay: NSView?
   private weak var overlayDrag: SidebarTabDrag?
-  private var splitDropSide: BrowserSplitLayout.Side?
+  private var splitDropTarget: BrowserSplitLayout.DropTarget?
   private var paneDropIndex: Int?
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
@@ -232,16 +232,16 @@ final class BrowserMainViewController: NSViewController {
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
       if drag.isPaneDrag, let group = self.runtime.workspaceStore.activeSplit {
         let canDrop = browser.bounds.contains(local)
-        let side = BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds)
-        self.paneDropIndex = canDrop ? (side == .left ? 0 : (side == .right ? group.tabIDs.count - 1 : 1)) : nil
+        self.paneDropIndex = canDrop ? group.dropPaneIndex(at: local.x, in: browser.bounds) : nil
         self.runtime.workspaceStore.sessionManager.previewPaneDrag(id, index: self.paneDropIndex)
         return
       }
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
-      self.splitDropSide = canSplit ? BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds) : nil
+      self.splitDropTarget = canSplit ? (self.runtime.workspaceStore.activeSplit?.dropTarget(at: local.x, in: browser.bounds)
+        ?? BrowserSplitLayout.DropTarget(side: BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds))) : nil
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
-      self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide, incomingPaneCount: count)
+      self.runtime.workspaceStore.sessionManager.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
     }
     drag.onSplitDrop = { [weak self, weak drag] id in
       guard let self else { return false }
@@ -249,17 +249,17 @@ final class BrowserMainViewController: NSViewController {
         guard let index = self.paneDropIndex else { return false }
         return self.runtime.workspaceStore.reorderSplitPane(id, to: index)
       }
-      guard let side = self.splitDropSide else { return false }
-      self.splitDropSide = nil
+      guard let target = self.splitDropTarget else { return false }
+      self.splitDropTarget = nil
       return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
-        self.runtime.workspaceStore.splitTab(id, on: side)
+        self.runtime.workspaceStore.splitTab(id, at: target)
       }
     }
     drag.onPreviewEnd = { [weak self] in
-      self?.splitDropSide = nil
+      self?.splitDropTarget = nil
       self?.paneDropIndex = nil
       self?.runtime.workspaceStore.sessionManager.previewPaneDrag(nil)
-      self?.runtime.workspaceStore.sessionManager.previewSplit(on: nil)
+      self?.runtime.workspaceStore.sessionManager.previewSplit(at: nil)
     }
   }
 

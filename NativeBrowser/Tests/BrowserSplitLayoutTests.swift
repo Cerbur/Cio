@@ -69,6 +69,64 @@ final class BrowserSplitLayoutTests: XCTestCase {
     XCTAssertEqual(BrowserSplitLayout.dropSide(at: 700, in: bounds), .right)
   }
 
+  func testTwoPaneInsertionZonesFollowCommittedDividerAndStayStableDuringPreview() {
+    let bounds = CGRect(x: 100, y: 20, width: 1200, height: 700)
+    for fraction: CGFloat in [0.25, 0.5, 0.75] {
+      let split = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: fraction)
+      let frames = split.paneFrames(in: bounds)
+      let width = min(frames.panes[0].width, frames.panes[1].width) / 5
+      XCTAssertEqual(split.dropTarget(at: bounds.minX + width - 1, in: bounds), .init(side: .left))
+      XCTAssertEqual(split.dropTarget(at: bounds.minX + width + 1, in: bounds), .init(side: .left, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: frames.panes[0].midX, in: bounds), .init(side: .left, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: frames.dividers[0].midX, in: bounds), .init(side: .middle))
+      XCTAssertEqual(split.dropTarget(at: frames.dividers[0].midX - width - 1, in: bounds), .init(side: .left, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: frames.dividers[0].midX + width + 1, in: bounds), .init(side: .right, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: frames.panes[1].midX, in: bounds), .init(side: .right, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: bounds.maxX - width - 1, in: bounds), .init(side: .right, replacesPane: true))
+      XCTAssertEqual(split.dropTarget(at: bounds.maxX - width + 1, in: bounds), .init(side: .right))
+      for side in [BrowserSplitLayout.Side.left, .middle, .right] {
+        let incoming = UUID()
+        let preview = split.placingPane(incoming, on: side)
+        XCTAssertEqual(preview.tabIDs.count, 3)
+        XCTAssertTrue(split.tabIDs.allSatisfy { preview.contains($0) })
+        XCTAssertEqual(preview.tabIDs.firstIndex(of: incoming), side == .left ? 0 : (side == .middle ? 1 : 2))
+        XCTAssertEqual(preview.fraction, 1.0 / 3)
+        XCTAssertEqual(preview.secondFraction, 2.0 / 3)
+        XCTAssertEqual(split.fraction, fraction)
+      }
+    }
+  }
+
+  func testPaneReorderingAndTripleReplacementUseActualPaneBounds() {
+    let bounds = CGRect(x: 100, y: 20, width: 1400, height: 700)
+    let pair = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: 0.7)
+    let triple = BrowserSplitLayout(leftTabID: UUID(), rightTabID: UUID(), fraction: 0.2,
+                                    middleTabID: UUID(), secondFraction: 0.75)
+    for split in [pair, triple] {
+      let frames = split.paneFrames(in: bounds)
+      for (index, pane) in frames.panes.enumerated() {
+        for x in [pane.minX + 1, pane.midX, pane.maxX - 1] {
+          XCTAssertEqual(split.dropPaneIndex(at: x, in: bounds), index)
+          if split.middleTabID != nil {
+            let side: BrowserSplitLayout.Side = index == 0 ? .left : (index == 1 ? .middle : .right)
+            XCTAssertEqual(split.dropTarget(at: x, in: bounds), .init(side: side, replacesPane: true))
+            let incoming = UUID()
+            let preview = split.placingPane(incoming, on: side)
+            var expected = split.tabIDs
+            expected[index] = incoming
+            XCTAssertEqual(preview.tabIDs, expected)
+            XCTAssertEqual(preview.fraction, split.fraction)
+            XCTAssertEqual(preview.secondFraction, split.secondFraction)
+          }
+        }
+      }
+      for (index, divider) in frames.dividers.enumerated() {
+        XCTAssertEqual(split.dropPaneIndex(at: divider.midX - 1, in: bounds), index)
+        XCTAssertEqual(split.dropPaneIndex(at: divider.midX + 1, in: bounds), index + 1)
+      }
+    }
+  }
+
   func testTriplePanesFillBoundsAndClampBothDividers() {
     for width: CGFloat in [0, 8, 160, 700, 1000, 1440] {
       for first: CGFloat in [0.01, 1.0 / 3, 0.9] {

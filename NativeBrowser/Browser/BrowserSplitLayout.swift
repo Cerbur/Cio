@@ -3,6 +3,10 @@ import Foundation
 /// A durable two- or three-tab group. Runtime views and Chromium sessions are separate.
 struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
   enum Side { case left, middle, right }
+  struct DropTarget: Equatable {
+    var side: Side
+    var replacesPane = false
+  }
   var id: UUID = UUID()
   var leftTabID: UUID
   var rightTabID: UUID
@@ -27,6 +31,33 @@ struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
     return result
   }
 
+  /// Edge/divider drops insert; pane-body drops replace. A full group replaces.
+  /// Previews and committed groups use the same ordering and divider positions.
+  func placingPane(_ tabID: UUID, on side: Side) -> BrowserSplitLayout {
+    placingPane(tabID, at: DropTarget(side: side))
+  }
+
+  func placingPane(_ tabID: UUID, at target: DropTarget) -> BrowserSplitLayout {
+    var ids = tabIDs
+    let side = target.side
+    let index = side == .left ? 0 : (side == .middle ? 1 : ids.count)
+    if ids.count == 3 || target.replacesPane {
+      ids[side == .right ? ids.count - 1 : index] = tabID
+    } else {
+      ids.insert(tabID, at: index)
+    }
+    var result = self
+    result.leftTabID = ids[0]
+    result.middleTabID = ids.count == 3 ? ids[1] : nil
+    result.rightTabID = ids.last!
+    result.focusedTabID = tabID
+    if ids.count == 3, middleTabID == nil {
+      result.fraction = 1.0 / 3
+      result.secondFraction = 2.0 / 3
+    }
+    return result
+  }
+
   static let dividerWidth: CGFloat = 8
   static let minimumPaneWidth: CGFloat = 240
 
@@ -36,10 +67,35 @@ struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
     return min(max(fraction, minimum), 1 - minimum)
   }
 
-  /// Drop zones stay equal thirds, independent of committed divider widths.
+  /// A single page has two split zones and a central selection/return zone.
   static func dropSide(at x: CGFloat, in bounds: CGRect) -> Side {
     let fraction = (x - bounds.minX) / max(1, bounds.width)
     return fraction < 1.0 / 3 ? .left : (fraction < 2.0 / 3 ? .middle : .right)
+  }
+
+  /// Resolve against committed geometry, so moving a preview cannot move its
+  /// own trigger zone. The middle insertion zone straddles the existing divider.
+  func dropTarget(at x: CGFloat, in bounds: CGRect) -> DropTarget {
+    let frames = paneFrames(in: bounds)
+    if middleTabID == nil {
+      // Reserve narrow strips for insertion, leaving each pane's body available
+      // for replacement. Even an uneven pair retains all five distinct zones.
+      let insertionWidth = min(frames.panes[0].width, frames.panes[1].width) / 5
+      if x < bounds.minX + insertionWidth { return DropTarget(side: .left) }
+      if x >= bounds.maxX - insertionWidth { return DropTarget(side: .right) }
+      if abs(x - frames.dividers[0].midX) <= insertionWidth {
+        return DropTarget(side: .middle)
+      }
+    }
+    let index = dropPaneIndex(at: x, in: bounds)
+    let side: Side = index == 0 ? .left : (middleTabID == nil || index == 2 ? .right : .middle)
+    return DropTarget(side: side, replacesPane: true)
+  }
+
+  /// Reordering targets the pane under the pointer, including resized panes.
+  func dropPaneIndex(at x: CGFloat, in bounds: CGRect) -> Int {
+    let dividers = paneFrames(in: bounds).dividers
+    return dividers.firstIndex(where: { x < $0.midX }) ?? dividers.count
   }
 
   func clampedFractions(width: CGFloat) -> (first: CGFloat, second: CGFloat) {

@@ -9,7 +9,7 @@ final class BrowserSurfaceHostView: NSView {
   private var selectedTabID: UUID?
   private var split: BrowserSplitLayout?
   private var isCovered = false
-  private var previewSide: BrowserSplitLayout.Side?
+  private var previewTarget: BrowserSplitLayout.DropTarget?
   private var isCommittingSplitPreview = false
   private var resizingFraction: CGFloat?
   private var resizingSecondFraction: CGFloat?
@@ -111,7 +111,7 @@ final class BrowserSurfaceHostView: NSView {
     // tab-owned instances stay alive, but neither plays an exit/entry animation.
     // Split changes and drag previews still use the component visibility contract.
     let isSinglePageTabSwitch = self.split == nil && split == nil
-      && previewSide == nil && !isCommittingSplitPreview
+      && previewTarget == nil && !isCommittingSplitPreview
       && self.selectedTabID != nil && selectedTabID != nil
       && self.selectedTabID != selectedTabID
     self.selectedTabID = selectedTabID
@@ -147,9 +147,9 @@ final class BrowserSurfaceHostView: NSView {
     applySurfaceLayout()
   }
 
-  func previewSplit(on side: BrowserSplitLayout.Side?, incomingPaneCount: Int = 1) {
-    guard previewSide != side || self.incomingPaneCount != incomingPaneCount else { return }
-    previewSide = side
+  func previewSplit(at target: BrowserSplitLayout.DropTarget?, incomingPaneCount: Int = 1) {
+    guard previewTarget != target || self.incomingPaneCount != incomingPaneCount else { return }
+    previewTarget = target
     self.incomingPaneCount = incomingPaneCount
     applySurfaceLayout(animatedPresentation: true)
   }
@@ -157,8 +157,8 @@ final class BrowserSurfaceHostView: NSView {
   /// Commit directly from the current preview placement. No full-width reset,
   /// no replacement toolbar, and no reparenting of the surviving Chromium view.
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {
-    let hadPreview = previewSide != nil
-    previewSide = nil
+    let hadPreview = previewTarget != nil
+    previewTarget = nil
     isCommittingSplitPreview = hadPreview
     defer { isCommittingSplitPreview = false }
     let committed = commit()
@@ -170,7 +170,7 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
-    preview.isHidden = previewSide == nil && !(liftedPaneID != nil && paneDropIndex != nil)
+    preview.isHidden = previewTarget == nil && !(liftedPaneID != nil && paneDropIndex != nil)
     setDividerFrames([])
     var next: [UUID: PagePlacement] = [:]
     if let id = liftedPaneID, let split, split.contains(id) {
@@ -201,27 +201,24 @@ final class BrowserSurfaceHostView: NSView {
           next[member] = PagePlacement(frame: bounds, cropOnly: true)
         }
       }
-    } else if let side = previewSide, let split {
-      var shown = split
-      if side == .middle, split.middleTabID == nil {
-        shown.middleTabID = UUID()
-        shown.fraction = 1.0 / 3
-        shown.secondFraction = 2.0 / 3
-      }
+    } else if let target = previewTarget, let split {
+      let placeholderID = UUID()
+      let shown = split.placingPane(placeholderID, at: target)
       let frames = shown.paneFrames(in: bounds)
-      let targetIndex = side == .left ? 0 : (side == .right ? frames.panes.count - 1 : 1)
+      let targetIndex = shown.tabIDs.firstIndex(of: placeholderID)!
       preview.frame = frames.panes[targetIndex]
       applyCornerClipping(to: preview, roundedEdge: roundedEdge(at: targetIndex, count: frames.panes.count))
       setDividerFrames(frames.dividers)
-      for (index, id) in split.tabIDs.enumerated() {
-        let inserting = side == .middle && split.middleTabID == nil
-        let destination = inserting && index == 1 ? 2 : index
-        let visible = inserting || destination != targetIndex
-        next[id] = PagePlacement(frame: visible ? frames.panes[destination] : collapsedFrame(for: id),
-          cropOnly: true, toolbarVisible: visible,
-          roundedEdge: roundedEdge(at: destination, count: frames.panes.count))
+      for id in split.tabIDs {
+        if let destination = shown.tabIDs.firstIndex(of: id) {
+          next[id] = PagePlacement(frame: frames.panes[destination], cropOnly: true,
+            roundedEdge: roundedEdge(at: destination, count: frames.panes.count))
+        } else {
+          next[id] = PagePlacement(frame: collapsedFrame(for: id), cropOnly: true, toolbarVisible: false)
+        }
       }
-    } else if let side = previewSide, let selectedTabID {
+    } else if let target = previewTarget, let selectedTabID {
+      let side = target.side
       if side == .middle {
         // The central return zone preserves the full-page presentation.
         preview.frame = bounds
@@ -371,7 +368,7 @@ final class BrowserSurfaceHostView: NSView {
         chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
         paneFrame: placement.frame,
         addressFrame: page.toolbar?.addressCapsuleFrame(in: self),
-        visible: split?.contains(id) == true && liftedPaneID == nil && previewSide == nil && !isCovered
+        visible: split?.contains(id) == true && liftedPaneID == nil && previewTarget == nil && !isCovered
           && workspace?.isSpotlightPresented != true)
     }
     placements = next
