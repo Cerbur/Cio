@@ -4,6 +4,7 @@ import AppKit
 @MainActor
 protocol BrowserToolbarLayoutHosting: AnyObject {
   var pageControlsLeadingEdge: CGFloat { get }
+  var splitPaneOverlayHost: NSView { get }
 }
 
 /// Shared shell metrics. Toolbar height and navigation-rail width always use
@@ -29,7 +30,6 @@ enum BrowserLayout {
   static let splitPaneHandleSize = CGSize(width: 36, height: 8)
   static let splitPaneCapsuleSize = CGSize(width: 96, height: 30)
   static let splitPaneActionSize = CGSize(width: 14, height: 14)
-  static let splitPaneControlInset: CGFloat = 4
   static let splitPaneHoldDuration: TimeInterval = 0.28
   static let trafficLightSpacing: CGFloat = 9
   static let sidebarMinimumWidth: CGFloat = 182

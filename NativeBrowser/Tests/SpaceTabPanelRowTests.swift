@@ -62,4 +62,35 @@ final class SpaceTabPanelRowTests: XCTestCase {
     XCTAssertEqual(rows.map(\.id), [.gap(space), .divider(space), .newTab(space), .footer(space)])
     XCTAssertEqual(rows.first?.tier, .space(space))
   }
+
+  func testIncomingPaneReservesDestinationWithoutRemovingItsSplitRow() throws {
+    for count in [2, 3] {
+      for pinned in [false, true] {
+        let space = UUID(), left = UUID(), right = UUID(), other = UUID()
+        let group = BrowserSplitLayout(leftTabID: left, rightTabID: right,
+          middleTabID: count == 3 ? UUID() : nil)
+        let ids = group.tabIDs + [other]
+        let tier: WorkspaceCollection.TabTier = pinned ? .space(space) : .temporary(space)
+        let rows = SpaceTabPanelRow.make(spaceID: space,
+          pinnedIDs: pinned ? ids : [], temporaryIDs: pinned ? [] : ids,
+          groups: [group], drop: .init(tier: tier, before: other))
+        let gap = try XCTUnwrap(rows.firstIndex { $0.id == .gap(space) })
+        XCTAssertEqual(rows[gap - 1].splitGroup, group)
+        XCTAssertEqual(rows[gap + 1].tabIDs, [other])
+        XCTAssertEqual(rows.flatMap(\.tabIDs), ids)
+        XCTAssertEqual(rows.filter { $0.id == .gap(space) }.count, 1)
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+      }
+    }
+  }
+
+  func testIncomingPaneCanReserveEmptyTierWhileItsSourceGroupStaysTemporary() {
+    let space = UUID(), left = UUID(), right = UUID()
+    let group = BrowserSplitLayout(leftTabID: left, rightTabID: right)
+    let rows = SpaceTabPanelRow.make(spaceID: space, pinnedIDs: [], temporaryIDs: group.tabIDs,
+      groups: [group], drop: .init(tier: .space(space), before: nil))
+    XCTAssertEqual(rows.map(\.id), [.gap(space), .divider(space), .newTab(space), .group(group.id), .footer(space)])
+    XCTAssertEqual(rows.first?.tier, .space(space))
+    XCTAssertEqual(rows.flatMap(\.tabIDs), group.tabIDs)
+  }
 }

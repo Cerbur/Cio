@@ -164,6 +164,7 @@ final class BrowserToolbarController: NSObject {
   /// Identity is fixed for the lifetime of this page, regardless of layout.
   let tabID: UUID
   var arePageControlsVisible: Bool { toolbarPresentation.isVisible }
+  var onAddressCapsuleLayout: (() -> Void)?
   private let isActivePane: (() -> Bool)?
   private let onActivatePane: (() -> Void)?
   private var isDisposed = false
@@ -239,6 +240,17 @@ final class BrowserToolbarController: NSObject {
   var view: NSView {
     if let chromeView { return chromeView }
     return makeChromeView()
+  }
+
+  /// The address panel may include suggestions below its top capsule. Supply
+  /// only the capsule's geometry so pane actions share its actual centre.
+  func addressCapsuleFrame(in host: NSView?) -> CGRect? {
+    guard let addressOverlay, addressOverlay.superview != nil,
+          addressOverlay.bounds.width > 0 else { return nil }
+    let y = addressOverlay.isFlipped ? addressOverlay.bounds.minY
+      : addressOverlay.bounds.maxY - AddressCapsuleLayout.height
+    return addressOverlay.convert(CGRect(x: addressOverlay.bounds.minX, y: y,
+      width: addressOverlay.bounds.width, height: AddressCapsuleLayout.height), to: host)
   }
 
   deinit {
@@ -409,6 +421,7 @@ final class BrowserToolbarController: NSObject {
     let browserRect = chromeView.bounds
     chromeView.applyLayout(browserRect: browserRect,
                           preparingToShow: preparingToShow)
+    onAddressCapsuleLayout?()
   }
 
   private func observeWorkspace() {

@@ -204,7 +204,8 @@ final class BrowserMainViewController: NSViewController {
         let tier: WorkspaceCollection.TabTier = workspace.globalPinnedTabs.contains(where: { $0.id == id }) ? .global
           : (workspace.selectedSpace?.pinnedTabIDs.contains(id) == true ? .space(workspace.selectedSpaceID) : .temporary(workspace.selectedSpaceID))
         guard drag.beginPane(id, tier: tier, at: sidebar.convert(point, from: nil),
-                             frame: sidebar.convert(frame, from: nil), snapshot: snapshot) else { return false }
+                             frame: sidebar.convert(frame, from: nil), snapshot: snapshot,
+                             groupTabIDs: group.tabIDs) else { return false }
         self.paneDropIndex = nil
         workspace.sessionManager.previewPaneDrag(id)
         return true

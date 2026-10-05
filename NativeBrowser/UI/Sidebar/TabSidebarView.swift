@@ -230,7 +230,7 @@ struct TabSidebarView: View {
     let panelRows = SpaceTabPanelRow.make(
       spaceID: space.id, pinnedIDs: pinnedTabs.map(\.id), temporaryIDs: temporaryTabs.map(\.id),
       groups: space.splitGroups, liftedID: tabDrag.sidebarLiftedTabID,
-      drop: tabDrag.target.map { .init(tier: $0.tier, before: $0.before) })
+      drop: (tabDrag.isDragging ? tabDrag.target : nil).map { .init(tier: $0.tier, before: $0.before) })
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
 
@@ -286,6 +286,8 @@ struct TabSidebarView: View {
       dividerElement(in: space, clearableCount: clearableCount)
     } else if container.elements == [.newTab] {
       newTabElement(in: space, spotlightIsActive: spotlightIsActive, newTabIsHovered: newTabIsHovered)
+    } else if container.id == .gap(space.id) {
+      SidebarTabDropSlot()
     } else {
       Color.clear
     }
@@ -389,7 +391,7 @@ struct TabSidebarView: View {
               .frame(height: topPinHeight)
               .modifier(SidebarTabDragItem(drag: tabDrag, tabID: group.leftTabID, tier: .global))
           case .gap:
-            Color.clear.frame(height: topPinHeight)
+            SidebarTabDropSlot().frame(height: topPinHeight)
           }
         }
         if tileSlots.isEmpty {
@@ -437,7 +439,7 @@ struct TabSidebarView: View {
         emitted.insert(tab.id)
       }
     }
-    if tabDrag.sidebarLiftedTabID != nil, let target = tabDrag.target, target.tier == tier {
+    if tabDrag.isDragging, let target = tabDrag.target, target.tier == tier {
       let index = target.before.flatMap { before in result.firstIndex { $0.contains(before) } }
       result.insert(.gap, at: index ?? result.count)
     }

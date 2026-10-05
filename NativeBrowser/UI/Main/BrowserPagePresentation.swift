@@ -41,8 +41,11 @@ final class BrowserPagePresentation {
     splitControl.onClose = { [weak workspace] in workspace?.closeTab(id: id) }
     splitControl.onMinimize = { [weak workspace] in workspace?.detachSplitPane(id) }
     splitControl.onExpand = { [weak workspace] in workspace?.detachSplitPane(id, selectDetached: true) }
-    toolbar = BrowserToolbarController(workspace: workspace, history: history,
+    let toolbar = BrowserToolbarController(workspace: workspace, history: history,
       browserView: viewport, tabID: tabID, initiallyVisible: false)
+    self.toolbar = toolbar
+    splitControl.addressFrameProvider = { [weak toolbar] in toolbar?.addressCapsuleFrame(in: nil) }
+    toolbar.onAddressCapsuleLayout = { [weak control = splitControl] in control?.addressLayoutDidChange() }
   }
 
   func layout(in contentHost: NSView, chromeHost: NSView?, frame: CGRect,

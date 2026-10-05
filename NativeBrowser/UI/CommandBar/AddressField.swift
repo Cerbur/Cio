@@ -217,6 +217,10 @@ struct AddressField: NSViewRepresentable {
         guard let self, self.parent.acceptsInteraction(),
               let field, let window = field.window
         else { return event }
+        if event.window === window,
+           BrowserSplitPaneControl.ownsHit(at: event.locationInWindow, in: window) {
+          return event
+        }
         let fieldRect = field.convert(field.bounds, to: nil)
         // The expanded input starts at the candidate text column. Include its
         // wider leading inset so icon and list-edge clicks stay inside the panel.

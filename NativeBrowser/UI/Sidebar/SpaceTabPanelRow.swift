@@ -51,7 +51,9 @@ struct SpaceTabPanelRow: Identifiable, Equatable {
           emitted.insert(id)
         }
       }
-      if liftedID != nil, let drop, drop.tier == tier {
+      // An incoming pane has no lifted sidebar row: its split group stays in
+      // place. The virtual destination still reserves a full row in the list.
+      if let drop, drop.tier == tier {
         let index = drop.before.flatMap { before in rows.firstIndex { $0.tabIDs.contains(before) } }
         rows.insert(Self(id: .gap(spaceID), elements: [], tier: tier), at: index ?? rows.count)
       }

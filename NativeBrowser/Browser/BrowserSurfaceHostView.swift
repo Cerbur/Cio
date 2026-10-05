@@ -363,13 +363,16 @@ final class BrowserSurfaceHostView: NSView {
         continue
       }
       applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge)
-      page.splitControl.place(in: self, chromeHost: chromeOverlayHost, paneFrame: placement.frame,
-        visible: split?.contains(id) == true && liftedPaneID == nil && previewSide == nil && !isCovered
-          && workspace?.isSpotlightPresented != true)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
                   cropOnly: placement.cropOnly, toolbarVisible: placement.toolbarVisible && !isCovered,
                   toolbarLayoutFrame: appearingToolbarFrames[id] ?? placement.frame,
                   animatedVisibility: animatedVisibility)
+      page.splitControl.place(in: self,
+        chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
+        paneFrame: placement.frame,
+        addressFrame: page.toolbar?.addressCapsuleFrame(in: self),
+        visible: split?.contains(id) == true && liftedPaneID == nil && previewSide == nil && !isCovered
+          && workspace?.isSpotlightPresented != true)
     }
     placements = next
   }

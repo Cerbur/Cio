@@ -23,12 +23,36 @@ struct NativeBrowserShellRepresentable: NSViewControllerRepresentable {
   ) {}
 }
 
-/// Three siblings over the shell glass. Only Main View clips its children.
+/// Empty overlay space passes through; mounted pane controls own their hits.
+@MainActor
+private final class SplitPaneOverlayHostView: NSView {
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    // SwiftUI address hosts are layer-backed. Composite pane actions as one
+    // layer above them, rather than mixing their AppKit drawing underneath
+    // the address host's separately composited text and glass layers.
+    wantsLayer = true
+    layer?.zPosition = 1
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override var isFlipped: Bool { true }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    return hit === self ? nil : hit
+  }
+}
+
+/// Shell sections share the glass, with pane actions in a dedicated top layer.
 @MainActor
 private final class BrowserShellView: NSView, BrowserToolbarLayoutHosting {
   let toolbarView: NSView
   let railView: NSView
   let mainView: NSView
+  let splitPaneOverlayHost: NSView = SplitPaneOverlayHostView()
   var onLayout: (() -> Void)?
   var controlsLeadingEdge: (() -> CGFloat)?
   var pageControlsLeadingEdge: CGFloat { controlsLeadingEdge?() ?? 0 }
@@ -42,6 +66,7 @@ private final class BrowserShellView: NSView, BrowserToolbarLayoutHosting {
     addSubview(mainView)
     addSubview(railView)
     addSubview(toolbarView)
+    addSubview(splitPaneOverlayHost)
   }
 
   @available(*, unavailable)
@@ -49,7 +74,20 @@ private final class BrowserShellView: NSView, BrowserToolbarLayoutHosting {
 
   override var isFlipped: Bool { true }
 
+  override func didAddSubview(_ subview: NSView) {
+    super.didAddSubview(subview)
+    // Address hosts may be mounted later or recreated. Their insertion must
+    // never put them above the pane-action layer.
+    if subview !== splitPaneOverlayHost, splitPaneOverlayHost.superview === self,
+       subviews.last !== splitPaneOverlayHost {
+      addSubview(splitPaneOverlayHost, positioned: .above, relativeTo: nil)
+    }
+  }
+
   override func hitTest(_ point: NSPoint) -> NSView? {
+    if let hit = splitPaneOverlayHost.hitTest(convert(point, from: superview)) {
+      return hit
+    }
     // Resolve the entire toolbar background before overlapping pane and
     // SwiftUI hosts can claim it. Visible controls retain normal hit-testing;
     // all other toolbar points share the shell's drag and double-click handler.
@@ -67,6 +105,7 @@ private final class BrowserShellView: NSView, BrowserToolbarLayoutHosting {
     toolbarView.frame = frames.toolbar
     railView.frame = frames.navigationRail
     mainView.frame = frames.mainView
+    splitPaneOverlayHost.frame = bounds
     onLayout?()
   }
 }
@@ -130,7 +169,8 @@ final class NativeBrowserShellController: NSViewController {
     windowChrome.isControlAtWindowPoint = { [weak self, weak shellView] point in
       guard let self, let shellView else { return false }
       if self.mainViewController.spaceToolbar.containsControl(at: point) { return true }
-      if shellView.subviews.compactMap({ $0 as? BrowserSplitPaneControl }).contains(where: { $0.containsControl(at: point) }) { return true }
+      if shellView.splitPaneOverlayHost.subviews.compactMap({ $0 as? BrowserSplitPaneControl })
+        .contains(where: { $0.containsControl(at: point) }) { return true }
       return shellView.subviews.compactMap { $0 as? ToolbarChromeView }
         .contains { $0.containsControl(at: point) }
     }

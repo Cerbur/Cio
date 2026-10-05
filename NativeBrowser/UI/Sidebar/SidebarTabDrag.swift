@@ -68,6 +68,7 @@ final class SidebarTabDrag {
   private(set) var paneSnapshotOpacity: Double = 0
   @ObservationIgnored var layoutProvider: (() -> SidebarTabDragLayout?)?
   @ObservationIgnored private var paneSourceFrame = CGRect.zero
+  @ObservationIgnored private var paneSourceTabIDs = Set<UUID>()
   private(set) var tabID: UUID?
   private(set) var phase = Phase.lifted
   private(set) var isLifted = false
@@ -257,13 +258,15 @@ final class SidebarTabDrag {
 
   /// A pane starts at its page frame, then contracts into the same glass card
   /// used by sidebar tabs. The durable group is untouched until a valid drop.
-  func beginPane(_ id: UUID, tier: WorkspaceCollection.TabTier, at point: CGPoint, frame: CGRect, snapshot: NSImage?) -> Bool {
+  func beginPane(_ id: UUID, tier: WorkspaceCollection.TabTier, at point: CGPoint, frame: CGRect,
+                 snapshot: NSImage?, groupTabIDs: [UUID]) -> Bool {
     guard !isDragging, let layout = layoutProvider?() else { return false }
     finish(animated: false)
     generation += 1
     self.layout = layout
     isPaneDrag = true
     paneSourceFrame = frame
+    paneSourceTabIDs = Set(groupTabIDs)
     paneSnapshot = snapshot
     paneSnapshotOpacity = 1
     startedFromStableTab = true
@@ -495,6 +498,7 @@ final class SidebarTabDrag {
     withTransaction(transaction) {
       tabID = nil
       isPaneDrag = false
+      paneSourceTabIDs = []
       paneSnapshot = nil
       paneSnapshotOpacity = 0
       target = nil
@@ -570,10 +574,11 @@ final class SidebarTabDrag {
   private func topPinTarget(for id: UUID, in layout: SidebarTabDragLayout) -> SidebarTabDropTarget? {
     let ids = layout.globalTabIDs
     let requiredPins = isPaneDrag ? 1 : (layout.groupSizes[id] ?? 1)
-    guard ids.contains(id) || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
+    guard (isPaneDrag && sourceTier == .global) || ids.contains(id)
+      || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
       return nil
     }
-    let tiles = ids.filter { $0 != id }.compactMap { tileID in
+    let tiles = ids.filter { $0 != id && !paneSourceTabIDs.contains($0) }.compactMap { tileID in
       frame(of: tileID, in: .global).map { (id: tileID, frame: $0) }
     }
     // Tiles read left to right, then top to bottom; half the grid spacing
@@ -593,7 +598,9 @@ final class SidebarTabDrag {
     let pinTier = WorkspaceCollection.TabTier.space(layout.spaceID)
     let inPins = tierFrames[pinTier].map { y <= $0.maxY } ?? false
     let tier = inPins ? pinTier : .temporary(layout.spaceID)
-    let rows = layout.tabIDs(in: tier).filter { $0 != id }.compactMap { rowID in
+    // The source group remains visible, but dropping onto one of its members
+    // is rejected by the workspace. Reserve the next valid list boundary.
+    let rows = layout.tabIDs(in: tier).filter { $0 != id && !paneSourceTabIDs.contains($0) }.compactMap { rowID in
       frame(of: rowID, in: tier).map { (id: rowID, frame: $0) }
     }
     let index = rows.firstIndex { y < $0.frame.midY } ?? rows.count
@@ -633,6 +640,20 @@ final class SidebarTabDrag {
     autoscrollSpeed = speed
     let direction = speed < 0 ? -1 : (speed > 0 ? 1 : 0)
     if autoscrollDirection != direction { autoscrollDirection = direction }
+  }
+}
+
+/// A virtual row/tile reserves the landing position without creating a tab or
+/// changing the durable split group. Its surrounding stack supplies movement.
+struct SidebarTabDropSlot: View {
+  var body: some View {
+    Color.clear
+      .background(.primary.opacity(0.04), in: SidebarTabAppearance.glassShape)
+      .overlay {
+        SidebarTabAppearance.glassShape.strokeBorder(.primary.opacity(0.12), lineWidth: 1)
+      }
+      .accessibilityHidden(true)
+      .allowsHitTesting(false)
   }
 }
 
