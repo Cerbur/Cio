@@ -63,6 +63,11 @@ final class SidebarTabDrag {
     case landing
   }
 
+  private(set) var isPaneDrag = false
+  private(set) var paneSnapshot: NSImage?
+  private(set) var paneSnapshotOpacity: Double = 0
+  @ObservationIgnored var layoutProvider: (() -> SidebarTabDragLayout?)?
+  @ObservationIgnored private var paneSourceFrame = CGRect.zero
   private(set) var tabID: UUID?
   private(set) var phase = Phase.lifted
   private(set) var isLifted = false
@@ -80,6 +85,7 @@ final class SidebarTabDrag {
 
   /// The tab that is out of its tier while it follows the pointer.
   var liftedTabID: UUID? { phase == .lifted ? tabID : nil }
+  var sidebarLiftedTabID: UUID? { isPaneDrag ? nil : liftedTabID }
   var isDragging: Bool { liftedTabID != nil }
 
   @ObservationIgnored var externalBounds: (() -> CGRect)?
@@ -222,7 +228,7 @@ final class SidebarTabDrag {
 
   /// The landing tab stays hidden until the glass block reaches it.
   func sourceOpacity(of id: UUID) -> Double {
-    tabID == id ? 0 : 1
+    isPaneDrag && phase == .lifted ? 1 : (tabID == id ? 0 : 1)
   }
 
   /// SwiftUI still completes the click on the button a drag started from when
@@ -247,6 +253,58 @@ final class SidebarTabDrag {
     anchor = clampedAnchor(pointer)
     updateAutoscroll()
     if let tabID { onPointerMove?(tabID, location) }
+  }
+
+  /// A pane starts at its page frame, then contracts into the same glass card
+  /// used by sidebar tabs. The durable group is untouched until a valid drop.
+  func beginPane(_ id: UUID, tier: WorkspaceCollection.TabTier, at point: CGPoint, frame: CGRect, snapshot: NSImage?) -> Bool {
+    guard !isDragging, let layout = layoutProvider?() else { return false }
+    finish(animated: false)
+    generation += 1
+    self.layout = layout
+    isPaneDrag = true
+    paneSourceFrame = frame
+    paneSnapshot = snapshot
+    paneSnapshotOpacity = 1
+    startedFromStableTab = true
+    sourceTier = tier
+    sourceSize = frame.size
+    homeTarget = nil
+    target = nil
+    phase = .lifted
+    style = .card
+    size = frame.size
+    grab = CGPoint(x: min(max((point.x - frame.minX) / max(frame.width, 1), 0), 1),
+                   y: min(max((point.y - frame.minY) / max(frame.height, 1), 0), 1))
+    anchor = CGPoint(x: frame.minX + grab.x * frame.width, y: frame.minY + grab.y * frame.height)
+    pointer = point
+    isOutsideSidebar = true
+    tabID = id
+    let generation = generation
+    // The native handle tracks in eventTracking mode. Keep the initial morph
+    // running during that loop, and respect any region entered in the meantime.
+    let liftTimer = Timer(timeInterval: 0.016, repeats: false) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, self.generation == generation, self.isPaneDrag, self.isDragging else { return }
+        withAnimation(self.reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.84)) {
+          self.size = self.blockSize(for: self.style)
+          self.paneSnapshotOpacity = 0
+          self.isLifted = true
+        }
+      }
+    }
+    RunLoop.main.add(liftTimer, forMode: .common)
+    return true
+  }
+
+  func movePane(to point: CGPoint) {
+    guard isPaneDrag, isDragging, let id = tabID else { return }
+    if let layout = layoutProvider?() { self.layout = layout }
+    pointer = point
+    resolveTarget()
+    anchor = clampedAnchor(point)
+    updateAutoscroll()
+    onPointerMove?(id, point)
   }
 
   func drop(_ move: (UUID, SidebarTabDropTarget) -> Bool) {
@@ -395,7 +453,11 @@ final class SidebarTabDrag {
     withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) {
       phase = .landing
     }
-    settle(id, in: sourceTier)
+    if isPaneDrag {
+      land(in: paneSourceFrame, style: .card)
+    } else {
+      settle(id, in: sourceTier)
+    }
   }
 
   private func land(in frame: CGRect, style: Style) {
@@ -408,6 +470,7 @@ final class SidebarTabDrag {
     let generation = generation
     withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
       self.style = style
+      if isPaneDrag, frame == paneSourceFrame { paneSnapshotOpacity = 1 }
       size = frame.size
       anchor = CGPoint(
         x: frame.minX + grab.x * frame.width,
@@ -431,6 +494,9 @@ final class SidebarTabDrag {
     transaction.disablesAnimations = !animateHandoff
     withTransaction(transaction) {
       tabID = nil
+      isPaneDrag = false
+      paneSnapshot = nil
+      paneSnapshotOpacity = 0
       target = nil
       phase = .lifted
       isLifted = false
@@ -493,7 +559,7 @@ final class SidebarTabDrag {
   }
 
   private func blockSize(for style: Style) -> CGSize {
-    if style == Style(sourceTier) { return sourceSize }
+    if !isPaneDrag, style == Style(sourceTier) { return sourceSize }
     switch style {
     case .row: return rowSize ?? CGSize(width: max(bounds.width - 20, 1), height: BrowserLayout.sidebarTabRowHeight)
     case .tile: return layout?.tileSize ?? CGSize(width: 82, height: 40.5)
@@ -503,7 +569,7 @@ final class SidebarTabDrag {
 
   private func topPinTarget(for id: UUID, in layout: SidebarTabDragLayout) -> SidebarTabDropTarget? {
     let ids = layout.globalTabIDs
-    let requiredPins = layout.groupSizes[id] ?? 1
+    let requiredPins = isPaneDrag ? 1 : (layout.groupSizes[id] ?? 1)
     guard ids.contains(id) || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
       return nil
     }

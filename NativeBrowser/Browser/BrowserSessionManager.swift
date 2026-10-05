@@ -72,6 +72,12 @@ final class BrowserSessionManager: ObservableObject {
   /// Ordinary close requests waiting for CEF's beforeunload result.
   private var pendingCloseTabIDs: [UUID] = []
   private var containers: [UUID: ChromiumContainerView] = [:]
+  var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)? {
+    didSet { surfaceHost?.onSplitPaneDrag = onSplitPaneDrag }
+  }
+  func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
+    surfaceHost?.previewPaneDrag(tabID, index: index)
+  }
   private weak var surfaceHost: BrowserSurfaceHostView?
   private var selectedSurfaceTabID: UUID?
   private var splitLayout: BrowserSplitLayout?
@@ -237,6 +243,7 @@ final class BrowserSessionManager: ObservableObject {
       surfaceHost?.onDarkAppearanceChange = nil
     }
     surfaceHost = host
+    host.onSplitPaneDrag = onSplitPaneDrag
     host.onDarkAppearanceChange = { [weak self] dark in
       self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
     }

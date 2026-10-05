@@ -157,7 +157,30 @@ struct TabSidebarView: View {
       .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
-      .onAppear { chromeLayout.attachTabDrag(tabDrag) }
+      .onAppear {
+        tabDrag.layoutProvider = { [weak workspace, weak chromeLayout, weak tabDrag] in
+          guard let workspace, let chromeLayout, let tabDrag else { return nil }
+          let space = workspace.selectedSpace
+          let globals = workspace.globalPinnedTabs.map(\.id)
+          let rightIDs = Set(workspace.spaces.flatMap { $0.splitGroups.flatMap { $0.tabIDs.dropFirst() } })
+          let width = max(BrowserLayout.sidebarMinimumWidth, tabDrag.bounds.width)
+          let columns: CGFloat = width >= 365 ? 4 : (width >= 275 ? 3 : 2)
+          return SidebarTabDragLayout(spaceID: workspace.selectedSpaceID,
+            globalTabIDs: globals.filter { !rightIDs.contains($0) }, globalPinnedTabCount: globals.count,
+            groupedTabIDs: Set(workspace.spaces.flatMap { $0.splitGroups.flatMap(\.tabIDs) }),
+            groupSizes: Dictionary(uniqueKeysWithValues: workspace.spaces.flatMap {
+              $0.splitGroups.map { ($0.leftTabID, $0.tabIDs.count) }
+            }),
+            spacePinTabIDs: (space?.pinnedTabIDs ?? []).filter { !rightIDs.contains($0) },
+            temporaryTabIDs: (space?.tabIDs ?? []).filter {
+              !(space?.pinnedTabIDs.contains($0) ?? false) && !globals.contains($0) && !rightIDs.contains($0)
+            },
+            tileSize: CGSize(width: (width - 2 * BrowserLayout.sidebarContentInset
+              - BrowserLayout.sidebarTopPinSpacing * (columns - 1)) / columns, height: 40.5),
+            topInset: chromeLayout.topInset)
+        }
+        chromeLayout.attachTabDrag(tabDrag)
+      }
       .onReceive(NotificationCenter.default.publisher(for: .browserToggleSpacePin, object: workspace)) { notification in
         if let id = notification.userInfo?["tabID"] as? UUID { toggleSpacePin(id) }
       }
@@ -206,7 +229,7 @@ struct TabSidebarView: View {
     let clearableCount = temporaryTabs.filter { $0.id != workspace.selectedTabID }.count
     let panelRows = SpaceTabPanelRow.make(
       spaceID: space.id, pinnedIDs: pinnedTabs.map(\.id), temporaryIDs: temporaryTabs.map(\.id),
-      groups: space.splitGroups, liftedID: tabDrag.liftedTabID,
+      groups: space.splitGroups, liftedID: tabDrag.sidebarLiftedTabID,
       drop: tabDrag.target.map { .init(tier: $0.tier, before: $0.before) })
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
@@ -398,7 +421,7 @@ struct TabSidebarView: View {
   /// opens a gap at that place.
   private func slots(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> [SidebarSlot] {
     let available = tabs.filter {
-      guard let lifted = tabDrag.liftedTabID else { return true }
+      guard let lifted = tabDrag.sidebarLiftedTabID else { return true }
       return $0.id != lifted && workspace.splitGroup(containing: $0.id)?.leftTabID != lifted
     }
     let ids = Set(available.map(\.id))
@@ -414,7 +437,7 @@ struct TabSidebarView: View {
         emitted.insert(tab.id)
       }
     }
-    if tabDrag.liftedTabID != nil, let target = tabDrag.target, target.tier == tier {
+    if tabDrag.sidebarLiftedTabID != nil, let target = tabDrag.target, target.tier == tier {
       let index = target.before.flatMap { before in result.firstIndex { $0.contains(before) } }
       result.insert(.gap, at: index ?? result.count)
     }

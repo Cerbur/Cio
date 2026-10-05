@@ -10,6 +10,7 @@ final class BrowserPagePresentation {
   let surface: ChromiumContainerView
   let viewport: NSView
   private(set) var toolbar: BrowserToolbarController?
+  let splitControl = BrowserSplitPaneControl(frame: .zero)
   private weak var installedWindow: NSWindow?
 
   init(tabID: UUID, surface: ChromiumContainerView, viewport: NSView) {
@@ -17,6 +18,17 @@ final class BrowserPagePresentation {
     self.surface = surface
     self.viewport = viewport
     surface.autoresizingMask = []
+    splitControl.dragSource = { [weak viewport] in
+      guard let viewport else { return (.zero, nil) }
+      var image: NSImage?
+      if let bitmap = viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds) {
+        viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
+        let snapshot = NSImage(size: viewport.bounds.size)
+        snapshot.addRepresentation(bitmap)
+        image = snapshot
+      }
+      return (viewport.convert(viewport.bounds, to: nil), image)
+    }
     surface.setFrameOrigin(.zero)
     viewport.addSubview(surface)
   }
@@ -25,6 +37,10 @@ final class BrowserPagePresentation {
   /// configures the toolbar once, retaining it for the lifetime of this page.
   func configureToolbar(workspace: BrowserWorkspaceStore, history: HistoryService) {
     guard toolbar == nil else { return }
+    let id = tabID
+    splitControl.onClose = { [weak workspace] in workspace?.closeTab(id: id) }
+    splitControl.onMinimize = { [weak workspace] in workspace?.detachSplitPane(id) }
+    splitControl.onExpand = { [weak workspace] in workspace?.detachSplitPane(id, selectDetached: true) }
     toolbar = BrowserToolbarController(workspace: workspace, history: history,
       browserView: viewport, tabID: tabID, initiallyVisible: false)
   }
@@ -60,11 +76,14 @@ final class BrowserPagePresentation {
 
   func hide(animated: Bool) {
     viewport.isHidden = true
+    splitControl.isHidden = true
+    splitControl.collapse()
     toolbar?.setPageControlsVisible(false, animated: animated)
   }
 
   func dispose() {
     toolbar?.dispose()
+    splitControl.removeFromSuperview()
     viewport.removeFromSuperview()
   }
 }

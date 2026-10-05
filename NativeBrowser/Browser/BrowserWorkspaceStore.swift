@@ -178,6 +178,34 @@ final class BrowserWorkspaceStore: ObservableObject {
     return committed
   }
 
+  func detachSplitPane(_ tabID: UUID, selectDetached: Bool = false) {
+    guard !isTerminating, !sessionManager.isClosing(tabID: tabID) else { return }
+    withSelectionTransition {
+      _ = workspace.detachSplitPane(tabID, selectDetached: selectDetached)
+      ensureSelectedPresentationSessions()
+    }
+    selectedSession?.focusPage()
+  }
+
+  @discardableResult
+  func moveSplitPane(_ tabID: UUID, to target: SidebarTabDropTarget) -> Bool {
+    guard !isTerminating, !sessionManager.isClosing(tabID: tabID) else { return false }
+    var moved = false
+    withSelectionTransition {
+      moved = workspace.moveSplitPane(tabID, to: target.tier, before: target.before)
+      if moved { ensureSelectedPresentationSessions() }
+    }
+    return moved
+  }
+
+  @discardableResult
+  func reorderSplitPane(_ tabID: UUID, to index: Int) -> Bool {
+    guard !isTerminating, !sessionManager.isClosing(tabID: tabID) else { return false }
+    var moved = false
+    withSelectionTransition { moved = workspace.reorderSplitPane(tabID, to: index) }
+    return moved
+  }
+
   func setSplitFraction(_ fraction: CGFloat, divider: Int = 0) {
     let before = sessionSnapshot
     guard workspace.setSplitFraction(fraction, divider: divider) else { return }
@@ -582,10 +610,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     withSelectionTransition(
       pageHeldKeyboardOverride: selectedCloseHeldPageKeyboard ? true : nil
     ) {
-      if let split = closingSplit {
-        _ = workspace.endSplit(keeping: id)
-        workspace.selectTab(id: split.leftTabID == id ? split.rightTabID : split.leftTabID)
-      }
+      if closingSplit != nil { _ = workspace.detachSplitPane(id) }
       let closeResult = workspace.close(id, reason: reason)
       guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
         result = closeResult

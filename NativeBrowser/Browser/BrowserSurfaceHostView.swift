@@ -14,6 +14,16 @@ final class BrowserSurfaceHostView: NSView {
   private var resizingFraction: CGFloat?
   private var resizingSecondFraction: CGFloat?
   private var incomingPaneCount = 1
+  var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)?
+  private var liftedPaneID: UUID?
+  private var paneDropIndex: Int?
+
+  func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
+    guard liftedPaneID != tabID || paneDropIndex != index else { return }
+    liftedPaneID = tabID
+    paneDropIndex = index
+    applySurfaceLayout(animatedPresentation: true)
+  }
 
   private enum RoundedEdge: Equatable { case none, left, right, both }
 
@@ -113,6 +123,7 @@ final class BrowserSurfaceHostView: NSView {
         let viewport = BrowserPageViewportView(frame: surface.frame)
         let page = BrowserPagePresentation(tabID: id, surface: surface, viewport: viewport)
         pages[id] = page
+        page.splitControl.onDrag = { [weak self] event in self?.onSplitPaneDrag?(id, event) ?? false }
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
       if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
@@ -159,10 +170,38 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
-    preview.isHidden = previewSide == nil
+    preview.isHidden = previewSide == nil && !(liftedPaneID != nil && paneDropIndex != nil)
     setDividerFrames([])
     var next: [UUID: PagePlacement] = [:]
-    if let side = previewSide, let split {
+    if let id = liftedPaneID, let split, split.contains(id) {
+      if let index = paneDropIndex {
+        let shown = split.movingPane(id, to: index)
+        let frames = shown.paneFrames(in: bounds)
+        setDividerFrames(frames.dividers)
+        for (position, member) in shown.tabIDs.enumerated() {
+          if member == id {
+            preview.frame = frames.panes[position]
+            applyCornerClipping(to: preview, roundedEdge: roundedEdge(at: position, count: shown.tabIDs.count))
+          } else {
+            next[member] = PagePlacement(frame: frames.panes[position], cropOnly: true,
+              roundedEdge: roundedEdge(at: position, count: shown.tabIDs.count))
+          }
+        }
+      } else {
+        let remaining = split.tabIDs.filter { $0 != id }
+        if remaining.count == 2 {
+          let shown = BrowserSplitLayout(leftTabID: remaining[0], rightTabID: remaining[1])
+          let frames = shown.paneFrames(in: bounds)
+          setDividerFrames(frames.dividers)
+          for (position, member) in remaining.enumerated() {
+            next[member] = PagePlacement(frame: frames.panes[position], cropOnly: true,
+              roundedEdge: roundedEdge(at: position, count: 2))
+          }
+        } else if let member = remaining.first {
+          next[member] = PagePlacement(frame: bounds, cropOnly: true)
+        }
+      }
+    } else if let side = previewSide, let split {
       var shown = split
       if side == .middle, split.middleTabID == nil {
         shown.middleTabID = UUID()
@@ -324,6 +363,9 @@ final class BrowserSurfaceHostView: NSView {
         continue
       }
       applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge)
+      page.splitControl.place(in: self, chromeHost: chromeOverlayHost, paneFrame: placement.frame,
+        visible: split?.contains(id) == true && liftedPaneID == nil && previewSide == nil && !isCovered
+          && workspace?.isSpotlightPresented != true)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
                   cropOnly: placement.cropOnly, toolbarVisible: placement.toolbarVisible && !isCovered,
                   toolbarLayoutFrame: appearingToolbarFrames[id] ?? placement.frame,

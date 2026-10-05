@@ -130,6 +130,7 @@ final class NativeBrowserShellController: NSViewController {
     windowChrome.isControlAtWindowPoint = { [weak self, weak shellView] point in
       guard let self, let shellView else { return false }
       if self.mainViewController.spaceToolbar.containsControl(at: point) { return true }
+      if shellView.subviews.compactMap({ $0 as? BrowserSplitPaneControl }).contains(where: { $0.containsControl(at: point) }) { return true }
       return shellView.subviews.compactMap { $0 as? ToolbarChromeView }
         .contains { $0.containsControl(at: point) }
     }

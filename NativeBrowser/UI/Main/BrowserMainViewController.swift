@@ -21,6 +21,7 @@ final class BrowserMainViewController: NSViewController {
   private var dragOverlay: NSView?
   private weak var overlayDrag: SidebarTabDrag?
   private var splitDropSide: BrowserSplitLayout.Side?
+  private var paneDropIndex: Int?
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
   let spaceSplitController: NSSplitViewController
@@ -192,6 +193,30 @@ final class BrowserMainViewController: NSViewController {
     view.addSubview(overlay, positioned: .above, relativeTo: nil)
     dragOverlay = overlay
     overlayDrag = drag
+    runtime.workspaceStore.sessionManager.onSplitPaneDrag = { [weak self, weak drag] id, event in
+      guard let self, let drag else { return false }
+      let sidebar = self.sidebarItem.viewController.view
+      switch event {
+      case .begin(let point, let frame, let snapshot):
+        guard self.runtime.presentedInternalPanel == nil,
+              let group = self.runtime.workspaceStore.activeSplit, group.contains(id) else { return false }
+        let workspace = self.runtime.workspaceStore
+        let tier: WorkspaceCollection.TabTier = workspace.globalPinnedTabs.contains(where: { $0.id == id }) ? .global
+          : (workspace.selectedSpace?.pinnedTabIDs.contains(id) == true ? .space(workspace.selectedSpaceID) : .temporary(workspace.selectedSpaceID))
+        guard drag.beginPane(id, tier: tier, at: sidebar.convert(point, from: nil),
+                             frame: sidebar.convert(frame, from: nil), snapshot: snapshot) else { return false }
+        self.paneDropIndex = nil
+        workspace.sessionManager.previewPaneDrag(id)
+        return true
+      case .move(let point):
+        drag.movePane(to: sidebar.convert(point, from: nil))
+      case .end:
+        drag.drop { [weak self] id, target in self?.runtime.workspaceStore.moveSplitPane(id, to: target) ?? false }
+      case .cancel:
+        drag.gestureDidEnd()
+      }
+      return true
+    }
     drag.isStableTab = { [weak workspace = runtime.workspaceStore] id in
       guard let workspace, !workspace.isSpotlightPresented, let selectedID = workspace.selectedTabID else { return false }
       return workspace.splitGroup(containing: id)?.contains(selectedID) ?? (id == selectedID)
@@ -200,18 +225,30 @@ final class BrowserMainViewController: NSViewController {
       guard let self else { return .zero }
       return self.sidebarItem.viewController.view.convert(self.view.bounds, from: self.view)
     }
-    drag.onPointerMove = { [weak self] id, point in
-      guard let self else { return }
+    drag.onPointerMove = { [weak self, weak drag] id, point in
+      guard let self, let drag else { return }
       let browser = self.browserItem.viewController.view
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
+      if drag.isPaneDrag, let group = self.runtime.workspaceStore.activeSplit {
+        let canDrop = browser.bounds.contains(local)
+        let side = BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds)
+        self.paneDropIndex = canDrop ? (side == .left ? 0 : (side == .right ? group.tabIDs.count - 1 : 1)) : nil
+        self.runtime.workspaceStore.sessionManager.previewPaneDrag(id, index: self.paneDropIndex)
+        return
+      }
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
       self.splitDropSide = canSplit ? BrowserSplitLayout.dropSide(at: local.x, in: browser.bounds) : nil
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
       self.runtime.workspaceStore.sessionManager.previewSplit(on: self.splitDropSide, incomingPaneCount: count)
     }
-    drag.onSplitDrop = { [weak self] id in
-      guard let self, let side = self.splitDropSide else { return false }
+    drag.onSplitDrop = { [weak self, weak drag] id in
+      guard let self else { return false }
+      if drag?.isPaneDrag == true {
+        guard let index = self.paneDropIndex else { return false }
+        return self.runtime.workspaceStore.reorderSplitPane(id, to: index)
+      }
+      guard let side = self.splitDropSide else { return false }
       self.splitDropSide = nil
       return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
         self.runtime.workspaceStore.splitTab(id, on: side)
@@ -219,6 +256,8 @@ final class BrowserMainViewController: NSViewController {
     }
     drag.onPreviewEnd = { [weak self] in
       self?.splitDropSide = nil
+      self?.paneDropIndex = nil
+      self?.runtime.workspaceStore.sessionManager.previewPaneDrag(nil)
       self?.runtime.workspaceStore.sessionManager.previewSplit(on: nil)
     }
   }
@@ -287,7 +326,7 @@ private struct BrowserTabDragPresentation: View {
 
   var body: some View {
     SidebarTabDragOverlay(drag: drag) { id, style in
-      if let group = workspace.splitGroup(containing: id) {
+      if !drag.isPaneDrag, let group = workspace.splitGroup(containing: id) {
         HStack(spacing: 2) {
           ForEach(group.tabIDs, id: \.self) { memberID in
             dragLabel(memberID, style: style)
@@ -306,6 +345,18 @@ private struct BrowserTabDragPresentation: View {
         pageURL: tab.url, session: workspace.session(for: id),
         title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
         rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
+        .opacity(1 - drag.paneSnapshotOpacity)
+        .overlay {
+          if let snapshot = drag.paneSnapshot {
+            // A fading page snapshot must never impose its aspect ratio on
+            // the row/tile underneath it as the drag enters the sidebar.
+            GeometryReader { geometry in
+              Image(nsImage: snapshot).resizable().scaledToFill()
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped().opacity(drag.paneSnapshotOpacity)
+            }
+          }
+        }
     }
   }
 

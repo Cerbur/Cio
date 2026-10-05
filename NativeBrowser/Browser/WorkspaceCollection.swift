@@ -371,6 +371,69 @@ struct WorkspaceCollection: Equatable, Sendable {
     return true
   }
 
+  /// Extract just this page. Keep the remaining group at its sidebar position
+  /// and insert the independent page immediately after that group in its tier.
+  @discardableResult
+  mutating func detachSplitPane(_ tabID: UUID, selectDetached: Bool = false) -> Bool {
+    guard let group = splitGroup(containing: tabID),
+          let owner = spaceID(containing: tabID), let ownerIndex = index(of: owner),
+          let groupIndex = spaces[ownerIndex].splitGroups.firstIndex(where: { $0.id == group.id }) else { return false }
+    let remaining = group.tabIDs.filter { $0 != tabID }
+    if remaining.count == 2 {
+      spaces[ownerIndex].splitGroups[groupIndex] = BrowserSplitLayout(id: group.id,
+        leftTabID: remaining[0], rightTabID: remaining[1], fraction: 0.5,
+        focusedTabID: remaining.contains(group.focusedTabID ?? tabID) ? group.focusedTabID : remaining[0])
+    } else {
+      spaces[ownerIndex].splitGroups.remove(at: groupIndex)
+    }
+    rewriteSplitOrder(group.tabIDs, as: remaining + [tabID], in: ownerIndex)
+    if selectDetached {
+      _ = selectTab(id: tabID)
+    } else if group.contains(selectedTabID) {
+      _ = selectTab(id: selectedTabID == tabID ? (remaining.contains(group.focusedTabID ?? tabID)
+        ? group.focusedTabID! : remaining[0]) : selectedTabID!)
+    }
+    validateInvariants()
+    return true
+  }
+
+  /// A failed sidebar drop leaves membership and selection untouched.
+  @discardableResult
+  mutating func moveSplitPane(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+    guard let group = splitGroup(containing: tabID), !group.contains(targetID) else { return false }
+    var candidate = self
+    guard candidate.detachSplitPane(tabID), candidate.moveTab(tabID, to: tier, before: targetID) else { return false }
+    self = candidate
+    return true
+  }
+
+  @discardableResult
+  mutating func reorderSplitPane(_ tabID: UUID, to index: Int) -> Bool {
+    guard let group = splitGroup(containing: tabID),
+          let owner = spaceID(containing: tabID), let ownerIndex = self.index(of: owner),
+          let groupIndex = spaces[ownerIndex].splitGroups.firstIndex(where: { $0.id == group.id }) else { return false }
+    let reordered = group.movingPane(tabID, to: index)
+    spaces[ownerIndex].splitGroups[groupIndex] = reordered
+    rewriteSplitOrder(group.tabIDs, as: reordered.tabIDs, in: ownerIndex)
+    validateInvariants()
+    return true
+  }
+
+  private mutating func rewriteSplitOrder(_ old: [UUID], as new: [UUID], in spaceIndex: Int) {
+    func rewritten(_ ids: [UUID]) -> [UUID] {
+      guard let anchor = ids.firstIndex(where: { old.contains($0) }) else { return ids }
+      let insertion = ids.prefix(anchor).filter { !old.contains($0) }.count
+      var result = ids.filter { !old.contains($0) }
+      result.insert(contentsOf: new, at: insertion)
+      return result
+    }
+    spaces[spaceIndex].tabIDs = rewritten(spaces[spaceIndex].tabIDs)
+    if globalPinnedTabIDs.contains(old[0]) { globalPinnedTabIDs = rewritten(globalPinnedTabIDs) }
+    if spaces[spaceIndex].pinnedTabIDs.contains(old[0]) {
+      spaces[spaceIndex].pinnedTabIDs = rewritten(spaces[spaceIndex].pinnedTabIDs)
+    }
+  }
+
   @discardableResult
   mutating func swapSplitSides(containing tabID: UUID) -> Bool {
     guard let owner = spaceID(containing: tabID), let spaceIndex = index(of: owner),

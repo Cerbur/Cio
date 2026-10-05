@@ -128,6 +128,125 @@ final class BrowserSplitGroupTests: XCTestCase {
     }
   }
 
+  func testPaneExtractionPreservesSurvivorsOrderTierAndSelection() throws {
+    for count in [2, 3] {
+      for tierIndex in 0...2 {
+        for paneIndex in 0..<count {
+          var (workspace, tabs) = fixture()
+          let spaceID = workspace.selectedSpaceID
+          _ = workspace.createSplit(with: tabs[1].id, on: .right)
+          if count == 3 { _ = workspace.createSplit(with: tabs[2].id, on: .middle) }
+          let tiers: [WorkspaceCollection.TabTier] = [.temporary(spaceID), .space(spaceID), .global]
+          if tierIndex != 0 { _ = workspace.moveSplitGroup(containing: tabs[0].id, to: tiers[tierIndex]) }
+          let group = try XCTUnwrap(workspace.activeSplit)
+          let removed = group.tabIDs[paneIndex]
+          let remaining = group.tabIDs.filter { $0 != removed }
+          _ = workspace.selectTab(id: removed)
+          XCTAssertTrue(workspace.detachSplitPane(removed))
+          XCTAssertEqual(workspace.selectedTabID, remaining[0])
+          let order = workspace.tabIDs(in: tiers[tierIndex])
+          let start = try XCTUnwrap(order.firstIndex(of: remaining[0]))
+          XCTAssertEqual(Array(order[start..<(start + count)]), remaining + [removed])
+          XCTAssertNil(workspace.splitGroup(containing: removed))
+          if count == 3 {
+            XCTAssertEqual(workspace.activeSplit?.id, group.id)
+            XCTAssertEqual(workspace.activeSplit?.tabIDs, remaining)
+          } else { XCTAssertNil(workspace.activeSplit) }
+          XCTAssertEqual(workspace.allTabs.count, tabs.count)
+          XCTAssertTrue(workspace.validateInvariants())
+          let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+          XCTAssertEqual(restored.activeSplit, workspace.activeSplit)
+          XCTAssertEqual(restored.selectedTabID, workspace.selectedTabID)
+          XCTAssertEqual(restored.tabIDs(in: tiers[tierIndex]), order)
+        }
+      }
+    }
+  }
+
+  func testMinimizeOtherPaneKeepsStablePageAndExpandSelectsExtractedPage() throws {
+    for expand in [false, true] {
+      var (workspace, tabs) = fixture()
+      _ = workspace.createSplit(with: tabs[1].id, on: .right)
+      _ = workspace.createSplit(with: tabs[2].id, on: .middle)
+      _ = workspace.selectTab(id: tabs[0].id)
+      XCTAssertTrue(workspace.detachSplitPane(tabs[2].id, selectDetached: expand))
+      XCTAssertEqual(workspace.selectedTabID, expand ? tabs[2].id : tabs[0].id)
+      XCTAssertEqual(workspace.selectedSpace?.stableTabStack.last, workspace.selectedTabID)
+      XCTAssertEqual(workspace.splitGroup(containing: tabs[0].id)?.tabIDs, [tabs[0].id, tabs[1].id])
+      XCTAssertEqual(workspace.currentTabIDs.prefix(3), [tabs[0].id, tabs[1].id, tabs[2].id])
+    }
+  }
+
+  func testPaneDropMovesOnlyOnePageAndPreservesRemainingGroup() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.createSplit(with: tabs[1].id, on: .right)
+    _ = workspace.createSplit(with: tabs[2].id, on: .middle)
+    let groupID = workspace.activeSplit?.id
+    XCTAssertTrue(workspace.moveSplitPane(tabs[2].id, to: .temporary(workspace.selectedSpaceID), before: tabs[4].id))
+    XCTAssertEqual(workspace.currentTabIDs, [tabs[0].id, tabs[1].id, tabs[3].id, tabs[2].id, tabs[4].id])
+    XCTAssertEqual(workspace.activeSplit?.id, groupID)
+    XCTAssertEqual(workspace.activeSplit?.tabIDs, [tabs[0].id, tabs[1].id])
+    XCTAssertEqual(workspace.selectedTabID, tabs[0].id)
+    XCTAssertTrue(workspace.validateInvariants())
+  }
+
+  func testInvalidPaneDropDoesNotPartiallyExtractPage() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.createSplit(with: tabs[1].id, on: .right)
+    let before = workspace
+    XCTAssertFalse(workspace.moveSplitPane(tabs[1].id, to: .temporary(UUID())))
+    XCTAssertEqual(workspace, before)
+    XCTAssertFalse(workspace.moveSplitPane(tabs[1].id, to: .temporary(workspace.selectedSpaceID), before: tabs[0].id))
+    XCTAssertEqual(workspace, before)
+    for _ in 0..<WorkspaceCollection.globalPinnedTabLimit {
+      let tab = BrowserTab()
+      _ = workspace.appendTab(tab, in: workspace.selectedSpaceID, select: false)
+      _ = workspace.moveTab(tab.id, to: .global)
+    }
+    let fullPins = workspace
+    XCTAssertFalse(workspace.moveSplitPane(tabs[1].id, to: .global))
+    XCTAssertEqual(workspace, fullPins)
+  }
+
+  func testPaneReorderPreservesIdentityFocusAndWidthsAndPersists() throws {
+    for count in [2, 3] {
+      for source in 0..<count {
+        for destination in 0..<count {
+          var (workspace, tabs) = fixture()
+          _ = workspace.createSplit(with: tabs[1].id, on: .right)
+          if count == 3 { _ = workspace.createSplit(with: tabs[2].id, on: .middle) }
+          _ = workspace.setSplitFraction(count == 3 ? 0.3 : 0.4)
+          let group = try XCTUnwrap(workspace.activeSplit)
+          let id = group.tabIDs[source]
+          var expected = group.tabIDs.filter { $0 != id }
+          expected.insert(id, at: destination)
+          XCTAssertTrue(workspace.reorderSplitPane(id, to: destination))
+          XCTAssertEqual(workspace.activeSplit?.id, group.id)
+          XCTAssertEqual(workspace.activeSplit?.tabIDs, expected)
+          XCTAssertEqual(workspace.activeSplit?.fraction, group.fraction)
+          XCTAssertEqual(workspace.activeSplit?.secondFraction, group.secondFraction)
+          XCTAssertEqual(workspace.selectedTabID, group.focusedTabID)
+          XCTAssertEqual(Array(workspace.currentTabIDs.prefix(count)), expected)
+          let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))
+          XCTAssertEqual(restored.activeSplit, workspace.activeSplit)
+          XCTAssertTrue(restored.validateInvariants())
+        }
+      }
+    }
+  }
+
+  func testCloseExtractedTriplePaneKeepsOtherTwoPagesGrouped() throws {
+    var (workspace, tabs) = fixture()
+    _ = workspace.createSplit(with: tabs[1].id, on: .right)
+    _ = workspace.createSplit(with: tabs[2].id, on: .middle)
+    XCTAssertTrue(workspace.detachSplitPane(tabs[2].id))
+    _ = workspace.close(tabs[2].id, reason: .userClosed)
+    XCTAssertEqual(workspace.activeSplit?.tabIDs, [tabs[0].id, tabs[1].id])
+    XCTAssertNil(workspace.tab(withID: tabs[2].id))
+    XCTAssertEqual(workspace.allTabs.count, tabs.count - 1)
+    XCTAssertTrue(workspace.validateInvariants())
+  }
+
   private func fixture() -> (WorkspaceCollection, [BrowserTab]) {
     let tabs = (0..<5).map { BrowserTab(title: "Page \($0)", url: URL(string: "https://example.com/\($0)")) }
     var workspace = WorkspaceCollection(initialTab: tabs[0])

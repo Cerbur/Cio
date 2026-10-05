@@ -26,6 +26,11 @@ enum BrowserLayout {
   static let chromeControlSize: CGFloat = 36
   static let chromeControlSpacing: CGFloat = 10
   static let pageControlInset: CGFloat = 7
+  static let splitPaneHandleSize = CGSize(width: 36, height: 8)
+  static let splitPaneCapsuleSize = CGSize(width: 96, height: 30)
+  static let splitPaneActionSize = CGSize(width: 14, height: 14)
+  static let splitPaneControlInset: CGFloat = 4
+  static let splitPaneHoldDuration: TimeInterval = 0.28
   static let trafficLightSpacing: CGFloat = 9
   static let sidebarMinimumWidth: CGFloat = 182
   static let sidebarDefaultWidth = sidebarMinimumWidth

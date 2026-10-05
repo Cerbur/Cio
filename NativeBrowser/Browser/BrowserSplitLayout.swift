@@ -15,6 +15,18 @@ struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
   var tabIDs: [UUID] { [leftTabID] + (middleTabID.map { [$0] } ?? []) + [rightTabID] }
   func contains(_ id: UUID?) -> Bool { id.map { tabIDs.contains($0) } ?? false }
 
+  /// Reorder one pane without displacing or duplicating any other member.
+  func movingPane(_ tabID: UUID, to index: Int) -> BrowserSplitLayout {
+    guard contains(tabID) else { return self }
+    var ids = tabIDs.filter { $0 != tabID }
+    ids.insert(tabID, at: min(max(0, index), ids.count))
+    var result = self
+    result.leftTabID = ids[0]
+    result.rightTabID = ids.last!
+    result.middleTabID = ids.count == 3 ? ids[1] : nil
+    return result
+  }
+
   static let dividerWidth: CGFloat = 8
   static let minimumPaneWidth: CGFloat = 240
 
