@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// Window-coordinate events let the Main View bridge a pane to the sidebar's
 /// existing glass drag without reparenting Chromium or committing on lift.
@@ -103,6 +104,7 @@ final class BrowserSplitPaneControl: NSView {
       button.isBordered = false
       button.contentTintColor = item.0
       button.setButtonType(.momentaryChange)
+      button.autoresizingMask = [.minXMargin, .maxXMargin, .minYMargin, .maxYMargin]
       button.toolTip = item.1
       button.setAccessibilityLabel(item.1)
       button.setAccessibilityIdentifier("split-pane-action-\(index)")
@@ -124,6 +126,7 @@ final class BrowserSplitPaneControl: NSView {
       x = button.frame.maxX + spacing
     }
     capsule.contentView = content
+    capsule.alphaValue = 0
     capsule.isHidden = true
     addSubview(capsule)
   }
@@ -152,7 +155,7 @@ final class BrowserSplitPaneControl: NSView {
     expandedFrame = contentHost.convert(CGRect(x: centre.x - size.width / 2,
       y: centre.y - size.height / 2, width: size.width, height: size.height), to: chromeHost)
     frame = expanded ? expandedFrame : collapsedFrame
-    handle.frame = bounds
+    handle.frame = handleFrame(in: bounds.size)
     capsule.frame = bounds
   }
 
@@ -168,16 +171,14 @@ final class BrowserSplitPaneControl: NSView {
     expandedFrame.origin = CGPoint(x: anchor.midX - expandedFrame.width / 2,
                                    y: anchor.midY - expandedFrame.height / 2)
     frame = expanded ? expandedFrame : collapsedFrame
-    handle.frame = bounds
+    handle.frame = handleFrame(in: bounds.size)
     capsule.frame = bounds
   }
 
   func collapse() {
     guard expanded else { return }
     expanded = false
-    handle.isHidden = false
     actionContent.setHovered(false)
-    capsule.isHidden = true
     if let dismissalMonitor { NSEvent.removeMonitor(dismissalMonitor) }
     dismissalMonitor = nil
     resize(animated: true)
@@ -186,22 +187,37 @@ final class BrowserSplitPaneControl: NSView {
   private func resize(animated: Bool) {
     let destination = expanded ? expandedFrame : collapsedFrame
     let size = destination.size
-    // Exchange controls at their resting height, then animate the width.
-    frame.origin.y = destination.minY
+    let isExpanding = expanded
+    handle.isHidden = false
+    capsule.isHidden = false
+    // Both resting frames share a horizontal centre. Animate the vertical
+    // travel and symmetric growth together, keeping each child centred too.
     NSAnimationContext.runAnimationGroup { context in
       context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.2 : 0
+      context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
       animator().frame = destination
       capsule.animator().frame = CGRect(origin: .zero, size: size)
-      handle.frame = CGRect(origin: .zero, size: size)
+      handle.animator().frame = handleFrame(in: size)
+      capsule.animator().alphaValue = isExpanding ? 1 : 0
+      handle.animator().alphaValue = isExpanding ? 0 : 1
+    } completionHandler: { [weak self] in
+      guard let self, self.expanded == isExpanding else { return }
+      self.handle.isHidden = isExpanding
+      self.capsule.isHidden = !isExpanding
     }
+  }
+
+  private func handleFrame(in size: CGSize) -> CGRect {
+    let handleSize = BrowserLayout.splitPaneHandleSize
+    return CGRect(x: (size.width - handleSize.width) / 2,
+                  y: (size.height - handleSize.height) / 2,
+                  width: handleSize.width, height: handleSize.height)
   }
 
   @objc private func toggleCapsule() {
     if expanded { collapse(); return }
     addressLayoutDidChange()
     expanded = true
-    capsule.isHidden = false
-    handle.isHidden = true
     resize(animated: true)
     actionContent.updateTrackingAreas()
     dismissalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
