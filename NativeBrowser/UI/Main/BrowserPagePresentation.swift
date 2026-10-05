@@ -11,6 +11,8 @@ final class BrowserPagePresentation {
   let viewport: NSView
   private(set) var toolbar: BrowserToolbarController?
   let splitControl = BrowserSplitPaneControl(frame: .zero)
+  private var splitRevealGlass: SplitRevealGlassView?
+  nonisolated(unsafe) private var splitRevealGlassTimer: Timer?
   private weak var installedWindow: NSWindow?
 
   init(tabID: UUID, surface: ChromiumContainerView, viewport: NSView) {
@@ -84,9 +86,65 @@ final class BrowserPagePresentation {
     toolbar?.setPageControlsVisible(false, animated: animated)
   }
 
+  /// Chromium stays mounted at its target size. The glass is a sibling inside
+  /// the same viewport, so the parent's transform and mask affect both together.
+  func beginSplitRevealGlass(at beginTime: CFTimeInterval, crop: CGRect, scale: CGFloat) {
+    endSplitRevealGlass()
+    let glass = SplitRevealGlassView(frame: crop)
+    glass.style = .regular
+    glass.cornerRadius = BrowserLayout.contentCornerRadius / scale
+    glass.wantsLayer = true
+    glass.setAccessibilityElement(false)
+    viewport.addSubview(glass, positioned: .above, relativeTo: surface)
+    splitRevealGlass = glass
+    guard let layer = glass.layer else { return }
+    layer.opacity = 0
+    let fade = CAKeyframeAnimation(keyPath: "opacity")
+    fade.values = [1, 1, 0.85, 0.4, 0]
+    fade.keyTimes = [0, 0.15, 0.4, 0.75, 1]
+    fade.beginTime = beginTime
+    fade.duration = BrowserSplitRevealTransition.glassFadeDuration
+    fade.timingFunction = BrowserSplitRevealTransition.glassFadeTimingFunction
+    layer.add(fade, forKey: "split-reveal-glass-fade")
+    // A full-size material clipped by a smaller outline loses its native rim.
+    // Track the shared parent's *presentation* crop for the glass shape only;
+    // Chromium's layout and the compositor transform remain untouched.
+    let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, let glass = self.splitRevealGlass,
+              let parent = self.viewport.layer?.presentation(),
+              let mask = parent.mask as? CAShapeLayer,
+              let crop = mask.path?.boundingBoxOfPath else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        glass.frame = crop
+        glass.cornerRadius = BrowserLayout.contentCornerRadius / max(0.001, parent.transform.m11)
+        glass.layoutSubtreeIfNeeded()
+        CATransaction.commit()
+      }
+    }
+    splitRevealGlassTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  func endSplitRevealGlass() {
+    splitRevealGlassTimer?.invalidate()
+    splitRevealGlassTimer = nil
+    splitRevealGlass?.removeFromSuperview()
+    splitRevealGlass = nil
+  }
+
+  deinit { splitRevealGlassTimer?.invalidate() }
+
   func dispose() {
+    endSplitRevealGlass()
     toolbar?.dispose()
     splitControl.removeFromSuperview()
     viewport.removeFromSuperview()
   }
+}
+
+/// The transition material never intercepts Chromium's native input.
+private final class SplitRevealGlassView: NSGlassEffectView {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

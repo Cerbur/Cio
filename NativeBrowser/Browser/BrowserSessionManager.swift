@@ -274,6 +274,14 @@ final class BrowserSessionManager: ObservableObject {
     return surfaceHost.commitSplitPreview(commit)
   }
 
+  func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
+    surfaceHost?.splitLandingFrame(for: tabIDs)
+  }
+
+  func setSplitReveal(for tabIDs: [UUID], frame: CGRect?) {
+    surfaceHost?.setSplitReveal(for: tabIDs, frame: frame)
+  }
+
   /// Keeps one container for every live session and makes only the workspace's
   /// effective selected tab visible. Inactive Space sessions remain mounted and
   /// live; switching Spaces never reaches BrowserBridge::CreateBrowser.

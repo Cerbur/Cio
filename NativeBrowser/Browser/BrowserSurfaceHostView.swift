@@ -17,6 +17,91 @@ final class BrowserSurfaceHostView: NSView {
   var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)?
   private var liftedPaneID: UUID?
   private var paneDropIndex: Int?
+  private var revealingTabIDs = Set<UUID>()
+  private var revealFrames: [UUID: CGRect] = [:]
+
+  /// Animate the shared page/glass viewport at its committed render size.
+  /// Uniform content scale and an independently expanding outline avoid both
+  /// squeezed text and the stationary-content effect of a moving crop alone.
+  func setSplitReveal(for tabIDs: [UUID], frame: CGRect?) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+    for id in revealingTabIDs {
+      pages[id]?.endSplitRevealGlass()
+      if let layer = pages[id]?.viewport.layer {
+        layer.removeAnimation(forKey: "split-reveal-transform")
+        layer.mask = nil
+        layer.zPosition = 0
+      }
+    }
+    revealingTabIDs = []
+    revealFrames = [:]
+    guard let frame, let destination = splitLandingFrame(for: tabIDs),
+          !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+      applyPlacements(placements)
+      return
+    }
+    let source = convert(frame, from: nil)
+    let target = convert(destination, from: nil)
+    guard source.width > 0, source.height > 0, target.width > 0, target.height > 0 else { return }
+    let sourceScale = max(source.width / target.width, source.height / target.height)
+    let beginTime = CACurrentMediaTime()
+    for id in tabIDs {
+      guard let page = pages[id], let layer = page.viewport.layer,
+            let placement = targets[id] else { continue }
+      let pane = placement.frame
+      page.viewport.frame = pane
+      page.surface.frame = CGRect(origin: .zero, size: pane.size)
+      page.viewport.layoutSubtreeIfNeeded()
+      // AppKit's view-backed layers pivot at their origin, rather than the
+      // default CALayer centre. Account for that pivot when moving the card.
+      let pivot = CGPoint(x: layer.anchorPoint.x * pane.width,
+                          y: layer.anchorPoint.y * pane.height)
+      var transforms: [NSValue] = []
+      var outlines: [CGPath] = []
+      // Core Animation moves the shared parent on the render thread; Chromium
+      // and native glass have no separate geometry animation or layout clock.
+      for step in 0...60 {
+        let amount = CGFloat(step) / 60
+        let outline = interpolatedFrame(from: source, to: target, amount: amount)
+        let scale = sourceScale + (1 - sourceScale) * amount
+        let center = CGPoint(x: outline.midX + (pane.midX - target.midX) * scale,
+                             y: outline.midY + (pane.midY - target.midY) * scale)
+        let transform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+          tx: center.x - pane.minX - pivot.x - (pane.width / 2 - pivot.x) * scale,
+          ty: center.y - pane.minY - pivot.y - (pane.height / 2 - pivot.y) * scale)
+        transforms.append(NSValue(caTransform3D: CATransform3DMakeAffineTransform(transform)))
+        let crop = CGRect(x: (outline.minX - center.x) / scale + pane.width / 2,
+                          y: (outline.minY - center.y) / scale + pane.height / 2,
+                          width: outline.width / scale, height: outline.height / scale)
+        let radius = BrowserLayout.contentCornerRadius / scale
+        outlines.append(CGPath(roundedRect: crop, cornerWidth: radius,
+                               cornerHeight: radius, transform: nil))
+      }
+      let mask = CAShapeLayer()
+      mask.frame = page.viewport.bounds
+      mask.fillColor = NSColor.black.cgColor
+      mask.path = outlines.last
+      layer.mask = mask
+      layer.zPosition = 1
+      page.splitControl.isHidden = true
+      page.beginSplitRevealGlass(at: beginTime, crop: outlines[0].boundingBoxOfPath, scale: sourceScale)
+      let transformAnimation = CAKeyframeAnimation(keyPath: "transform")
+      transformAnimation.values = transforms
+      let outlineAnimation = CAKeyframeAnimation(keyPath: "path")
+      outlineAnimation.values = outlines
+      for animation in [transformAnimation, outlineAnimation] {
+        animation.duration = BrowserSplitRevealTransition.duration
+        animation.timingFunction = BrowserSplitRevealTransition.timingFunction
+        animation.beginTime = beginTime
+      }
+      layer.add(transformAnimation, forKey: "split-reveal-transform")
+      mask.add(outlineAnimation, forKey: "split-reveal-outline")
+      revealingTabIDs.insert(id)
+      revealFrames[id] = pane
+    }
+  }
 
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
     guard liftedPaneID != tabID || paneDropIndex != index else { return }
@@ -157,13 +242,27 @@ final class BrowserSurfaceHostView: NSView {
   /// Commit directly from the current preview placement. No full-width reset,
   /// no replacement toolbar, and no reparenting of the surviving Chromium view.
   func commitSplitPreview(_ commit: () -> Bool) -> Bool {
-    let hadPreview = previewTarget != nil
+    let hadPreview = previewTarget != nil || liftedPaneID != nil
     previewTarget = nil
+    liftedPaneID = nil
+    paneDropIndex = nil
     isCommittingSplitPreview = hadPreview
     defer { isCommittingSplitPreview = false }
     let committed = commit()
     if !committed { applySurfaceLayout(animatedPresentation: hadPreview) }
     return committed
+  }
+
+  /// Read final geometry rather than the in-flight survivor crop. The drag
+  /// overlay uses window coordinates to expand into one pane or an incoming pair.
+  func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
+    guard window != nil, !tabIDs.isEmpty else { return nil }
+    var frame: CGRect?
+    for id in tabIDs {
+      guard split?.contains(id) == true, let target = targets[id] else { return nil }
+      frame = frame.map { $0.union(target.frame) } ?? target.frame
+    }
+    return frame.map { convert($0, to: nil) }
   }
 
   private func applySurfaceLayout(animatedPresentation: Bool = false, animatedVisibility: Bool = true) {
@@ -284,7 +383,21 @@ final class BrowserSurfaceHostView: NSView {
       return
     }
     let previousToolbarFrames = appearingToolbarFrames
+    if !revealingTabIDs.isEmpty,
+       revealFrames.contains(where: { next[$0.key]?.frame != $0.value }) {
+      // Resizing, switching tabs or interrupting the split restores ordinary
+      // layout before assigning new target sizes.
+      setSplitReveal(for: [], frame: nil)
+    }
     targets = next
+    if isCommittingSplitPreview {
+      // Start Chromium layout/rendering at the committed size immediately;
+      // the common page/glass viewport handles the reveal transform.
+      for (id, target) in next {
+        let frame = CGRect(origin: .zero, size: target.frame.size)
+        if let surface = pages[id]?.surface, surface.frame != frame { surface.frame = frame }
+      }
+    }
     presentationAnimationTimer?.invalidate()
     presentationAnimationTimer = nil
     appearingToolbarFrames = [:]
@@ -355,9 +468,15 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     for (id, page) in pages {
-      guard let placement = next[id] else {
+      guard var placement = next[id] else {
         page.hide(animated: animatedVisibility)
         continue
+      }
+      if let frame = revealFrames[id] {
+        // Preview settling must not resize this viewport or Chromium while
+        // their common parent is running the compositor reveal.
+        placement.frame = frame
+        placement.cropOnly = false
       }
       applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
@@ -368,7 +487,8 @@ final class BrowserSurfaceHostView: NSView {
         chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
         paneFrame: placement.frame,
         addressFrame: page.toolbar?.addressCapsuleFrame(in: self),
-        visible: split?.contains(id) == true && liftedPaneID == nil && previewTarget == nil && !isCovered
+        visible: split?.contains(id) == true && !revealingTabIDs.contains(id)
+          && liftedPaneID == nil && previewTarget == nil && !isCovered
           && workspace?.isSpotlightPresented != true)
     }
     placements = next

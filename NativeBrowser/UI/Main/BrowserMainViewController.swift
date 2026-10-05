@@ -243,17 +243,51 @@ final class BrowserMainViewController: NSViewController {
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
       self.runtime.workspaceStore.sessionManager.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
     }
+    var splitLandingTabIDs: [UUID] = []
+    drag.onSplitRevealFrame = { [weak self] frame in
+      guard let self else { return }
+      let windowFrame = frame.flatMap { frame in
+        self.dragOverlay?.convert(frame, to: nil)
+      }
+      self.runtime.workspaceStore.sessionManager.setSplitReveal(
+        for: splitLandingTabIDs, frame: windowFrame)
+    }
+    drag.onSplitLandingFrame = { [weak self] in
+      guard let self, let frame = self.runtime.workspaceStore.sessionManager
+        .splitLandingFrame(for: splitLandingTabIDs) else { return nil }
+      return self.sidebarItem.viewController.view.convert(frame, from: nil)
+    }
     drag.onSplitDrop = { [weak self, weak drag] id in
       guard let self else { return false }
       if drag?.isPaneDrag == true {
         guard let index = self.paneDropIndex else { return false }
-        return self.runtime.workspaceStore.reorderSplitPane(id, to: index)
+        splitLandingTabIDs = [id]
+        drag?.prepareSplitLanding(tabIDs: splitLandingTabIDs)
+        return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
+          self.runtime.workspaceStore.reorderSplitPane(id, to: index)
+        }
       }
       guard let target = self.splitDropTarget else { return false }
+      let incomingIDs = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs ?? [id]
+      drag?.prepareSplitLanding(tabIDs: incomingIDs)
       self.splitDropTarget = nil
-      return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
+      let committed = self.runtime.workspaceStore.sessionManager.commitSplitPreview {
         self.runtime.workspaceStore.splitTab(id, at: target)
       }
+      splitLandingTabIDs = []
+      if committed, let group = self.runtime.workspaceStore.activeSplit,
+         let focusedID = group.focusedTabID,
+         let focusedIndex = group.tabIDs.firstIndex(of: focusedID),
+         let sourceIndex = incomingIDs.firstIndex(of: id) {
+        // Pinned sources create temporary copies for a split. Reveal the new
+        // committed identities while the floating card keeps its source label.
+        let first = focusedIndex - sourceIndex
+        let end = first + incomingIDs.count
+        if first >= 0, end <= group.tabIDs.count {
+          splitLandingTabIDs = Array(group.tabIDs[first..<end])
+        }
+      }
+      return committed
     }
     drag.onPreviewEnd = { [weak self] in
       self?.splitDropTarget = nil
@@ -327,9 +361,9 @@ private struct BrowserTabDragPresentation: View {
 
   var body: some View {
     SidebarTabDragOverlay(drag: drag) { id, style in
-      if !drag.isPaneDrag, let group = workspace.splitGroup(containing: id) {
+      if !drag.isPaneDrag, let members = drag.splitLandingTabIDs ?? workspace.splitGroup(containing: id)?.tabIDs {
         HStack(spacing: 2) {
-          ForEach(group.tabIDs, id: \.self) { memberID in
+          ForEach(members, id: \.self) { memberID in
             dragLabel(memberID, style: style)
           }
         }
