@@ -7,28 +7,38 @@ import SwiftUI
 enum BrowserSplitRevealTransition {
   // Tune every split-page transition here, including the floating handle card.
   static let cardSize = CGSize(width: 140, height: 196)
-  static let duration: TimeInterval = 0.48
-  static let exitDuration: TimeInterval = 0.22
-  static let layoutDuration: TimeInterval = 0.26
+  static let durationScale: TimeInterval = 0.75
+  static let duration: TimeInterval = 0.48 * durationScale
+  static let exitDuration: TimeInterval = 0.22 * durationScale
+  static let layoutDuration: TimeInterval = 0.26 * durationScale
+  static let contentFadeDuration: TimeInterval = 0.18 * durationScale
+  static let contentWaitDuration: TimeInterval = 1 * durationScale
+  private static let replacementScale: CGFloat = 0.94
   static let sampleCount = 120
   static let glassHoldFraction = 0.08
   static let glassFadeFraction = 0.92
-  private static let easing: (Float, Float, Float, Float) = (0.18, 0.78, 0.24, 1)
+  private static let enterEasing: (Float, Float, Float, Float) = (0.32, 0, 0.2, 1)
+  private static let layoutEasing: (Float, Float, Float, Float) = (0.18, 0.78, 0.24, 1)
   private static let exitEasing: (Float, Float, Float, Float) = (0.3, 0, 0.65, 1)
 
   enum Direction {
-    case enter, exit, layout
+    case enter, exit, replacementExit, layout
+    var isExit: Bool { self == .exit || self == .replacementExit }
     var duration: TimeInterval {
       switch self {
       case .enter: BrowserSplitRevealTransition.duration
-      case .exit: exitDuration
+      case .exit, .replacementExit: exitDuration
       case .layout: layoutDuration
       }
     }
     private var controlPoints: (Float, Float, Float, Float) {
       // Reverse the geometry, but settle both ends of the quick exit. A literal
       // mirrored entry curve finishes at high speed and makes the hide snap.
-      self == .exit ? exitEasing : easing
+      switch self {
+      case .enter: enterEasing
+      case .exit, .replacementExit: exitEasing
+      case .layout: layoutEasing
+      }
     }
     var timingFunction: CAMediaTimingFunction {
       let (x1, y1, x2, y2) = controlPoints
@@ -64,8 +74,13 @@ enum BrowserSplitRevealTransition {
   // a drag need not solve the cubic 120 times again for every visible page.
   private static let enterSamples = (0...sampleCount).map { Direction.enter.progress(at: Double($0) / Double(sampleCount)) }
   private static let exitSamples = (0...sampleCount).map { Direction.exit.progress(at: Double($0) / Double(sampleCount)) }
+  private static let layoutSamples = (0...sampleCount).map { Direction.layout.progress(at: Double($0) / Double(sampleCount)) }
   static func progressSamples(_ direction: Direction) -> [CGFloat] {
-    direction == .exit ? exitSamples : enterSamples
+    switch direction {
+    case .enter: enterSamples
+    case .exit, .replacementExit: exitSamples
+    case .layout: layoutSamples
+    }
   }
 
   /// Geometry is expressed in host coordinates, so an interrupted flight can
@@ -76,6 +91,7 @@ enum BrowserSplitRevealTransition {
     var scale: CGSize
     var renderSize: CGSize
     var glassOpacity: Float
+    var opacity: Float = 1
 
     static func page(_ pane: CGRect) -> Self {
       Self(center: CGPoint(x: pane.midX, y: pane.midY), outline: pane,
@@ -86,6 +102,14 @@ enum BrowserSplitRevealTransition {
       return Self(center: CGPoint(x: card.midX + (pane.midX - group.midX) * scale,
                                   y: card.midY + (pane.midY - group.midY) * scale),
                   outline: card, scale: CGSize(width: scale, height: scale), renderSize: pane.size, glassOpacity: 1)
+    }
+    static func replacedPage(_ pane: CGRect) -> Self {
+      var result = page(pane)
+      result.scale = CGSize(width: replacementScale, height: replacementScale)
+      result.outline = pane.insetBy(dx: pane.width * (1 - replacementScale) / 2,
+                                   dy: pane.height * (1 - replacementScale) / 2)
+      result.opacity = 0
+      return result
     }
     func rebased(to size: CGSize) -> Self {
       var result = self
@@ -113,19 +137,21 @@ enum BrowserSplitRevealTransition {
                                     y: origin.y + pane.height / 2 * scale.height),
       outline: CGRect(x: origin.x + crop.minX * scale.width, y: origin.y + crop.minY * scale.height,
                       width: crop.width * scale.width, height: crop.height * scale.height),
-      scale: scale, renderSize: pane.size, glassOpacity: page.splitGlassOpacity)
+      scale: scale, renderSize: pane.size, glassOpacity: page.splitGlassOpacity, opacity: shown.opacity)
   }
 
   @MainActor
   static func animate(_ page: BrowserPagePresentation, pane: CGRect,
-                      from initial: Geometry, to destination: Geometry, direction: Direction) {
+                      from initial: Geometry, to destination: Geometry, direction: Direction,
+                      completion: any CAAnimationDelegate) {
     guard let layer = page.viewport.layer, pane.width > 0, pane.height > 0 else { return }
     let initial = initial.rebased(to: pane.size)
     let destination = destination.rebased(to: pane.size)
     page.viewport.frame = pane
     page.viewport.isHidden = false
     page.surface.setSurfaceVisible(true)
-    page.surface.frame = CGRect(origin: .zero, size: pane.size)
+    let surfaceFrame = CGRect(origin: .zero, size: pane.size)
+    if page.surface.frame != surfaceFrame { page.surface.frame = surfaceFrame }
     // ChromiumContainerView.setFrameSize already lays out the native hosts
     // and notifies CEF synchronously. Forcing the subtree here repeats that
     // work at the exact moment the compositor flight should start.
@@ -133,8 +159,7 @@ enum BrowserSplitRevealTransition {
     let pivot = CGPoint(x: layer.anchorPoint.x * pane.width, y: layer.anchorPoint.y * pane.height)
     var transforms: [NSValue] = []
     var outlines: [CGPath] = []
-    var glassFrames: [CGRect] = []
-    var glassRadii: [CGFloat] = []
+    var opacities: [Float] = []
     for amount in progressSamples(direction) {
       func blend(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * amount }
       let outline = CGRect(x: blend(initial.outline.minX, destination.outline.minX),
@@ -149,13 +174,12 @@ enum BrowserSplitRevealTransition {
         tx: center.x - pane.minX - pivot.x - (pane.width / 2 - pivot.x) * scale.width,
         ty: center.y - pane.minY - pivot.y - (pane.height / 2 - pivot.y) * scale.height)
       transforms.append(NSValue(caTransform3D: CATransform3DMakeAffineTransform(transform)))
+      opacities.append(initial.opacity + (destination.opacity - initial.opacity) * Float(amount))
       let crop = CGRect(x: (outline.minX - center.x) / scale.width + pane.width / 2,
                         y: (outline.minY - center.y) / scale.height + pane.height / 2,
                         width: outline.width / scale.width, height: outline.height / scale.height)
       let radiusX = BrowserLayout.contentCornerRadius / scale.width
       let radiusY = BrowserLayout.contentCornerRadius / scale.height
-      glassFrames.append(crop)
-      glassRadii.append(min(radiusX, radiusY))
       outlines.append(CGPath(roundedRect: crop, cornerWidth: radiusX, cornerHeight: radiusY, transform: nil))
     }
     let mask = CAShapeLayer()
@@ -163,30 +187,36 @@ enum BrowserSplitRevealTransition {
     mask.fillColor = NSColor.black.cgColor
     mask.path = outlines.last
     layer.mask = mask
-    layer.zPosition = 1
+    // The incoming card stays above the gently receding replacement page.
+    layer.zPosition = direction == .replacementExit ? 0 : 1
     page.splitControl.isHidden = true
-    let beginTime = CACurrentMediaTime()
     if initial.glassOpacity > 0 || destination.glassOpacity > 0 {
-      page.beginSplitRevealGlass(at: beginTime, frames: glassFrames, radii: glassRadii,
-        direction: direction, fromOpacity: initial.glassOpacity, toOpacity: destination.glassOpacity)
+      page.beginSplitRevealGlass(direction: direction,
+        fromOpacity: initial.glassOpacity, toOpacity: destination.glassOpacity)
     } else {
       // Keep live material for card reveals/exits. Merely making room for a
-      // neighbour should not create a second backdrop or a display-link loop.
+      // neighbour should not create a second backdrop.
       page.endSplitRevealGlass()
     }
     let transform = CAKeyframeAnimation(keyPath: "transform")
     transform.values = transforms
+    transform.delegate = completion
     let outline = CAKeyframeAnimation(keyPath: "path")
     outline.values = outlines
-    for animation in [transform, outline] {
+    let opacity = CAKeyframeAnimation(keyPath: "opacity")
+    opacity.values = opacities
+    for animation in [transform, outline, opacity] {
       animation.duration = direction.duration
       animation.timingFunction = CAMediaTimingFunction(name: .linear)
-      animation.beginTime = beginTime
+      // Zero lets Core Animation start at transaction commit. Native material
+      // setup must not consume the first part of the flight before it is shown.
+      animation.beginTime = 0
       // Hold the final state until cleanup; never expose a full-size exit frame.
       animation.fillMode = .both
       animation.isRemovedOnCompletion = false
     }
     layer.add(transform, forKey: "split-reveal-transform")
+    layer.add(opacity, forKey: "split-reveal-opacity")
     mask.add(outline, forKey: "split-reveal-outline")
   }
 
@@ -194,12 +224,12 @@ enum BrowserSplitRevealTransition {
     let animation = CAKeyframeAnimation(keyPath: "opacity")
     animation.values = (0...sampleCount).map { step in
       let time = Double(step) / Double(sampleCount)
-      let entryTime = direction == .exit ? 1 - time : time
+      let entryTime = direction.isExit ? 1 - time : time
       let fade = min(1, max(0, (entryTime - glassHoldFraction) / (glassFadeFraction - glassHoldFraction)))
       // Continuous opacity slope avoids the visible speed changes between the
       // old opacity keyframes. Reversal retains the captured material opacity.
       let dissolve = fade * fade * (3 - 2 * fade)
-      let progress = direction == .exit ? 1 - dissolve : dissolve
+      let progress = direction.isExit ? 1 - dissolve : dissolve
       return Double(from) + Double(to - from) * progress
     }
     animation.duration = direction.duration

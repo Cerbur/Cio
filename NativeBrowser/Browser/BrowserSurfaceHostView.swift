@@ -1,5 +1,18 @@
 import AppKit
 
+/// Each page finishes on its own compositor clock. Transaction completion can
+/// wait for a longer sibling reveal and leave an outgoing card hanging around.
+@MainActor
+private final class BrowserSplitFlightCompletion: NSObject, CAAnimationDelegate {
+  private let completion: @MainActor () -> Void
+  init(_ completion: @escaping @MainActor () -> Void) { self.completion = completion }
+
+  nonisolated func animationDidStop(_ animation: CAAnimation, finished: Bool) {
+    guard finished else { return }
+    Task { @MainActor [weak self] in self?.completion() }
+  }
+}
+
 /// Stable page registry and outer layout container. Each tab keeps one page UI
 /// instance; this host only chooses its placement, crop and toolbar visibility.
 /// BrowserSessionManager retains ownership of Chromium runtime lifetimes.
@@ -21,6 +34,7 @@ final class BrowserSurfaceHostView: NSView {
     let token: UUID
     let frame: CGRect
     let direction: BrowserSplitRevealTransition.Direction
+    let completion: BrowserSplitFlightCompletion
   }
   private var pageFlights: [UUID: PageFlight] = [:]
   private var restorationCards: [UUID: BrowserSplitRevealTransition.Geometry] = [:]
@@ -42,10 +56,11 @@ final class BrowserSurfaceHostView: NSView {
     }
   }
 
-  private func stopFlight(_ id: UUID) {
+  private func stopFlight(_ id: UUID, preservingPendingContent: Bool = false) {
     pageFlights.removeValue(forKey: id)
-    pages[id]?.endSplitRevealGlass()
+    pages[id]?.endSplitRevealGlass(preservingPendingContent: preservingPendingContent)
     pages[id]?.viewport.layer?.removeAnimation(forKey: "split-reveal-transform")
+    pages[id]?.viewport.layer?.removeAnimation(forKey: "split-reveal-opacity")
     pages[id]?.viewport.layer?.mask = nil
     pages[id]?.viewport.layer?.zPosition = 0
   }
@@ -63,23 +78,24 @@ final class BrowserSurfaceHostView: NSView {
     stopFlight(id)
     restorationCards.removeValue(forKey: id)
     let token = UUID()
-    pageFlights[id] = PageFlight(token: token, frame: pane, direction: direction)
-    BrowserSplitRevealTransition.animate(page, pane: pane, from: from, to: to, direction: direction)
-    DispatchQueue.main.asyncAfter(deadline: .now() + direction.duration) { [weak self] in
-      guard let self, self.pageFlights[id]?.token == token else { return }
+    let completion = BrowserSplitFlightCompletion { [weak self, weak page] in
+      guard let self, let page, self.pageFlights[id]?.token == token else { return }
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       defer { CATransaction.commit() }
-      self.stopFlight(id)
-      if direction == .exit {
-        // Keep the contracted state after hiding, so cancellation can expand
-        // from the same card even after the outgoing flight has completed.
+      self.stopFlight(id, preservingPendingContent: direction == .enter)
+      if direction.isExit {
+        // Keep the departure geometry so an interrupted selection can return
+        // continuously, including a replacement that has already faded out.
         self.restorationCards[id] = to
         page.hide(animated: false)
         page.surface.setSurfaceVisible(false)
       }
       self.applyPlacements(self.targets)
     }
+    pageFlights[id] = PageFlight(token: token, frame: pane, direction: direction, completion: completion)
+    BrowserSplitRevealTransition.animate(page, pane: pane, from: from, to: to,
+                                        direction: direction, completion: completion)
   }
 
   private func centeredCard(in pane: CGRect) -> CGRect {
@@ -88,14 +104,15 @@ final class BrowserSurfaceHostView: NSView {
                   width: size.width, height: size.height)
   }
 
-  private func beginSplitExit(_ id: UUID, pane: CGRect) {
-    guard pageFlights[id]?.direction != .exit, restorationCards[id] == nil,
+  private func beginSplitExit(_ id: UUID, pane: CGRect, isReplacement: Bool = false) {
+    guard pageFlights[id]?.direction.isExit != true, restorationCards[id] == nil,
           window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
           pane.width > 0, pane.height > 0, let page = pages[id] else { return }
     let source = BrowserSplitRevealTransition.capture(page)
     page.toolbar?.setPageControlsVisible(false, animated: true)
     startFlight(id, pane: pane, from: source,
-      to: .card(centeredCard(in: pane), pane: pane, group: pane), direction: .exit)
+      to: isReplacement ? .replacedPage(pane) : .card(centeredCard(in: pane), pane: pane, group: pane),
+      direction: isReplacement ? .replacementExit : .exit)
   }
 
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
@@ -183,9 +200,10 @@ final class BrowserSurfaceHostView: NSView {
     let nextVisibleIDs = Set(split?.tabIDs ?? selectedTabID.map { [$0] } ?? [])
     if let previous = self.split {
       let frames = previous.paneFrames(in: bounds).panes
+      let isReplacement = isCommittingSplitPreview && split?.tabIDs.count == previous.tabIDs.count
       for (index, id) in previous.tabIDs.enumerated()
         where !nextVisibleIDs.contains(id) && id != liftedPaneID && containers[id] != nil {
-        beginSplitExit(id, pane: frames[index])
+        beginSplitExit(id, pane: frames[index], isReplacement: isReplacement)
       }
     }
     // A single-page tab switch replaces the toolbar in its existing slot. Both
@@ -208,7 +226,7 @@ final class BrowserSurfaceHostView: NSView {
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
       if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
-      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || pageFlights[id]?.direction == .exit)
+      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || pageFlights[id]?.direction.isExit == true)
     }
     for id in Array(pages.keys) where containers[id] == nil {
       stopFlight(id)
@@ -419,7 +437,7 @@ final class BrowserSurfaceHostView: NSView {
     opacity.timingFunction = BrowserSplitRevealTransition.Direction.layout.timingFunction
     var boundsValues: [NSValue] = []
     var positionValues: [NSValue] = []
-    for amount in BrowserSplitRevealTransition.progressSamples(.enter) {
+    for amount in BrowserSplitRevealTransition.progressSamples(.layout) {
       func blend(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * amount }
       let frame = CGRect(x: blend(source.minX, final.minX), y: blend(source.minY, final.minY),
                          width: blend(source.width, final.width), height: blend(source.height, final.height))
@@ -430,27 +448,34 @@ final class BrowserSurfaceHostView: NSView {
     sizes.values = boundsValues
     positions.values = positionValues
     let direction = BrowserSplitRevealTransition.Direction.layout
-    let beginTime = CACurrentMediaTime()
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    CATransaction.setCompletionBlock { [weak self] in
+      DispatchQueue.main.async {
+        guard let self, self.previewFlightToken == token else { return }
+        self.previewFlightToken = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        self.preview.layer?.removeAnimation(forKey: "split-preview-bounds")
+        self.preview.layer?.removeAnimation(forKey: "split-preview-position")
+        self.preview.layer?.removeAnimation(forKey: "split-preview-opacity")
+        self.preview.isHidden = destination == nil
+      }
+    }
     for animation in [sizes, positions] {
       animation.duration = direction.duration
       animation.timingFunction = CAMediaTimingFunction(name: .linear)
-      animation.beginTime = beginTime
+      animation.beginTime = 0
       animation.fillMode = .both
       animation.isRemovedOnCompletion = false
     }
     layer.add(sizes, forKey: "split-preview-bounds")
     layer.add(positions, forKey: "split-preview-position")
     opacity.duration = direction.duration
-    opacity.beginTime = beginTime
+    opacity.beginTime = 0
     layer.add(opacity, forKey: "split-preview-opacity")
-    DispatchQueue.main.asyncAfter(deadline: .now() + direction.duration) { [weak self] in
-      guard let self, self.previewFlightToken == token else { return }
-      self.previewFlightToken = nil
-      self.preview.layer?.removeAnimation(forKey: "split-preview-bounds")
-      self.preview.layer?.removeAnimation(forKey: "split-preview-position")
-      self.preview.layer?.removeAnimation(forKey: "split-preview-opacity")
-      self.preview.isHidden = destination == nil
-    }
+    CATransaction.commit()
   }
 
   private func roundedEdge(at index: Int, count: Int) -> RoundedEdge {
@@ -483,7 +508,7 @@ final class BrowserSurfaceHostView: NSView {
         if let previous = targets[id], previous.toolbarVisible { beginSplitExit(id, pane: previous.frame) }
         continue
       }
-      let returning = restorationCards[id] != nil || pageFlights[id]?.direction == .exit
+      let returning = restorationCards[id] != nil || pageFlights[id]?.direction.isExit == true
       let changed = targets[id]?.frame != placement.frame || targets[id]?.toolbarVisible != true
       guard returning || changed else { continue }
       if canAnimate && (animated || returning) {
@@ -516,7 +541,7 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     for (id, page) in pages {
-      if pageFlights[id]?.direction == .exit {
+      if pageFlights[id]?.direction.isExit == true {
         // Pin the outgoing Chromium size and shared parent while survivors and
         // incoming pages settle. Layout must not hide or resize this viewport.
         continue

@@ -100,7 +100,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// True once Chromium destroyed the browser; the session cannot be reused.
   private(set) var isClosed = false
   /// True after the first load finished (successfully or not).
-  private(set) var hasFinishedFirstLoad = false
+  @Published private(set) var hasFinishedFirstLoad = false
 
   /// How many Chromium browsers this session has created. Must stay at 1 for a
   /// session's lifetime: navigation, resizing, SwiftUI re-renders and - in
