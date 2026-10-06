@@ -18,6 +18,7 @@ final class SpaceToolbarController: NSObject {
   private let sidebarButton: NSButton
   private let presentation: ToolbarPresentationState
   private let controlHost: SpaceSidebarControlHostingView
+  private let layoutMotion = GlassComponentLayoutMotion()
 
   /// Stable for the controller's lifetime, including section visibility changes.
   var view: NSView { controlHost }
@@ -29,10 +30,11 @@ final class SpaceToolbarController: NSObject {
     let height = AddressCapsuleLayout.height
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: height, height: height))
     button.setButtonType(.momentaryPushIn)
-    button.bezelStyle = .glass
+    button.bezelStyle = .toolbar
     button.borderShape = .circle
     button.controlSize = .large
     button.isBordered = true
+    button.showsBorderOnlyWhileMouseInside = true
     button.title = ""
     button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Sidebar")?
       .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
@@ -44,6 +46,7 @@ final class SpaceToolbarController: NSObject {
       size: NSSize(width: height, height: height)))
     super.init()
 
+    controlHost.wantsLayer = true
     controlHost.safeAreaRegions = []
     controlHost.clipsToBounds = false
     controlHost.frame = button.frame
@@ -54,7 +57,7 @@ final class SpaceToolbarController: NSObject {
 
   func setVisible(_ visible: Bool, animated: Bool) {
     // ToolbarNativeControlsView applies ToolbarComponentVisibility once to the
-    // complete native glass button, retaining the control during transitions.
+    // complete native button and glass, retaining the control during transitions.
     presentation.setVisible(visible, animated: animated && controlHost.window != nil)
   }
 
@@ -77,7 +80,15 @@ final class SpaceToolbarController: NSObject {
     let topInset = (BrowserLayout.chromeThickness - height) / 2
     let y = host.isFlipped ? host.bounds.minY + topInset : host.bounds.maxY - topInset - height
     let frame = NSRect(x: left, y: y, width: height, height: height)
-    if controlHost.frame != frame { controlHost.frame = frame }
+    if controlHost.frame != frame {
+      let source = presentation.isVisible ? layoutMotion.capture(controlHost) : nil
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      controlHost.frame = frame
+      controlHost.layoutSubtreeIfNeeded()
+      layoutMotion.animate(controlHost, from: source, enabled: presentation.isVisible)
+      CATransaction.commit()
+    }
   }
 
   /// Reserve the resting layout frame even while hidden or transitioning, so

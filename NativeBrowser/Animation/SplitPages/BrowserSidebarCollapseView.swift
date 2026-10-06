@@ -106,7 +106,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     }
     startTime = CACurrentMediaTime()
     BrowserSplitRevealTransition.animate(layer: layer, pane: sourceFrame,
-      from: origin, to: landing, direction: direction, completion: self)
+      from: origin, to: landing, direction: direction, duration: flightDuration, completion: self)
     let midpoint = CABasicAnimation(keyPath: "opacity")
     midpoint.fromValue = 0
     midpoint.toValue = 0

@@ -47,7 +47,8 @@ final class BrowserPagePresentation {
   }
 
   func layout(in contentHost: NSView, chromeHost: NSView?, frame: CGRect,
-              toolbarVisible: Bool, toolbarLayoutFrame: CGRect, animatedVisibility: Bool) {
+              toolbarVisible: Bool, toolbarLayoutFrame: CGRect, animatedVisibility: Bool, animatedLayout: Bool) {
+    let toolbarSource = toolbar?.captureLayout()
     viewport.isHidden = false
     if viewport.frame != frame { viewport.frame = frame }
     // Assign the final render size once. Split motion happens on the shared
@@ -66,12 +67,18 @@ final class BrowserPagePresentation {
     }
     let toolbarFrame = contentHost.convert(CGRect(x: toolbarLayoutFrame.minX, y: -BrowserLayout.chromeThickness,
       width: toolbarLayoutFrame.width, height: BrowserLayout.chromeThickness), to: chromeHost)
+    // Install before resolving native host geometry; capture happened before
+    // changing either the page frame or the chrome's coordinate system.
     if toolbar.view.frame != toolbarFrame { toolbar.view.frame = toolbarFrame }
     if installedWindow !== window {
       installedWindow = window
       toolbar.install(in: window)
     }
-    toolbar.setPageControlsVisible(toolbarVisible, animated: animatedVisibility)
+    if let toolbarSource {
+      toolbar.layoutChrome(frame: toolbarFrame, from: toolbarSource, animated: animatedLayout)
+    }
+    toolbar.setPageControlsVisible(toolbarVisible, animated: animatedVisibility,
+                                  animation: splitTransition.chromeRevealAnimation)
     toolbar.browserGeometryDidChange()
   }
 

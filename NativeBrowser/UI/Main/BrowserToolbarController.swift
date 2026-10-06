@@ -41,6 +41,25 @@ final class ToolbarChromeView: NSView {
   private let forwardButton: NSButton
   private let addressView: AddressOverlayHostingView
   private let presentation: ToolbarPresentationState
+  private let navigationMotion = GlassComponentLayoutMotion()
+  private let addressMotion = GlassComponentLayoutMotion()
+
+  struct LayoutSource {
+    let navigation: GlassComponentLayoutMotion.Pose?
+    let address: GlassComponentLayoutMotion.Pose?
+  }
+
+  func captureLayout() -> LayoutSource {
+    LayoutSource(navigation: presentation.isVisible ? navigationMotion.capture(navigationGroup) : nil,
+                 address: presentation.isVisible ? addressMotion.capture(addressView) : nil)
+  }
+
+  func animateLayout(from source: LayoutSource, enabled: Bool) {
+    navigationGroup.layoutSubtreeIfNeeded()
+    addressView.layoutSubtreeIfNeeded()
+    navigationMotion.animate(navigationGroup, from: source.navigation, enabled: enabled)
+    addressMotion.animate(addressView, from: source.address, enabled: enabled)
+  }
 
   fileprivate init(backButton: NSButton, forwardButton: NSButton,
                    addressView: AddressOverlayHostingView,
@@ -57,7 +76,7 @@ final class ToolbarChromeView: NSView {
     backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
     forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
     // Custom shell chrome doesn't receive NSToolbar's automatic group glass.
-    // Embed the native buttons as content so AppKit owns the material,
+    // Embed the native buttons as content over the system glass material,
     // adaptive symbol appearance and supported glass interaction feedback.
     // USER-REQUIRED STYLE CONTRACT: Back/Forward are independent native buttons
     // inside ONE continuous Liquid Glass capsule, matching the Safari reference.
@@ -68,18 +87,14 @@ final class ToolbarChromeView: NSView {
     // If platform limitations or another requirement conflict with this contract,
     // explain the conflict and obtain an explicit human trade-off decision before
     // changing the style or relaxing its native behavior or layout constraints.
-    let navigationGlass = NSGlassEffectView(frame: navigationContent.frame)
-    navigationGlass.style = .regular
-    navigationGlass.cornerRadius = height / 2
-    navigationGlass.contentView = navigationContent
-    navigationGlass.clipsToBounds = false
-    if #available(macOS 27.0, *) {
-      navigationGlass.effectIsInteractive = true
-    }
+    // SwiftUI supplies one native Liquid Glass surface and its public
+    // materialize transition; the AppKit buttons remain mounted inside it.
     navigationGroup = NSHostingView(rootView: ToolbarNativeControlsView(
-      content: navigationGlass, presentation: presentation,
+      content: navigationContent, presentation: presentation,
       size: NSSize(width: 2 + 2 * height, height: height)))
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
+    navigationGroup.wantsLayer = true
+    addressView.wantsLayer = true
     navigationGroup.safeAreaRegions = []
     navigationGroup.clipsToBounds = false
     navigationContent.autoresizingMask = [.width, .height]
@@ -108,8 +123,8 @@ final class ToolbarChromeView: NSView {
     return false
   }
 
-  func setPageControlsVisible(_ visible: Bool, animated: Bool) {
-    presentation.setVisible(visible, animated: animated && window != nil)
+  func setPageControlsVisible(_ visible: Bool, animated: Bool, animation: Animation? = nil) {
+    presentation.setVisible(visible, animated: animated && window != nil, animation: animation)
   }
 
   func setNavigationState(canGoBack: Bool, canGoForward: Bool, hasSession: Bool) {
@@ -237,7 +252,7 @@ final class BrowserToolbarController: NSObject {
   }
 
   /// Mount as a sibling of the supplied browser view, above its page surface.
-  var view: NSView {
+  var view: ToolbarChromeView {
     if let chromeView { return chromeView }
     return makeChromeView()
   }
@@ -340,15 +355,23 @@ final class BrowserToolbarController: NSObject {
   }
 
   /// Visibility is driven solely by whether the page is in the visible layout.
-  func setPageControlsVisible(_ visible: Bool, animated: Bool = true) {
+  func setPageControlsVisible(_ visible: Bool, animated: Bool = true, animation: Animation? = nil) {
     guard !isDisposed else { return }
     if visible { preparePageControlsForAppearance() }
     if !visible {
       siteInformation.dismiss()
       releaseAddressFocus()
     }
-    chromeView?.setPageControlsVisible(visible, animated: animated)
+    chromeView?.setPageControlsVisible(visible, animated: animated, animation: animation)
     handle(.geometryChanged)
+  }
+
+  func captureLayout() -> ToolbarChromeView.LayoutSource { view.captureLayout() }
+
+  func layoutChrome(frame: CGRect, from source: ToolbarChromeView.LayoutSource, animated: Bool) {
+    if view.frame != frame { view.frame = frame }
+    applyCurrentLayout(preparingToShow: true)
+    view.animateLayout(from: source, enabled: animated)
   }
 
   func browserGeometryDidChange() {

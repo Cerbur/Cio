@@ -557,16 +557,20 @@ final class BrowserSurfaceHostView: NSView {
       page.splitTransition.cancel()
     }
     targets = next
-    applyPlacements(next, animatedVisibility: animatedVisibility && window != nil)
+    // Establish the incoming flight's clock before resolving toolbar visibility.
+    // Page and native materialize start together, rather than chaining reveals.
     for (id, source) in entries {
       guard let placement = next[id] else { continue }
       let layoutDirection: BrowserSplitRevealTransition.Direction = retainedSidebarPaneID != nil ? .sidebarSurvivor : .layout
       startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame),
         direction: source.glassOpacity > 0 ? .enter : layoutDirection)
     }
+    applyPlacements(next, animatedVisibility: animatedVisibility && window != nil,
+                    animatedLayout: canAnimate && (animated || !entries.isEmpty))
   }
 
-  private func applyPlacements(_ next: [UUID: PagePlacement], animatedVisibility: Bool = false) {
+  private func applyPlacements(_ next: [UUID: PagePlacement], animatedVisibility: Bool = true,
+                               animatedLayout: Bool = false) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
@@ -593,9 +597,9 @@ final class BrowserSurfaceHostView: NSView {
       if !page.splitTransition.isAnimating { applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge) }
       page.surface.setSurfaceVisible(true)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
-                  toolbarVisible: placement.toolbarVisible && !isCovered && !page.splitTransition.defersChrome,
+                  toolbarVisible: placement.toolbarVisible && !isCovered,
                   toolbarLayoutFrame: placement.frame,
-                  animatedVisibility: animatedVisibility)
+                  animatedVisibility: animatedVisibility, animatedLayout: animatedLayout)
       page.splitControl.place(in: self,
         chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
         paneFrame: placement.frame,

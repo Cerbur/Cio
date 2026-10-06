@@ -104,6 +104,7 @@ struct ToolbarAddressFieldView: View {
           }
         }
         .frame(width: width, height: height, alignment: .top)
+        .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
         .mask(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .background {
           ToolbarGlassSurface(presentation: presentation, cornerRadius: radius)
@@ -117,7 +118,7 @@ struct ToolbarAddressFieldView: View {
             // Keep the native ring mounted so losing focus can finish fading
             // out. Scope the animation to opacity, preserving capsule geometry.
             .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.focusRingDuration)) { content in
-              content.opacity(focusRingOpacity)
+              content.opacity(presentation.isVisible ? focusRingOpacity : 0)
             }
             .allowsHitTesting(false)
         }

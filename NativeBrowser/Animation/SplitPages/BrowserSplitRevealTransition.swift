@@ -62,7 +62,10 @@ enum BrowserSplitRevealTransition {
       return CGFloat(bezier((lower + upper) / 2, y1, y2))
     }
 
-    @MainActor var animation: Animation {
+    @MainActor var animation: Animation { animation(duration: duration) }
+
+    /// Reuse the flight's captured clock for SwiftUI chrome as well as Core Animation pages.
+    func animation(duration: TimeInterval) -> Animation {
       let (x1, y1, x2, y2) = controlPoints
       return .timingCurve(Double(x1), Double(y1), Double(x2), Double(y2), duration: duration)
     }
@@ -133,7 +136,7 @@ enum BrowserSplitRevealTransition {
   @MainActor
   static func animate(layer: CALayer, pane: CGRect,
                       from initial: Geometry, to destination: Geometry, direction: Direction,
-                      completion: any CAAnimationDelegate) {
+                      duration: TimeInterval, completion: any CAAnimationDelegate) {
     let initial = initial.rebased(to: pane.size)
     let destination = destination.rebased(to: pane.size)
     // AppKit view-backed layers pivot at their origin, not the CALayer centre.
@@ -178,7 +181,7 @@ enum BrowserSplitRevealTransition {
     let opacity = CAKeyframeAnimation(keyPath: "opacity")
     opacity.values = opacities
     for animation in [transform, outline, opacity] {
-      animation.duration = direction.duration
+      animation.duration = duration
       animation.timingFunction = CAMediaTimingFunction(name: .linear)
       // Zero lets Core Animation start at transaction commit. Native material
       // setup must not consume the first part of the flight before it is shown.
@@ -193,7 +196,8 @@ enum BrowserSplitRevealTransition {
   }
 
   @MainActor
-  static func glassOpacityAnimation(_ direction: Direction, from: Float, to: Float) -> CAKeyframeAnimation {
+  static func glassOpacityAnimation(_ direction: Direction, from: Float, to: Float,
+                                    duration: TimeInterval) -> CAKeyframeAnimation {
     let animation = CAKeyframeAnimation(keyPath: "opacity")
     animation.values = (0...sampleCount).map { step in
       let time = Double(step) / Double(sampleCount)
@@ -205,7 +209,7 @@ enum BrowserSplitRevealTransition {
       let progress = direction.isExit ? 1 - dissolve : dissolve
       return Double(from) + Double(to - from) * progress
     }
-    animation.duration = direction.duration
+    animation.duration = duration
     animation.timingFunction = CAMediaTimingFunction(name: .linear)
     animation.fillMode = .both
     animation.isRemovedOnCompletion = false

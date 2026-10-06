@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 
 /// Owns a page's complete split motion: presentation geometry, native glass,
 /// content readiness and completion. Drag sources only supply their card frame;
@@ -11,6 +12,7 @@ final class BrowserSplitPageTransition {
     let token: UUID
     let frame: CGRect
     let direction: BrowserSplitRevealTransition.Direction
+    let duration: TimeInterval
     let completion: SplitPageFlightCompletion
   }
   private var flight: Flight?
@@ -26,7 +28,12 @@ final class BrowserSplitPageTransition {
   var isAnimating: Bool { flight != nil }
   var isExiting: Bool { flight?.direction.isExit == true }
   var isReturning: Bool { restoration != nil || isExiting }
-  var defersChrome: Bool { flight?.direction == .enter }
+  /// Incoming or returning chrome starts during the page flight using its clock.
+  /// Completion only cleans up the page; it must not start a second animation.
+  var chromeRevealAnimation: Animation? {
+    guard let flight, !flight.direction.isExit else { return nil }
+    return flight.direction.animation(duration: flight.duration)
+  }
 
   /// Capture before cancelling or assigning a new render size. A survivor can
   /// reverse its layout flight without jumping to either model endpoint.
@@ -105,7 +112,9 @@ final class BrowserSplitPageTransition {
       }
       onCompletion()
     }
-    flight = Flight(token: token, frame: pane, direction: direction, completion: completion)
+    let duration = direction.duration
+    flight = Flight(token: token, frame: pane, direction: direction,
+                    duration: duration, completion: completion)
     let initial = initial.rebased(to: pane.size)
     let destination = destination.rebased(to: pane.size)
     page.viewport.frame = pane
@@ -116,10 +125,11 @@ final class BrowserSplitPageTransition {
     layer.zPosition = direction == .dismiss ? 0 : 1
     page.splitControl.isHidden = true
     if initial.glassOpacity > 0 || destination.glassOpacity > 0 {
-      beginGlass(direction: direction, from: initial.glassOpacity, to: destination.glassOpacity)
+      beginGlass(direction: direction, from: initial.glassOpacity, to: destination.glassOpacity,
+                 duration: duration)
     }
     BrowserSplitRevealTransition.animate(layer: layer, pane: pane, from: initial, to: destination,
-                                        direction: direction, completion: completion)
+                                        direction: direction, duration: duration, completion: completion)
   }
 
   func cancel() {
@@ -137,7 +147,8 @@ final class BrowserSplitPageTransition {
     layer.zPosition = 0
   }
 
-  private func beginGlass(direction: BrowserSplitRevealTransition.Direction, from: Float, to: Float) {
+  private func beginGlass(direction: BrowserSplitRevealTransition.Direction, from: Float, to: Float,
+                          duration: TimeInterval) {
     guard let page else { return }
     let glass: SplitPageGlassView
     if let existing = self.glass {
@@ -174,7 +185,7 @@ final class BrowserSplitPageTransition {
       return
     }
     layer.opacity = to
-    let fade = BrowserSplitRevealTransition.glassOpacityAnimation(direction, from: from, to: to)
+    let fade = BrowserSplitRevealTransition.glassOpacityAnimation(direction, from: from, to: to, duration: duration)
     fade.beginTime = 0
     layer.add(fade, forKey: "split-reveal-glass-fade")
   }

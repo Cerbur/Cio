@@ -13,11 +13,15 @@ UI 组件负责状态和交互，这个包负责动画参数、速度偏好以�
 | `SplitPageAnimationValues.swift` | `AnimationValues.SplitPages` | 分屏展开、消失、挤压、黄灯收起和玻璃交接 |
 | `TabDragAnimationValues.swift` | `AnimationValues.TabDrag` | 浮块托起、变形、排序、落点和交接 |
 | `SidebarAnimationValues.swift` | `AnimationValues.Sidebar` | 侧栏开合、Space 分页、悬停、清空反馈 |
+| `GlassComponentAnimationValues.swift` | `AnimationValues.GlassComponent` | 一级玻璃聚拢/扩散、移动与弹性尺寸模板 |
 | `ToolbarAnimationValues.swift` | `AnimationValues.Toolbar` | 工具栏一级控件出现、消失和销毁等待 |
 | `AddressFieldAnimationValues.swift` | `AnimationValues.AddressField` | 地址胶囊、焦点环、站点信息和按钮反馈 |
 | `SpotlightAnimationValues.swift` | `AnimationValues.Spotlight` | 新标签页玻璃与建议列表动画、宿主移除等待 |
 
 `BrowserAnimationPreferences.swift` 保存档位偏好；`SplitPages/` 保存共享分屏动画实现。
+一级玻璃控件必须遵守 [Liquid Glass component motion](GLASS_COMPONENT_MOTION.md)，
+复用 `GlassComponentVisibility.swift` 和 `GlassComponentLayoutMotion.swift`。
+
 未来新增窗口、设置面板等效果，应在此包增加对应的 `*AnimationValues.swift` 文件，
 扩展 `AnimationValues`，再由组件引用。
 
