@@ -65,8 +65,11 @@ final class SidebarTabDrag {
   }
 
   private(set) var isPaneDrag = false
-  private(set) var paneSnapshot: NSImage?
-  private(set) var paneSnapshotOpacity: Double = 0
+  private(set) var paneGlassOpacity: Double = 1
+  private(set) var isMinimizingPane = false
+  @ObservationIgnored private var paneLandingFrame: CGRect?
+  @ObservationIgnored private var paneCollapseCommit: (() -> Bool)?
+  @ObservationIgnored private var paneCollapseFlightFinished = false
   private(set) var isExpandingIntoSplit = false
   private(set) var splitLandingTabIDs: [UUID]?
   @ObservationIgnored private var presentedFloatingFrame: CGRect?
@@ -100,6 +103,9 @@ final class SidebarTabDrag {
   @ObservationIgnored var onSplitLandingFrame: (() -> CGRect?)?
   @ObservationIgnored var onSplitRevealFrame: ((CGRect?) -> Void)?
   @ObservationIgnored var onPreviewEnd: (() -> Void)?
+  @ObservationIgnored var onPaneCollapseFrame: ((UUID, CGRect) -> Void)?
+  @ObservationIgnored var onPaneCollapseBegin: ((UUID, CGRect) -> Void)?
+  @ObservationIgnored var onPaneCollapseEnd: ((UUID) -> Void)?
   @ObservationIgnored var isStableTab: ((UUID) -> Bool)?
   @ObservationIgnored var bounds = CGRect.zero
   @ObservationIgnored var topPinFrame = CGRect.zero
@@ -236,7 +242,8 @@ final class SidebarTabDrag {
 
   /// The landing tab stays hidden until the glass block reaches it.
   func sourceOpacity(of id: UUID) -> Double {
-    isPaneDrag && phase == .lifted ? 1 : (tabID == id ? 0 : 1)
+    if isMinimizingPane, paneCollapseCommit != nil { return 1 }
+    return isPaneDrag && phase == .lifted ? 1 : (tabID == id ? 0 : 1)
   }
 
   /// SwiftUI still completes the click on the button a drag started from when
@@ -266,7 +273,7 @@ final class SidebarTabDrag {
   /// A pane starts at its page frame, then contracts into the same glass card
   /// used by sidebar tabs. The durable group is untouched until a valid drop.
   func beginPane(_ id: UUID, tier: WorkspaceCollection.TabTier, at point: CGPoint, frame: CGRect,
-                 snapshot: NSImage?, groupTabIDs: [UUID]) -> Bool {
+                 groupTabIDs: [UUID]) -> Bool {
     guard !isDragging, let layout = layoutProvider?() else { return false }
     finish(animated: false)
     generation += 1
@@ -274,8 +281,7 @@ final class SidebarTabDrag {
     isPaneDrag = true
     paneSourceFrame = frame
     paneSourceTabIDs = Set(groupTabIDs)
-    paneSnapshot = snapshot
-    paneSnapshotOpacity = 1
+    paneGlassOpacity = 0
     startedFromStableTab = true
     sourceTier = tier
     sourceSize = frame.size
@@ -298,13 +304,85 @@ final class SidebarTabDrag {
         guard let self, self.generation == generation, self.isPaneDrag, self.isDragging else { return }
         withAnimation(self.reduceMotion ? nil : BrowserSplitRevealTransition.Direction.exit.animation) {
           self.size = self.blockSize(for: self.style)
-          self.paneSnapshotOpacity = 0
+          self.paneGlassOpacity = 1
           self.isLifted = true
         }
       }
     }
     RunLoop.main.add(liftTimer, forMode: .common)
     return true
+  }
+
+  var paneLiftTargetFrame: CGRect {
+    let card = BrowserSplitRevealTransition.cardSize
+    return CGRect(x: anchor.x - grab.x * card.width, y: anchor.y - grab.y * card.height,
+                  width: card.width, height: card.height)
+  }
+
+  /// Keep the split intact while its pane contracts. Detachment and survivor
+  /// expansion start at the native animation's midpoint, before row landing.
+  func minimizePane(_ id: UUID, tier: WorkspaceCollection.TabTier, frame: CGRect,
+                    commit: @escaping () -> Bool) -> Bool {
+    guard tabID == nil, !reduceMotion, let begin = onPaneCollapseBegin,
+          let landing = projectedPaneLandingFrame(id, in: tier) else { return false }
+    generation += 1
+    isPaneDrag = true
+    isMinimizingPane = true
+    paneSourceFrame = frame
+    sourceTier = tier
+    sourceSize = frame.size
+    size = frame.size
+    style = .card
+    grab = CGPoint(x: 0.5, y: 0.5)
+    anchor = CGPoint(x: frame.midX, y: frame.midY)
+    paneGlassOpacity = 0
+    startedFromStableTab = true
+    isLifted = false
+    phase = .landing
+    tabID = id
+    landingTier = tier
+    programmaticLandingPending = true
+    paneCollapseCommit = commit
+    paneCollapseFlightFinished = false
+    begin(id, landing)
+    return true
+  }
+
+  /// Detachment inserts a tab immediately after the surviving split row.
+  /// Both containers use the shared row height, so its landing is known before
+  /// changing workspace membership. Independent rows and Top Pins stay put.
+  private func projectedPaneLandingFrame(_ id: UUID, in tier: WorkspaceCollection.TabTier) -> CGRect? {
+    if let group = panelRows.values.first(where: {
+      $0.row.tier == tier && $0.row.splitGroup?.contains(id) == true
+    }) {
+      return group.frame.offsetBy(dx: 0, dy: BrowserLayout.sidebarTabRowHeight + BrowserLayout.sidebarRowSpacing)
+    }
+    return frame(of: id, in: tier)
+  }
+
+  func commitPaneCollapse(_ id: UUID) {
+    guard isMinimizingPane, tabID == id, let commit = paneCollapseCommit else { return }
+    paneCollapseCommit = nil
+    let tier = sourceTier
+    // The group leader's old registration describes the whole split row.
+    // Wait for the newly detached tab's own row before capturing its landing.
+    if panelRows.values.contains(where: {
+      $0.row.tier == tier && $0.row.draggableTabID == id && $0.row.splitGroup != nil
+    }) {
+      items[ItemKey(id: id, tier: tier)] = nil
+    }
+    var transaction = Transaction(animation: nil)
+    transaction.disablesAnimations = true
+    var committed = false
+    withTransaction(transaction) { committed = commit() }
+    guard committed else { finish(animated: false); return }
+    programmaticLandingPending = false
+    if let frame = frame(of: id, in: tier) {
+      land(in: frame, style: Style(tier))
+    } else {
+      // New rows report their frame via register; no timed pause between halves.
+      settle(id, in: tier)
+    }
   }
 
   func movePane(to point: CGPoint) {
@@ -330,14 +408,18 @@ final class SidebarTabDrag {
       }
       return
     }
-    onPreviewEnd?()
+    // A pane is already absent from the preview. Commit its sidebar move
+    // before clearing that preview, or it briefly expands back into the split.
+    if !isPaneDrag { onPreviewEnd?() }
     let target = target
     setAutoscroll(0)
     lastDrop = (id, ProcessInfo.processInfo.systemUptime)
     if let target, target != homeTarget, move(id, target) {
       phase = .landing
+      if isPaneDrag { onPreviewEnd?() }
       settle(id, in: target.tier)
     } else {
+      if isPaneDrag { onPreviewEnd?() }
       returnToSource(id)
     }
   }
@@ -518,6 +600,16 @@ final class SidebarTabDrag {
   }
 
   private func land(in frame: CGRect, style: Style) {
+    if isMinimizingPane {
+      // Registration can report the same row repeatedly during layout. Its
+      // committed destination is captured once; never restart a moving flight.
+      guard paneLandingFrame == nil, let id = tabID else { return }
+      paneLandingFrame = frame
+      landingFlight += 1
+      onPaneCollapseFrame?(id, frame)
+      if paneCollapseFlightFinished { finish(animated: false) }
+      return
+    }
     guard !reduceMotion else {
       finish(animated: true)
       return
@@ -527,7 +619,6 @@ final class SidebarTabDrag {
     let generation = generation
     withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
       self.style = style
-      if isPaneDrag, frame == paneSourceFrame { paneSnapshotOpacity = 1 }
       size = frame.size
       anchor = CGPoint(
         x: frame.minX + grab.x * frame.width,
@@ -539,11 +630,25 @@ final class SidebarTabDrag {
     }
   }
 
+  func paneCollapseDidFinish(_ id: UUID) {
+    guard isMinimizingPane, tabID == id else { return }
+    paneCollapseFlightFinished = true
+    if paneLandingFrame != nil { finish(animated: false) }
+  }
+
+  func cancelPaneCollapse(_ id: UUID) {
+    guard isMinimizingPane, tabID == id else { return }
+    finish(animated: false)
+  }
+
   private func finish(animated: Bool) {
     guard tabID != nil else { return }
+    if isMinimizingPane, let id = tabID { onPaneCollapseEnd?(id) }
     if isExpandingIntoSplit { onSplitRevealFrame?(nil) }
     onPreviewEnd?()
     landingTier = nil
+    paneCollapseCommit = nil
+    paneCollapseFlightFinished = false
     programmaticLandingPending = false
     landingFlight += 1
     setAutoscroll(0)
@@ -554,8 +659,9 @@ final class SidebarTabDrag {
       tabID = nil
       isPaneDrag = false
       paneSourceTabIDs = []
-      paneSnapshot = nil
-      paneSnapshotOpacity = 0
+      paneGlassOpacity = 1
+      isMinimizingPane = false
+      paneLandingFrame = nil
       isExpandingIntoSplit = false
       splitLandingTabIDs = nil
       presentedFloatingFrame = nil
@@ -808,7 +914,7 @@ struct SidebarTabDragOverlay<Label: View>: View {
 
   var body: some View {
     GlassEffectContainer {
-      if let id = drag.tabID, !drag.isExpandingIntoSplit {
+      if let id = drag.tabID, !drag.isExpandingIntoSplit, !drag.isMinimizingPane {
         let presentation = SidebarTabPresentation(
           placement: drag.style == .card ? .splitPreview : (drag.style == .tile ? .topPin : .liftedRow),
           isDragged: true, isLifted: drag.isLifted,
@@ -825,6 +931,7 @@ struct SidebarTabDragOverlay<Label: View>: View {
           drag.splitRevealFrameDidChange(frame)
         }
         .transition(presentation.transition)
+        .opacity(drag.isPaneDrag ? drag.paneGlassOpacity : 1)
         // Pointer updates have no implicit animation. Only the model's explicit
         // morph/lift/landing transactions animate the block.
         .position(drag.anchor)

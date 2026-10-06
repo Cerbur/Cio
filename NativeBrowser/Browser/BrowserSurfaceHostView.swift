@@ -28,7 +28,9 @@ final class BrowserSurfaceHostView: NSView {
   private var resizingSecondFraction: CGFloat?
   private var incomingPaneCount = 1
   var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)?
+  var onMinimizeSplitPane: ((UUID) -> Bool)?
   private var liftedPaneID: UUID?
+  private var retainedSidebarPaneID: UUID?
   private var paneDropIndex: Int?
   private struct PageFlight {
     let token: UUID
@@ -122,6 +124,50 @@ final class BrowserSurfaceHostView: NSView {
     applySurfaceLayout(animatedPresentation: true)
   }
 
+  /// Keep Chromium live during the lift; the floating glass takes over as the
+  /// page contracts. Native-view caching cannot reliably capture CEF content.
+  func beginPaneLift(_ id: UUID, to windowFrame: CGRect) {
+    guard let page = pages[id], let pane = targets[id]?.frame else { return }
+    liftedPaneID = id
+    paneDropIndex = nil
+    if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+      var destination = BrowserSplitRevealTransition.Geometry.card(convert(windowFrame, from: nil), pane: pane, group: pane)
+      destination.glassOpacity = 0
+      destination.opacity = 0
+      startFlight(id, pane: pane, from: BrowserSplitRevealTransition.capture(page),
+                  to: destination, direction: .paneLift)
+    }
+    applySurfaceLayout(animatedPresentation: true)
+  }
+
+  func holdPaneForSidebar(_ id: UUID) -> CGRect? {
+    guard let page = pages[id], targets[id] != nil else { return nil }
+    retainedSidebarPaneID = id
+    page.splitControl.isHidden = true
+    page.toolbar?.setPageControlsVisible(false, animated: true)
+    return page.viewport.convert(page.viewport.bounds, to: nil)
+  }
+
+  func collapsePaneToSidebar(_ id: UUID, to windowFrame: CGRect) {
+    guard retainedSidebarPaneID == id, let page = pages[id] else { return }
+    let pane = page.viewport.frame
+    var destination = BrowserSplitRevealTransition.Geometry.card(convert(windowFrame, from: nil), pane: pane, group: pane)
+    destination.glassOpacity = 0
+    destination.opacity = 0
+    // The glass and page travel continuously to the row. Keep the split until
+    // the compositor midpoint, when the page has fully dissolved into glass.
+    startFlight(id, pane: pane, from: BrowserSplitRevealTransition.capture(page),
+                to: destination, direction: .sidebarCollapse)
+    applySurfaceLayout()
+  }
+
+  func endPaneSidebarCollapse(_ id: UUID) {
+    if retainedSidebarPaneID == id { retainedSidebarPaneID = nil }
+    if pageFlights[id]?.direction == .sidebarCollapse { stopFlight(id) }
+    if targets[id]?.toolbarVisible == true { restorationCards.removeValue(forKey: id) }
+    applySurfaceLayout()
+  }
+
   private enum RoundedEdge: Equatable { case none, left, right, both }
 
   private struct PagePlacement: Equatable {
@@ -202,7 +248,7 @@ final class BrowserSurfaceHostView: NSView {
       let frames = previous.paneFrames(in: bounds).panes
       let isReplacement = isCommittingSplitPreview && split?.tabIDs.count == previous.tabIDs.count
       for (index, id) in previous.tabIDs.enumerated()
-        where !nextVisibleIDs.contains(id) && id != liftedPaneID && containers[id] != nil {
+        where !nextVisibleIDs.contains(id) && id != liftedPaneID && id != retainedSidebarPaneID && containers[id] != nil {
         beginSplitExit(id, pane: frames[index], isReplacement: isReplacement)
       }
     }
@@ -223,10 +269,14 @@ final class BrowserSurfaceHostView: NSView {
         let page = BrowserPagePresentation(tabID: id, surface: surface, viewport: viewport)
         pages[id] = page
         page.splitControl.onDrag = { [weak self] event in self?.onSplitPaneDrag?(id, event) ?? false }
+        page.onMinimizeToSidebar = { [weak self] in
+          guard let self else { return }
+          if self.onMinimizeSplitPane?(id) != true { self.workspace?.detachSplitPane(id) }
+        }
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
       if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
-      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || pageFlights[id]?.direction.isExit == true)
+      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || id == retainedSidebarPaneID || pageFlights[id]?.direction.isExit == true)
     }
     for id in Array(pages.keys) where containers[id] == nil {
       stopFlight(id)
@@ -257,13 +307,16 @@ final class BrowserSurfaceHostView: NSView {
 
   /// Commit directly from the current preview placement. No full-width reset,
   /// no replacement toolbar, and no reparenting of the surviving Chromium view.
-  func commitSplitPreview(_ commit: () -> Bool) -> Bool {
+  func commitSplitPreview(keepingLiftedPaneHidden: Bool = false, _ commit: () -> Bool) -> Bool {
     let hadPreview = previewTarget != nil || liftedPaneID != nil
     previewTarget = nil
-    liftedPaneID = nil
+    if !keepingLiftedPaneHidden { liftedPaneID = nil }
     paneDropIndex = nil
     isCommittingSplitPreview = hadPreview
-    defer { isCommittingSplitPreview = false }
+    defer {
+      isCommittingSplitPreview = false
+      liftedPaneID = nil
+    }
     let committed = commit()
     if !committed { applySurfaceLayout(animatedPresentation: hadPreview) }
     return committed
@@ -503,6 +556,9 @@ final class BrowserSurfaceHostView: NSView {
     let canAnimate = window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     var entries: [UUID: BrowserSplitRevealTransition.Geometry] = [:]
     for (id, placement) in next {
+      // Layout notifications must not interpret the held contraction as a
+      // returning page and replace it with a full-size reveal before commit.
+      if id == retainedSidebarPaneID { continue }
       guard let page = pages[id] else { continue }
       if !placement.toolbarVisible {
         if let previous = targets[id], previous.toolbarVisible { beginSplitExit(id, pane: previous.frame) }
@@ -531,8 +587,9 @@ final class BrowserSurfaceHostView: NSView {
     applyPlacements(next, animatedVisibility: animatedVisibility && window != nil)
     for (id, source) in entries {
       guard let placement = next[id] else { continue }
+      let layoutDirection: BrowserSplitRevealTransition.Direction = retainedSidebarPaneID != nil ? .sidebarSurvivor : .layout
       startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame),
-        direction: source.glassOpacity > 0 ? .enter : .layout)
+        direction: source.glassOpacity > 0 ? .enter : layoutDirection)
     }
   }
 
@@ -541,6 +598,7 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     for (id, page) in pages {
+      if id == retainedSidebarPaneID { continue }
       if pageFlights[id]?.direction.isExit == true {
         // Pin the outgoing Chromium size and shared parent while survivors and
         // incoming pages settle. Layout must not hide or resize this viewport.

@@ -4,7 +4,7 @@ import QuartzCore
 /// Window-coordinate events let the Main View bridge a pane to the sidebar's
 /// existing glass drag without reparenting Chromium or committing on lift.
 enum BrowserSplitPaneDragEvent {
-  case begin(point: CGPoint, frame: CGRect, snapshot: NSImage?)
+  case begin(point: CGPoint, frame: CGRect)
   case move(CGPoint)
   case end
   case cancel
@@ -25,7 +25,7 @@ final class BrowserSplitPaneControl: NSView {
   var onClose: (() -> Void)?
   var onMinimize: (() -> Void)?
   var onExpand: (() -> Void)?
-  var dragSource: (() -> (CGRect, NSImage?))?
+  var dragSource: (() -> CGRect)?
   /// Window geometry stays valid when the shell refreshes chrome independently
   /// of the page viewport (including initial sidebar-width restoration).
   var addressFrameProvider: (() -> CGRect?)?
@@ -77,7 +77,7 @@ final class BrowserSplitPaneControl: NSView {
     handle.onBegin = { [weak self] point in
       guard let self, let source = self.dragSource?() else { return false }
       self.collapse()
-      return self.onDrag?(.begin(point: point, frame: source.0, snapshot: source.1)) ?? false
+      return self.onDrag?(.begin(point: point, frame: source)) ?? false
     }
     handle.onMove = { [weak self] point in _ = self?.onDrag?(.move(point)) }
     handle.onEnd = { [weak self] cancelled in _ = self?.onDrag?(cancelled ? .cancel : .end) }

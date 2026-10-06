@@ -19,6 +19,7 @@ final class BrowserMainViewController: NSViewController {
   private let runtime: ApplicationRuntime
   private let sidebarChromeLayout: SidebarChromeLayout
   private var dragOverlay: NSView?
+  private var sidebarCollapseView: BrowserSidebarCollapseView?
   private weak var overlayDrag: SidebarTabDrag?
   private var splitDropTarget: BrowserSplitLayout.DropTarget?
   private var paneDropIndex: Int?
@@ -194,27 +195,107 @@ final class BrowserMainViewController: NSViewController {
     dragOverlay = overlay
     overlayDrag = drag
     var splitLandingTabIDs: [UUID] = []
+    let paneTier: (UUID) -> WorkspaceCollection.TabTier = { [weak workspace = runtime.workspaceStore] id in
+      guard let workspace else { return .global }
+      return workspace.globalPinnedTabs.contains(where: { $0.id == id }) ? .global
+        : (workspace.selectedSpace?.pinnedTabIDs.contains(id) == true ? .space(workspace.selectedSpaceID) : .temporary(workspace.selectedSpaceID))
+    }
+    runtime.workspaceStore.sessionManager.onMinimizeSplitPane = { [weak self, weak drag] id in
+      guard let self, let drag, drag.tabID == nil,
+            !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            self.runtime.workspaceStore.activeSplit?.contains(id) == true,
+            !self.sidebarItem.isCollapsed,
+            let frame = self.runtime.workspaceStore.sessionManager.holdPaneForSidebar(id) else { return false }
+      let sidebar = self.sidebarItem.viewController.view
+      let collapse = BrowserSidebarCollapseView(frame: self.view.bounds, sourceInWindow: frame)
+      self.view.addSubview(collapse, positioned: .above, relativeTo: nil)
+      collapse.prepare()
+      self.sidebarCollapseView = collapse
+      let handled = drag.minimizePane(id, tier: paneTier(id), frame: sidebar.convert(frame, from: nil)) { [weak self] in
+        guard let self, self.runtime.workspaceStore.activeSplit?.contains(id) == true else { return false }
+        self.runtime.workspaceStore.detachSplitPane(id)
+        return self.runtime.workspaceStore.activeSplit?.contains(id) != true
+      }
+      if !handled {
+        collapse.removeFromSuperview()
+        self.sidebarCollapseView = nil
+        self.runtime.workspaceStore.sessionManager.endPaneSidebarCollapse(id)
+      }
+      return handled
+    }
+    drag.onPaneCollapseBegin = { [weak self, weak drag] id, frame in
+      guard let self, let drag else { return }
+      guard let collapse = self.sidebarCollapseView else {
+        drag.cancelPaneCollapse(id)
+        return
+      }
+      let windowFrame = self.sidebarItem.viewController.view.convert(frame, to: nil)
+      let label = AnyView(BrowserTabDragPresentation(drag: drag, workspace: self.runtime.workspaceStore)
+        .dragLabel(id, style: SidebarTabDrag.Style(paneTier(id))))
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      // Geometry continues across this logical midpoint on the compositor.
+      collapse.begin(to: windowFrame, label: label, onMidpoint: { [weak self, weak drag, weak collapse] in
+        guard let self, let collapse, self.sidebarCollapseView === collapse else { return }
+        drag?.commitPaneCollapse(id)
+      }) { [weak self, weak drag, weak collapse] in
+        guard let self, let collapse, self.sidebarCollapseView === collapse else { return }
+        drag?.paneCollapseDidFinish(id)
+      }
+      self.runtime.workspaceStore.sessionManager.collapsePaneToSidebar(id, to: windowFrame)
+      CATransaction.commit()
+    }
+    drag.onPaneCollapseFrame = { [weak self, weak drag] id, frame in
+      guard let self, let drag else { return }
+      guard let collapse = self.sidebarCollapseView else {
+        drag.paneCollapseDidFinish(id)
+        return
+      }
+      let windowFrame = self.sidebarItem.viewController.view.convert(frame, to: nil)
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      collapse.resolveLandingFrame(windowFrame)
+      CATransaction.commit()
+    }
+    drag.onPaneCollapseEnd = { [weak self] id in
+      guard let self else { return }
+      let collapse = self.sidebarCollapseView
+      self.sidebarCollapseView = nil
+      if let collapse, collapse.isFlightFinished {
+        // Keep the final label until SwiftUI has rendered the revealed row.
+        Task { @MainActor in
+          try? await Task.sleep(for: .milliseconds(16))
+          collapse.removeFromSuperview()
+        }
+      } else {
+        collapse?.removeFromSuperview()
+      }
+      self.runtime.workspaceStore.sessionManager.endPaneSidebarCollapse(id)
+    }
     runtime.workspaceStore.sessionManager.onSplitPaneDrag = { [weak self, weak drag] id, event in
       guard let self, let drag else { return false }
       let sidebar = self.sidebarItem.viewController.view
       switch event {
-      case .begin(let point, let frame, let snapshot):
+      case .begin(let point, let frame):
         guard self.runtime.presentedInternalPanel == nil,
               let group = self.runtime.workspaceStore.activeSplit, group.contains(id) else { return false }
         let workspace = self.runtime.workspaceStore
-        let tier: WorkspaceCollection.TabTier = workspace.globalPinnedTabs.contains(where: { $0.id == id }) ? .global
-          : (workspace.selectedSpace?.pinnedTabIDs.contains(id) == true ? .space(workspace.selectedSpaceID) : .temporary(workspace.selectedSpaceID))
-        guard drag.beginPane(id, tier: tier, at: sidebar.convert(point, from: nil),
-                             frame: sidebar.convert(frame, from: nil), snapshot: snapshot,
+        guard drag.beginPane(id, tier: paneTier(id), at: sidebar.convert(point, from: nil),
+                             frame: sidebar.convert(frame, from: nil),
                              groupTabIDs: group.tabIDs) else { return false }
         splitLandingTabIDs = [id]
         self.paneDropIndex = nil
-        workspace.sessionManager.previewPaneDrag(id)
+        workspace.sessionManager.beginPaneLift(id, to: sidebar.convert(drag.paneLiftTargetFrame, to: nil))
         return true
       case .move(let point):
         drag.movePane(to: sidebar.convert(point, from: nil))
       case .end:
-        drag.drop { [weak self] id, target in self?.runtime.workspaceStore.moveSplitPane(id, to: target) ?? false }
+        drag.drop { [weak self] id, target in
+          guard let self else { return false }
+          return self.runtime.workspaceStore.sessionManager.commitSplitPreview(keepingLiftedPaneHidden: true) {
+            self.runtime.workspaceStore.moveSplitPane(id, to: target)
+          }
+        }
       case .cancel:
         drag.gestureDidEnd()
       }
@@ -378,24 +459,12 @@ private struct BrowserTabDragPresentation: View {
   }
 
   @ViewBuilder
-  private func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
+  fileprivate func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
     if let tab = workspace.tab(withID: id) {
       DragContent(
         pageURL: tab.url, session: workspace.session(for: id),
         title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
         rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
-        .opacity(1 - drag.paneSnapshotOpacity)
-        .overlay {
-          if let snapshot = drag.paneSnapshot {
-            // A fading page snapshot must never impose its aspect ratio on
-            // the row/tile underneath it as the drag enters the sidebar.
-            GeometryReader { geometry in
-              Image(nsImage: snapshot).resizable().scaledToFill()
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .clipped().opacity(drag.paneSnapshotOpacity)
-            }
-          }
-        }
     }
   }
 

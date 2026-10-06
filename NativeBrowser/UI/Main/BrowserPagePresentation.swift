@@ -12,6 +12,7 @@ final class BrowserPagePresentation {
   let viewport: NSView
   private(set) var toolbar: BrowserToolbarController?
   let splitControl = BrowserSplitPaneControl(frame: .zero)
+  var onMinimizeToSidebar: (() -> Void)?
   private var splitRevealGlass: SplitRevealGlassView?
   private var splitRevealLoadObservation: AnyCancellable?
   private var splitRevealContentFadeToken: UUID?
@@ -23,15 +24,8 @@ final class BrowserPagePresentation {
     self.viewport = viewport
     surface.autoresizingMask = []
     splitControl.dragSource = { [weak viewport] in
-      guard let viewport else { return (.zero, nil) }
-      var image: NSImage?
-      if let bitmap = viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds) {
-        viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
-        let snapshot = NSImage(size: viewport.bounds.size)
-        snapshot.addRepresentation(bitmap)
-        image = snapshot
-      }
-      return (viewport.convert(viewport.bounds, to: nil), image)
+      guard let viewport else { return .zero }
+      return viewport.convert(viewport.bounds, to: nil)
     }
     surface.setFrameOrigin(.zero)
     viewport.addSubview(surface)
@@ -43,7 +37,10 @@ final class BrowserPagePresentation {
     guard toolbar == nil else { return }
     let id = tabID
     splitControl.onClose = { [weak workspace] in workspace?.closeTab(id: id) }
-    splitControl.onMinimize = { [weak workspace] in workspace?.detachSplitPane(id) }
+    splitControl.onMinimize = { [weak self, weak workspace] in
+      if let action = self?.onMinimizeToSidebar { action() }
+      else { workspace?.detachSplitPane(id) }
+    }
     splitControl.onExpand = { [weak workspace] in workspace?.detachSplitPane(id, selectDetached: true) }
     let toolbar = BrowserToolbarController(workspace: workspace, history: history,
       browserView: viewport, tabID: tabID, initiallyVisible: false)

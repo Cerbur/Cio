@@ -75,6 +75,13 @@ final class BrowserSessionManager: ObservableObject {
   var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)? {
     didSet { surfaceHost?.onSplitPaneDrag = onSplitPaneDrag }
   }
+  var onMinimizeSplitPane: ((UUID) -> Bool)? {
+    didSet { surfaceHost?.onMinimizeSplitPane = onMinimizeSplitPane }
+  }
+  func beginPaneLift(_ id: UUID, to frame: CGRect) { surfaceHost?.beginPaneLift(id, to: frame) }
+  func holdPaneForSidebar(_ id: UUID) -> CGRect? { surfaceHost?.holdPaneForSidebar(id) }
+  func collapsePaneToSidebar(_ id: UUID, to frame: CGRect) { surfaceHost?.collapsePaneToSidebar(id, to: frame) }
+  func endPaneSidebarCollapse(_ id: UUID) { surfaceHost?.endPaneSidebarCollapse(id) }
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
     surfaceHost?.previewPaneDrag(tabID, index: index)
   }
@@ -244,6 +251,7 @@ final class BrowserSessionManager: ObservableObject {
     }
     surfaceHost = host
     host.onSplitPaneDrag = onSplitPaneDrag
+    host.onMinimizeSplitPane = onMinimizeSplitPane
     host.onDarkAppearanceChange = { [weak self] dark in
       self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
     }
@@ -269,9 +277,9 @@ final class BrowserSessionManager: ObservableObject {
     surfaceHost?.previewSplit(at: target, incomingPaneCount: incomingPaneCount)
   }
 
-  func commitSplitPreview(_ commit: () -> Bool) -> Bool {
+  func commitSplitPreview(keepingLiftedPaneHidden: Bool = false, _ commit: () -> Bool) -> Bool {
     guard let surfaceHost else { return commit() }
-    return surfaceHost.commitSplitPreview(commit)
+    return surfaceHost.commitSplitPreview(keepingLiftedPaneHidden: keepingLiftedPaneHidden, commit)
   }
 
   func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
