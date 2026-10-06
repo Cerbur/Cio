@@ -21,15 +21,13 @@ enum BrowserLayout {
   static let sidebarTabTrailingControlWidth = sidebarTabCloseButtonWidth + sidebarTabTrailingInset
   static let sidebarSplitMemberSpacing: CGFloat = 5
   static let sidebarSplitSeparatorHeight: CGFloat = 18
-  static let sidebarSplitIconSize: CGFloat = 16
   static let sidebarSplitLabelSpacing: CGFloat = 4
-  static let sidebarSplitLabelInset: CGFloat = 5
   static let sidebarSplitCloseButtonWidth: CGFloat = 18
   static let sidebarTabLabelFontSize: CGFloat = 13
+  static let sidebarTabIconSize: CGFloat = 18
   static let sidebarTabLabelInset: CGFloat = 11
   static let sidebarTabIconSlotWidth: CGFloat = 20
   static let sidebarTabLabelSpacing: CGFloat = 9
-  static let sidebarSplitIconSlotWidth: CGFloat = 18
   static let sidebarSplitLabelFontSize: CGFloat = 12
   static let sidebarSpaceHeaderSpacing: CGFloat = 4
   static let sidebarSpaceHeaderHeight = sidebarTopPinSpacing + sidebarTabRowHeight + sidebarSpaceHeaderSpacing

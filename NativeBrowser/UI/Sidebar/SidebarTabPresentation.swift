@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SidebarTabAppearance {
-  static let faviconSize: CGFloat = 18
+  static let faviconSize = BrowserLayout.sidebarTabIconSize
   static let glassShape = RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius, style: .continuous)
 }
 
@@ -132,10 +132,9 @@ struct SidebarRetainedTabLabel: View, Animatable {
     GeometryReader { geometry in
       let compact = min(1, max(0, compactAmount))
       let tile = min(1, max(0, topPinAmount))
+      // Split members keep the ordinary row's favicon size and leading grid.
       let leading = BrowserLayout.sidebarTabLabelInset
-        + (BrowserLayout.sidebarSplitLabelInset - BrowserLayout.sidebarTabLabelInset) * compact
       let iconWidth = BrowserLayout.sidebarTabIconSlotWidth
-        + (BrowserLayout.sidebarSplitIconSlotWidth - BrowserLayout.sidebarTabIconSlotWidth) * compact
       let spacing = BrowserLayout.sidebarTabLabelSpacing
         + (BrowserLayout.sidebarSplitLabelSpacing - BrowserLayout.sidebarTabLabelSpacing) * compact
       let titleLeading = leading + iconWidth + spacing
@@ -143,8 +142,7 @@ struct SidebarRetainedTabLabel: View, Animatable {
       let iconX = leading + iconWidth / 2
       ZStack(alignment: .topLeading) {
         TabFaviconView(pageURL: pageURL, session: session,
-          size: SidebarTabAppearance.faviconSize
-            + (BrowserLayout.sidebarSplitIconSize - SidebarTabAppearance.faviconSize) * compact * (1 - tile),
+          size: SidebarTabAppearance.faviconSize,
           fallbackLetter: fallbackLetter)
           .position(x: iconX + (geometry.size.width / 2 - iconX) * tile, y: geometry.size.height / 2)
         Text(title)
