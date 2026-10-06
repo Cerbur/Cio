@@ -85,7 +85,7 @@ final class BrowserPagePresentation {
   func hide(animated: Bool) {
     splitTransition.hideGlass()
     viewport.isHidden = true
-    splitControl.isHidden = true
+    splitControl.setPresented(false)
     splitControl.collapse()
     toolbar?.setPageControlsVisible(false, animated: animated)
   }

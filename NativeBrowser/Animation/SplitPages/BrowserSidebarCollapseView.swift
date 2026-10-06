@@ -18,6 +18,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
   private var midpointAction: (() -> Void)?
   private var completion: (() -> Void)?
   private(set) var isFlightFinished = false
+  private(set) var handoffRetentionDuration: TimeInterval = 0
 
   init(frame: CGRect, sourceInWindow: CGRect) {
     sourceFrame = sourceInWindow
@@ -47,7 +48,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     viewport.layoutSubtreeIfNeeded()
   }
 
-  func begin(to destinationInWindow: CGRect, label: AnyView,
+  func begin(to destinationInWindow: CGRect, label: AnyView, duration: TimeInterval,
              onMidpoint: @escaping () -> Void, completion: @escaping () -> Void) {
     let destination = convert(destinationInWindow, from: nil)
     guard let layer = viewport.layer, sourceFrame.width > 0, sourceFrame.height > 0,
@@ -61,7 +62,8 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     self.completion = completion
     plannedLanding = destination
     let direction = BrowserSplitRevealTransition.Direction.sidebarCollapse
-    flightDuration = direction.duration
+    flightDuration = duration
+    handoffRetentionDuration = AnimationValues.SplitPages.sidebarHandoffRetentionDuration
     let origin = BrowserSplitRevealTransition.Geometry.page(sourceFrame)
     let landing = BrowserSplitRevealTransition.Geometry.card(destination, pane: sourceFrame, group: sourceFrame)
     let samples = BrowserSplitRevealTransition.progressSamples(direction)

@@ -80,7 +80,9 @@ final class BrowserSessionManager: ObservableObject {
   }
   func beginPaneLift(_ id: UUID, to frame: CGRect) { surfaceHost?.beginPaneLift(id, to: frame) }
   func holdPaneForSidebar(_ id: UUID) -> CGRect? { surfaceHost?.holdPaneForSidebar(id) }
-  func collapsePaneToSidebar(_ id: UUID, to frame: CGRect) { surfaceHost?.collapsePaneToSidebar(id, to: frame) }
+  func collapsePaneToSidebar(_ id: UUID, to frame: CGRect, duration: TimeInterval) {
+    surfaceHost?.collapsePaneToSidebar(id, to: frame, duration: duration)
+  }
   func endPaneSidebarCollapse(_ id: UUID) { surfaceHost?.endPaneSidebarCollapse(id) }
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
     surfaceHost?.previewPaneDrag(tabID, index: index)

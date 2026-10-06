@@ -99,6 +99,7 @@ struct TabSidebarView: View {
   @State private var isSidebarHovered = false
   @State private var isClearHovered = false
   @State private var hoveredNewTabSpaceID: UUID?
+  @State private var hoveredTabIDs = Set<UUID>()
   @State private var clearingSpaceID: UUID?
   // Collapse hides a snapshot of the pins outside Stage, not every pin that
   // becomes inactive later. Pins added after that snapshot stay visible.
@@ -116,7 +117,7 @@ struct TabSidebarView: View {
   var body: some View {
     GeometryReader { geometry in
       VStack(spacing: 0) {
-        pinnedGrid(columns: columns(for: geometry.size.width), width: geometry.size.width)
+        pinnedGrid(columns: columns(for: geometry.size.width))
           .padding(.horizontal, topPinEdgeInset)
           .padding(.top, chromeLayout.topInset + topPinEdgeInset)
           .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
@@ -158,6 +159,7 @@ struct TabSidebarView: View {
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
       .onAppear {
+        tabDrag.splitGroupProvider = { [weak workspace] id in workspace?.splitGroup(containing: id) }
         tabDrag.layoutProvider = { [weak workspace, weak chromeLayout, weak tabDrag] in
           guard let workspace, let chromeLayout, let tabDrag else { return nil }
           let space = workspace.selectedSpace
@@ -230,7 +232,9 @@ struct TabSidebarView: View {
     let panelRows = SpaceTabPanelRow.make(
       spaceID: space.id, pinnedIDs: pinnedTabs.map(\.id), temporaryIDs: temporaryTabs.map(\.id),
       groups: space.splitGroups, liftedID: tabDrag.sidebarLiftedTabID,
-      drop: (tabDrag.isDragging ? tabDrag.target : nil).map { .init(tier: $0.tier, before: $0.before) })
+      liftedIDs: tabDrag.sidebarLiftedTabIDs,
+      drop: (tabDrag.isDragging ? tabDrag.target : nil).map { .init(tier: $0.tier, before: $0.before) },
+      paneCollapse: tabDrag.paneCollapse)
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
 
@@ -238,6 +242,10 @@ struct TabSidebarView: View {
       SpaceTabPanel(rows: panelRows, drag: tabDrag) { panelRow in
         panelElement(panelRow, space: space, clearableCount: clearableCount,
                      spotlightIsActive: spotlightIsActive, newTabIsHovered: newTabIsHovered)
+      } tabContent: { row, id in
+        panelTab(row, id: id)
+      } rowBackground: { row in
+        groupSurface(row)
       }
       .padding(.horizontal, BrowserLayout.sidebarContentInset)
       .padding(.bottom, 18)
@@ -278,10 +286,8 @@ struct TabSidebarView: View {
   @ViewBuilder
   private func panelElement(_ container: SpaceTabPanelRow, space: BrowserSpace,
                             clearableCount: Int, spotlightIsActive: Bool, newTabIsHovered: Bool) -> some View {
-    if let group = container.splitGroup, let tier = container.tier {
-      splitTabElement(group, tier: tier)
-    } else if let id = container.draggableTabID, let tab = workspace.tab(withID: id), let tier = container.tier {
-      tabElement(tab, tier: tier)
+    if let group = container.splitGroup {
+      groupDecoration(group, members: container.tabIDs, tier: container.tier)
     } else if container.elements == [.divider] {
       dividerElement(in: space, clearableCount: clearableCount)
     } else if container.elements == [.newTab] {
@@ -289,7 +295,7 @@ struct TabSidebarView: View {
     } else if container.id == .gap(space.id) {
       SidebarTabDropSlot()
     } else {
-      Color.clear
+      Color.clear.allowsHitTesting(false)
     }
   }
 
@@ -365,47 +371,38 @@ struct TabSidebarView: View {
     }
   }
 
-  private func pinnedGrid(columns: Int, width: CGFloat) -> some View {
-    let tileSlots = slots(workspace.globalPinnedTabs, tier: .global)
+  private func pinnedGrid(columns: Int) -> some View {
+    let rows = SpaceTabPanelRow.makeTabs(workspace.globalPinnedTabs.map(\.id),
+      spaceID: workspace.selectedSpaceID, tier: .global,
+      groups: workspace.spaces.flatMap(\.splitGroups), liftedID: tabDrag.sidebarLiftedTabID,
+      liftedIDs: tabDrag.sidebarLiftedTabIDs,
+      drop: (tabDrag.isDragging ? tabDrag.target : nil).map { .init(tier: $0.tier, before: $0.before) },
+      paneCollapse: tabDrag.paneCollapse)
     return VStack(alignment: .leading, spacing: 3) {
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: BrowserLayout.sidebarTopPinSpacing), count: columns),
-                spacing: BrowserLayout.sidebarTopPinSpacing) {
-        ForEach(tileSlots) { slot in
-          switch slot {
-          case .tab(let tab):
-            PinnedTile(tab: tab, session: workspace.session(for: tab.id),
-                       selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
-                       height: topPinHeight,
-                       isTabDragActive: tabDrag.tabID != nil) {
-              select(tab.id)
-            } onClose: {
-              workspace.closeTab(id: tab.id)
-            } onPinInSpace: {
-              withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
-            } onMakeTemporary: {
-              withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
-            }
-            .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
-          case .group(let group):
-            splitTabElement(group, tier: .global)
-              .frame(height: topPinHeight)
-              .modifier(SidebarTabDragItem(drag: tabDrag, tabID: group.leftTabID, tier: .global))
-          case .gap:
-            SidebarTabDropSlot().frame(height: topPinHeight)
+      if rows.isEmpty {
+        Image(systemName: "pin")
+          .font(.system(size: 17, weight: .medium))
+          .foregroundStyle(.tertiary)
+          .frame(maxWidth: .infinity)
+          .frame(height: topPinHeight)
+          .background(Color.primary.opacity(0.04), in: SidebarTabAppearance.glassShape)
+          .help("Pin tabs for all Spaces")
+      } else {
+        SpaceTabPanel(rows: rows, drag: tabDrag, columns: columns, rowHeight: topPinHeight,
+          rowSpacing: BrowserLayout.sidebarTopPinSpacing) { row in
+          if let group = row.splitGroup {
+            groupDecoration(group, members: row.tabIDs, tier: .global)
+          } else if row.id == .gap(workspace.selectedSpaceID) {
+            SidebarTabDropSlot()
+          } else {
+            Color.clear.allowsHitTesting(false)
           }
+        } tabContent: { row, id in
+          panelTab(row, id: id)
+        } rowBackground: { row in
+          groupSurface(row)
         }
-        if tileSlots.isEmpty {
-          Image(systemName: "pin")
-            .font(.system(size: 17, weight: .medium))
-            .foregroundStyle(.tertiary)
-            .frame(maxWidth: .infinity)
-            .frame(height: topPinHeight)
-            .background(Color.primary.opacity(0.04), in: SidebarTabAppearance.glassShape)
-            .help("Pin tabs for all Spaces")
-          }
       }
-      .animation(.smooth(duration: AnimationValues.Sidebar.reorderDuration), value: tileSlots.map(\.id))
-
     }
     .help("Workspace pins stay visible when you switch Spaces")
   }
@@ -419,68 +416,67 @@ struct TabSidebarView: View {
     return space.pinnedTabIDs.filter { !hiddenIDs.contains($0) }.compactMap(workspace.tab(withID:))
   }
 
-  /// While a tab is lifted it leaves its tier, and the tier it would land in
-  /// opens a gap at that place.
-  private func slots(_ tabs: [BrowserTab], tier: WorkspaceCollection.TabTier) -> [SidebarSlot] {
-    let available = tabs.filter {
-      guard let lifted = tabDrag.sidebarLiftedTabID else { return true }
-      return $0.id != lifted && workspace.splitGroup(containing: $0.id)?.leftTabID != lifted
+  @ViewBuilder
+  private func panelTab(_ row: SpaceTabPanelRow, id: UUID) -> some View {
+    if let tab = workspace.tab(withID: id), let tier = row.tier {
+      tabElement(tab, tier: tier, group: row.splitGroup, compact: row.tabIDs.count > 1)
+        .onHover { hovering in
+          if hovering { hoveredTabIDs.insert(id) } else { hoveredTabIDs.remove(id) }
+        }
     }
-    let ids = Set(available.map(\.id))
-    var emitted = Set<UUID>()
-    var result: [SidebarSlot] = []
-    for tab in available {
-      guard !emitted.contains(tab.id) else { continue }
-      if let group = workspace.splitGroup(containing: tab.id), group.tabIDs.allSatisfy({ ids.contains($0) }) {
-        result.append(.group(group))
-        emitted.formUnion(group.tabIDs)
-      } else {
-        result.append(.tab(tab))
-        emitted.insert(tab.id)
+  }
+
+  private func groupDecoration(_ group: BrowserSplitLayout, members: [UUID],
+                               tier: WorkspaceCollection.TabTier?) -> some View {
+    SidebarSplitTabDecoration(group: group, members: members,
+      isHovered: members.contains { hoveredTabIDs.contains($0) } && tabDrag.tabID == nil,
+      usesScrollEdge: tier != .global) {
+        workspace.ungroupSplit(containing: group.leftTabID)
       }
-    }
-    if tabDrag.isDragging, let target = tabDrag.target, target.tier == tier {
-      let index = target.before.flatMap { before in result.firstIndex { $0.contains(before) } }
-      result.insert(.gap, at: index ?? result.count)
-    }
-    return result
   }
 
   @ViewBuilder
-  private func splitTabElement(_ group: BrowserSplitLayout, tier: WorkspaceCollection.TabTier) -> some View {
-    if let left = workspace.tab(withID: group.leftTabID), let right = workspace.tab(withID: group.rightTabID) {
-      let focusedID = group.focusedTabID ?? group.leftTabID
-      let owner = workspace.spaceID(forTabID: group.leftTabID) ?? workspace.selectedSpaceID
-      SidebarSplitTabRow(group: group, left: left, right: right,
-        leftSession: workspace.session(for: left.id), rightSession: workspace.session(for: right.id),
-        middle: group.middleTabID.flatMap { workspace.tab(withID: $0) },
-        middleSession: group.middleTabID.flatMap { workspace.session(for: $0) },
-        selectedTabID: workspace.isSpotlightPresented ? nil : workspace.selectedTabID,
-        isTabDragActive: tabDrag.tabID != nil, tier: tier, onSelect: select, onClose: { workspace.closeTab(id: $0) },
-        onUngroup: { workspace.ungroupSplit(containing: group.leftTabID) },
-        onSwap: { workspace.swapSplitSides(containing: focusedID) },
-        onPinGlobally: { workspace.moveSplitGroup(containing: focusedID, to: .global) },
-        onPin: { workspace.moveSplitGroup(containing: focusedID, to: .space(tier == .global ? workspace.selectedSpaceID : owner)) },
-        onMakeTemporary: { workspace.moveSplitGroup(containing: focusedID, to: .temporary(tier == .global ? workspace.selectedSpaceID : owner)) },
-        onToggleSpacePin: { toggleSpacePin(focusedID) })
+  private func groupSurface(_ row: SpaceTabPanelRow) -> some View {
+    if let group = row.splitGroup {
+      let selected = group.contains(workspace.selectedTabID) && !workspace.isSpotlightPresented
+      let isTopPin = row.tier == .global
+      Color.clear
+        .modifier(SidebarTabSurface(isStable: selected,
+          isHovered: isTopPin && row.tabIDs.contains { hoveredTabIDs.contains($0) } && tabDrag.tabID == nil,
+          idleFill: isTopPin ? 0.04 : 0, usesScrollEdge: !isTopPin))
+        .scaleEffect(isTopPin && selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     }
   }
 
-  private func tabElement(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier) -> some View {
-    SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
-                  selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
-                  tier: tier,
-                  isTabDragActive: tabDrag.tabID != nil) {
-      select(tab.id)
-    } onClose: {
-      workspace.closeTab(id: tab.id)
-    } onPinGlobally: {
-      withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .global) }
-    } onPinInSpace: {
-      toggleSpacePin(tab.id)
-    } onMakeTemporary: {
-      toggleSpacePin(tab.id)
-    }
+  private func tabElement(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier,
+                          group: BrowserSplitLayout?, compact: Bool) -> some View {
+    let anchor = group?.focusedTabID ?? group?.leftTabID ?? tab.id
+    return SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
+      selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
+      tier: tier, group: group, isCompact: compact,
+      isTabDragActive: tabDrag.tabID != nil,
+      onSelect: { select(tab.id) }, onClose: { workspace.closeTab(id: tab.id) },
+      onPinGlobally: {
+        withAnimation(tabDrag.panelLayoutAnimation) {
+          if group != nil { workspace.moveSplitGroup(containing: anchor, to: .global) }
+          else { _ = workspace.moveTab(tab.id, to: .global) }
+        }
+      }, onPinInSpace: {
+        if tier == .global {
+          withAnimation(tabDrag.panelLayoutAnimation) {
+            if group != nil { workspace.moveSplitGroup(containing: anchor, to: .space(workspace.selectedSpaceID)) }
+            else { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
+          }
+        } else { toggleSpacePin(anchor) }
+      }, onMakeTemporary: {
+        if tier == .global {
+          withAnimation(tabDrag.panelLayoutAnimation) {
+            if group != nil { workspace.moveSplitGroup(containing: anchor, to: .temporary(workspace.selectedSpaceID)) }
+            else { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+          }
+        } else { toggleSpacePin(anchor) }
+      }, onUngroup: { workspace.ungroupSplit(containing: anchor) },
+      onSwap: { workspace.swapSplitSides(containing: anchor) })
   }
 
   private func select(_ id: UUID) {
@@ -699,72 +695,6 @@ private struct SidebarResizeHandle: NSViewRepresentable {
   }
 }
 
-private struct PinnedTile: View {
-  let tab: BrowserTab
-  let session: BrowserSession?
-  let selected: Bool
-  let height: CGFloat
-  let isTabDragActive: Bool
-  let onSelect: () -> Void
-  let onClose: () -> Void
-  let onPinInSpace: () -> Void
-  let onMakeTemporary: () -> Void
-  @StateObject private var interaction = BrowserInteractionState()
-
-  private var showsHover: Bool { interaction.isHovered && !isTabDragActive }
-
-  var body: some View {
-    Button(action: onSelect) {
-      TabFaviconView(
-        pageURL: tab.url,
-        session: session,
-        size: SidebarTabAppearance.faviconSize,
-        fallbackLetter: tab.pinFallbackLetter)
-        .frame(maxWidth: .infinity)
-        .frame(height: height)
-        .contentShape(SidebarTabAppearance.glassShape)
-    }
-    .buttonStyle(.plain)
-    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover, idleFill: 0.04,
-                                usesScrollEdge: false, stableBorderOpacity: 0.5, hoverBorderOpacity: 0.25))
-    .scaleEffect(selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
-    .onHover { interaction.isHovered = $0 }
-    .contextMenu {
-      Button("Pin in This Space", action: onPinInSpace)
-      Button("Make Temporary", action: onMakeTemporary)
-      Button("Close Tab", action: onClose)
-    }
-    .help(tab.displayTitle)
-    .accessibilityLabel(tab.displayTitle)
-    .accessibilityAddTraits(selected ? [.isSelected] : [])
-  }
-}
-
-/// A tab, or the gap a lifted tab would land in.
-private enum SidebarSlot: Identifiable {
-  case tab(BrowserTab)
-  case group(BrowserSplitLayout)
-  case gap
-
-  private static let gapID = UUID()
-
-  var id: UUID {
-    switch self {
-    case .tab(let tab): return tab.id
-    case .group(let group): return group.id
-    case .gap: return Self.gapID
-    }
-  }
-
-  func contains(_ tabID: UUID) -> Bool {
-    switch self {
-    case .tab(let tab): return tab.id == tabID
-    case .group(let group): return group.contains(tabID)
-    case .gap: return false
-    }
-  }
-}
-
 extension BrowserTab {
   /// Top pin shows a site's initial when it has no favicon.
   var pinFallbackLetter: String {
@@ -773,62 +703,32 @@ extension BrowserTab {
   }
 }
 
-/// A single sidebar row containing independently selectable split panes.
-private struct SidebarSplitTabRow: View {
+/// The group adds only native separators and its ungroup control. Tabs are
+/// retained siblings in SpaceTabPanel, with no nested surface/background.
+private struct SidebarSplitTabDecoration: View {
   let group: BrowserSplitLayout
-  let left: BrowserTab
-  let right: BrowserTab
-  let leftSession: BrowserSession?
-  let rightSession: BrowserSession?
-  let middle: BrowserTab?
-  let middleSession: BrowserSession?
-  let selectedTabID: UUID?
-  let isTabDragActive: Bool
-  let tier: WorkspaceCollection.TabTier
-  let onSelect: (UUID) -> Void
-  let onClose: (UUID) -> Void
+  let members: [UUID]
+  let isHovered: Bool
+  let usesScrollEdge: Bool
   let onUngroup: () -> Void
-  let onSwap: () -> Void
-  let onPinGlobally: () -> Void
-  let onPin: () -> Void
-  let onMakeTemporary: () -> Void
-  let onToggleSpacePin: () -> Void
-  @State private var isHovered = false
+  @State private var isButtonHovered = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  private var selected: Bool { group.contains(selectedTabID) }
-  private var showsHover: Bool { isHovered && !isTabDragActive }
-  private var isPinned: Bool {
-    if case .temporary = tier { return false }
-    return true
-  }
-  private var contentInset: CGFloat { isPinned ? 2 : 3 }
+  private var showsButton: Bool { isHovered || isButtonHovered }
 
   var body: some View {
-    HStack(spacing: isPinned ? 3 : 2) {
-      member(left, session: leftSession)
-      if let middle { member(middle, session: middleSession) }
-      member(right, session: rightSession)
-    }
-    .padding(contentInset)
-    .frame(maxWidth: .infinity)
-    .containerShape(SidebarTabAppearance.glassShape)
-    .modifier(SidebarScrollEdge(isEnabled: tier != .global))
-    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover,
-                                idleFill: tier == .global ? 0.04 : 0.035, usesScrollEdge: tier != .global))
-    .scaleEffect(tier == .global && selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
-    .contextMenu {
-      Button("Ungroup Tabs", action: onUngroup)
-      Button("Swap Sides", action: onSwap)
-      Button("Pin Group for All Spaces", action: onPinGlobally)
-      if tier == .global {
-        Button("Pin Group in This Space", action: onPin)
-        Button("Make Group Temporary", action: onMakeTemporary)
-      } else {
-        Button(isPinned ? "Make Group Temporary" : "Pin Group in This Space", action: onToggleSpacePin)
-          .keyboardShortcut("d", modifiers: .command)
+    HStack(spacing: 0) {
+      ForEach(members, id: \.self) { id in
+        Color.clear.frame(maxWidth: .infinity)
+        if id != members.last {
+          Divider()
+            .frame(height: BrowserLayout.sidebarSplitSeparatorHeight)
+            .frame(width: BrowserLayout.sidebarSplitMemberSpacing)
+        }
       }
     }
+    .allowsHitTesting(false)
+    .modifier(SidebarScrollEdge(isEnabled: usesScrollEdge))
     .overlay(alignment: .topLeading) {
       Button(action: onUngroup) {
         Image(systemName: "arrow.down.right.and.arrow.up.left")
@@ -841,66 +741,15 @@ private struct SidebarSplitTabRow: View {
       }
       .buttonStyle(.plain)
       .offset(x: -5, y: -6)
-      .opacity(showsHover ? 1 : 0)
-      .allowsHitTesting(showsHover)
-      .accessibilityHidden(!showsHover)
-      .animation(reduceMotion ? nil : .easeOut(duration: AnimationValues.Sidebar.hoverDuration), value: showsHover)
+      .opacity(showsButton ? 1 : 0)
+      .allowsHitTesting(showsButton)
+      .accessibilityHidden(!showsButton)
+      .onHover { isButtonHovered = $0 }
+      .animation(reduceMotion ? nil : .easeOut(duration: AnimationValues.Sidebar.hoverDuration), value: showsButton)
       .help("Ungroup Tabs — keep the left tab active")
       .accessibilityLabel("Ungroup Tabs")
     }
-    .onHover { isHovered = $0 }
     .accessibilityIdentifier("split-group-\(group.id.uuidString)")
-    .help(([left] + (middle.map { [$0] } ?? []) + [right]).map(\.displayTitle).joined(separator: " | "))
-  }
-
-  private func member(_ tab: BrowserTab, session: BrowserSession?) -> some View {
-    let focused = selected && selectedTabID == tab.id
-    let showsClose = showsHover && tier != .global
-    return HStack(spacing: 0) {
-      Button {
-        onSelect(tab.id)
-      } label: {
-        HStack(spacing: 4) {
-          TabFaviconView(pageURL: tab.url, session: session, size: tier == .global ? SidebarTabAppearance.faviconSize : 16,
-                         fallbackLetter: tier == .global ? tab.pinFallbackLetter : nil)
-            .frame(width: 18)
-          if tier != .global {
-            Text(tab.displayTitle)
-              .font(.system(size: 12))
-              .lineLimit(1)
-            Spacer(minLength: 0)
-          }
-        }
-        .padding(.leading, tier == .global ? 0 : 5)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.plain)
-      .accessibilityLabel(tab.displayTitle)
-      .accessibilityAddTraits(focused ? [.isSelected] : [])
-      if tier != .global {
-        Button { onClose(tab.id) } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 8, weight: .semibold))
-            .frame(width: 18)
-            .frame(maxHeight: .infinity)
-        }
-        .buttonStyle(.plain)
-        .opacity(showsClose ? 0.65 : 0)
-        .allowsHitTesting(showsClose)
-        .accessibilityLabel("Close \(tab.displayTitle)")
-      }
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background {
-      if isPinned {
-        ContainerRelativeShape().fill(.primary.opacity(showsHover ? 0.06 : 0.04))
-      } else {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(.primary.opacity(showsHover ? 0.06 : 0.04))
-      }
-    }
-    .help(tab.displayTitle)
   }
 }
 
@@ -918,26 +767,6 @@ private struct SpaceIconView: View {
     .font(.system(size: size))
     .frame(width: size, height: size)
     .accessibilityHidden(true)
-  }
-}
-
-/// Keeps Space and Tab titles, icons and hit areas on the same grid.
-private struct SidebarRowLabel<Icon: View>: View {
-  let title: String
-  var selected = false
-  @ViewBuilder let icon: () -> Icon
-
-  var body: some View {
-    HStack(spacing: 9) {
-      icon().frame(width: 20)
-      Text(title)
-        .font(.callout.weight(selected ? .semibold : .regular))
-        .lineLimit(1)
-      Spacer(minLength: 0)
-    }
-    .padding(.leading, 11)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .contentShape(Rectangle())
   }
 }
 
@@ -981,60 +810,93 @@ private struct SidebarSpaceRow: View {
   }
 }
 
+/// A tab owns the same native select/close buttons in every row configuration.
 private struct SidebarTabRow: View {
   let tab: BrowserTab
   let session: BrowserSession?
   let selected: Bool
   let tier: WorkspaceCollection.TabTier
+  let group: BrowserSplitLayout?
+  let isCompact: Bool
   let isTabDragActive: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
   let onPinGlobally: () -> Void
   let onPinInSpace: () -> Void
   let onMakeTemporary: () -> Void
+  let onUngroup: () -> Void
+  let onSwap: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
 
-  private var showsHover: Bool { interaction.isHovered && !isTabDragActive }
-  private var showsCloseButton: Bool { (interaction.isHovered || selected) && !isTabDragActive }
+  private var isTopPin: Bool { tier == .global }
+  private var showsCloseButton: Bool {
+    !isTopPin && !isTabDragActive && (interaction.isHovered || (selected && !isCompact))
+  }
 
   var body: some View {
     HStack(spacing: 0) {
       Button(action: onSelect) {
-        SidebarRowLabel(title: tab.displayTitle, selected: selected) {
-          TabFaviconView(pageURL: tab.url, session: session, size: SidebarTabAppearance.faviconSize)
-        }
+        SidebarRetainedTabLabel(pageURL: tab.url, session: session, title: tab.displayTitle,
+          fallbackLetter: isTopPin ? tab.pinFallbackLetter : nil, selected: selected,
+          compactAmount: isCompact ? 1 : 0, topPinAmount: isTopPin ? 1 : 0)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .accessibilityLabel(tab.displayTitle)
       Button(action: onClose) {
         Image(systemName: "xmark")
-          .font(.system(size: 10, weight: .semibold))
-          .frame(width: 29)
+          .font(.system(size: isCompact ? 8 : 10, weight: .semibold))
+          .frame(width: isTopPin ? 0 : (isCompact ? BrowserLayout.sidebarSplitCloseButtonWidth
+            : BrowserLayout.sidebarTabCloseButtonWidth))
           .frame(maxHeight: .infinity)
       }
       .buttonStyle(.plain)
       .opacity(showsCloseButton ? 0.7 : 0)
       .allowsHitTesting(showsCloseButton)
+      .accessibilityHidden(!showsCloseButton)
       .help("Close Tab")
+      .accessibilityLabel("Close \(tab.displayTitle)")
     }
-    .padding(.trailing, 3)
-    .modifier(SidebarScrollEdge())
-    .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover))
+    .padding(.trailing, isCompact || isTopPin ? 0 : BrowserLayout.sidebarTabTrailingInset)
+    .modifier(SidebarScrollEdge(isEnabled: !isTopPin))
+    .modifier(SidebarTabSurface(isStable: selected && group == nil,
+      isHovered: group == nil && interaction.isHovered && !isTabDragActive,
+      idleFill: group == nil && isTopPin ? 0.04 : 0, usesScrollEdge: !isTopPin,
+      stableBorderOpacity: isTopPin ? 0.5 : 0.35,
+      hoverBorderOpacity: isTopPin ? 0.25 : 0))
+    .scaleEffect(isTopPin && selected && group == nil ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
-      Button("Pin for All Spaces", action: onPinGlobally)
-      if case .space = tier {
-        Button("Make Temporary", action: onMakeTemporary)
-          .keyboardShortcut("d", modifiers: .command)
+      if group != nil {
+        Button("Ungroup Tabs", action: onUngroup)
+        Button("Swap Sides", action: onSwap)
+        Button("Pin Group for All Spaces", action: onPinGlobally)
+        if isTopPin {
+          Button("Pin Group in This Space", action: onPinInSpace)
+          Button("Make Group Temporary", action: onMakeTemporary)
+        } else if case .space = tier {
+          Button("Make Group Temporary", action: onMakeTemporary)
+            .keyboardShortcut("d", modifiers: .command)
+        } else {
+          Button("Pin Group in This Space", action: onPinInSpace)
+            .keyboardShortcut("d", modifiers: .command)
+        }
       } else {
-        Button("Pin in This Space", action: onPinInSpace)
-          .keyboardShortcut("d", modifiers: .command)
+        if !isTopPin { Button("Pin for All Spaces", action: onPinGlobally) }
+        if case .space = tier {
+          Button("Make Temporary", action: onMakeTemporary)
+            .keyboardShortcut("d", modifiers: .command)
+        } else {
+          Button("Pin in This Space", action: onPinInSpace)
+            .keyboardShortcut("d", modifiers: .command)
+        }
       }
       Button("Close Tab", action: onClose)
     }
     .help(tab.displayTitle)
     .accessibilityAddTraits(selected ? [.isSelected] : [])
   }
-
 }
 
 /// Locks each precision-scroll gesture to one axis. Horizontal events are

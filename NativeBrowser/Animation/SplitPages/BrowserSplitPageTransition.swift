@@ -86,7 +86,8 @@ final class BrowserSplitPageTransition {
 
   func animate(in pane: CGRect, from initial: BrowserSplitRevealTransition.Geometry,
                to destination: BrowserSplitRevealTransition.Geometry,
-               direction: BrowserSplitRevealTransition.Direction, onCompletion: @escaping () -> Void) {
+               direction: BrowserSplitRevealTransition.Direction, duration capturedDuration: TimeInterval? = nil,
+               onCompletion: @escaping () -> Void) {
     guard let page, let layer = page.viewport.layer, pane.width > 0, pane.height > 0 else {
       onCompletion()
       return
@@ -112,7 +113,7 @@ final class BrowserSplitPageTransition {
       }
       onCompletion()
     }
-    let duration = direction.duration
+    let duration = capturedDuration ?? direction.duration
     flight = Flight(token: token, frame: pane, direction: direction,
                     duration: duration, completion: completion)
     let initial = initial.rebased(to: pane.size)
@@ -123,7 +124,7 @@ final class BrowserSplitPageTransition {
     let surfaceFrame = CGRect(origin: .zero, size: pane.size)
     if page.surface.frame != surfaceFrame { page.surface.frame = surfaceFrame }
     layer.zPosition = direction == .dismiss ? 0 : 1
-    page.splitControl.isHidden = true
+    page.splitControl.setPresented(false)
     if initial.glassOpacity > 0 || destination.glassOpacity > 0 {
       beginGlass(direction: direction, from: initial.glassOpacity, to: destination.glassOpacity,
                  duration: duration)

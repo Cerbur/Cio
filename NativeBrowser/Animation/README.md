@@ -11,6 +11,7 @@ UI 组件负责状态和交互，这个包负责动画参数、速度偏好以�
 | --- | --- | --- |
 | `AnimationValues.swift` | `AnimationValues.Speed` | 三档比例、时间换算规则 |
 | `SplitPageAnimationValues.swift` | `AnimationValues.SplitPages` | 分屏展开、消失、挤压、黄灯收起和玻璃交接 |
+| `SplitControlAnimationValues.swift` | `AnimationValues.SplitControl` | 页面到位后的分割线 / 三点把手同步淡入、热区悬停强调 |
 | `TabDragAnimationValues.swift` | `AnimationValues.TabDrag` | 浮块托起、变形、排序、落点和交接 |
 | `SidebarAnimationValues.swift` | `AnimationValues.Sidebar` | 侧栏开合、Space 分页、悬停、清空反馈 |
 | `GlassComponentAnimationValues.swift` | `AnimationValues.GlassComponent` | 一级玻璃聚拢/扩散、移动与弹性尺寸模板 |

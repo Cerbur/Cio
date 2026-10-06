@@ -69,13 +69,17 @@ final class SidebarTabDrag {
   private(set) var isPaneDrag = false
   private(set) var paneGlassOpacity: Double = 1
   private(set) var isMinimizingPane = false
+  private(set) var paneCollapse: SpaceTabPanelRow.PaneCollapse?
+  private(set) var paneCollapseDuration: TimeInterval?
   @ObservationIgnored private var paneLandingFrame: CGRect?
   @ObservationIgnored private var paneCollapseCommit: (() -> Bool)?
-  @ObservationIgnored private var paneCollapseFlightFinished = false
   private(set) var isExpandingIntoSplit = false
   private(set) var splitLandingTabIDs: [UUID]?
+  private(set) var splitLandingDuration: TimeInterval?
+  @ObservationIgnored private var liftedSourceTabIDs = Set<UUID>()
   @ObservationIgnored private var presentedFloatingFrame: CGRect?
   @ObservationIgnored var layoutProvider: (() -> SidebarTabDragLayout?)?
+  @ObservationIgnored var splitGroupProvider: ((UUID) -> BrowserSplitLayout?)?
   @ObservationIgnored private var paneSourceTabIDs = Set<UUID>()
   private(set) var tabID: UUID?
   private(set) var phase = Phase.lifted
@@ -95,6 +99,7 @@ final class SidebarTabDrag {
   /// The tab that is out of its tier while it follows the pointer.
   var liftedTabID: UUID? { phase == .lifted ? tabID : nil }
   var sidebarLiftedTabID: UUID? { isPaneDrag ? nil : liftedTabID }
+  var sidebarLiftedTabIDs: Set<UUID> { sidebarLiftedTabID == nil ? [] : liftedSourceTabIDs }
   var isDragging: Bool { liftedTabID != nil }
 
   @ObservationIgnored var externalBounds: (() -> CGRect)?
@@ -247,6 +252,23 @@ final class SidebarTabDrag {
     return isPaneDrag && phase == .lifted ? 1 : (tabID == id ? 0 : 1)
   }
 
+  /// The reserved destination is hidden from the first frame; a minimizing
+  /// group's original leader must remain visible in its source container.
+  func isPaneCollapseDestination(_ id: UUID) -> Bool {
+    isMinimizingPane && tabID == id
+  }
+
+  var panelLayoutAnimation: Animation? {
+    guard !reduceMotion else { return nil }
+    if let duration = paneCollapseDuration {
+      return BrowserSplitRevealTransition.Direction.sidebarCollapse.animation(duration: duration)
+    }
+    if let duration = splitLandingDuration {
+      return BrowserSplitRevealTransition.Direction.enter.animation(duration: duration)
+    }
+    return .smooth(duration: AnimationValues.Sidebar.reorderDuration)
+  }
+
   /// SwiftUI still completes the click on the button a drag started from when
   /// the mouse is released over it, so that click is ignored.
   func suppressesClick(on id: UUID) -> Bool {
@@ -324,6 +346,7 @@ final class SidebarTabDrag {
   func minimizePane(_ id: UUID, tier: WorkspaceCollection.TabTier, frame: CGRect,
                     commit: @escaping () -> Bool) -> Bool {
     guard tabID == nil, !reduceMotion, let begin = onPaneCollapseBegin,
+          let group = splitGroupProvider?(id),
           let landing = projectedPaneLandingFrame(id, in: tier) else { return false }
     generation += 1
     isPaneDrag = true
@@ -342,7 +365,13 @@ final class SidebarTabDrag {
     landingTier = tier
     programmaticLandingPending = true
     paneCollapseCommit = commit
-    paneCollapseFlightFinished = false
+    let duration = BrowserSplitRevealTransition.Direction.sidebarCollapse.duration
+    paneCollapseDuration = duration
+    // Reserve the final identity now. Opening the slot and flying the page
+    // share one captured clock; the midpoint never adds another row.
+    withAnimation(BrowserSplitRevealTransition.Direction.sidebarCollapse.animation(duration: duration)) {
+      paneCollapse = .init(tabID: id, tier: tier, group: group)
+    }
     begin(id, landing)
     return true
   }
@@ -351,10 +380,21 @@ final class SidebarTabDrag {
   /// Both containers use the shared row height, so its landing is known before
   /// changing workspace membership. Independent rows and Top Pins stay put.
   private func projectedPaneLandingFrame(_ id: UUID, in tier: WorkspaceCollection.TabTier) -> CGRect? {
-    if let group = panelRows.values.first(where: {
+    if tier != .global, let group = panelRows.values.first(where: {
       $0.row.tier == tier && $0.row.splitGroup?.contains(id) == true
     }) {
       return group.frame.offsetBy(dx: 0, dy: BrowserLayout.sidebarTabRowHeight + BrowserLayout.sidebarRowSpacing)
+    }
+    if tier == .global, let layout = layoutProvider?(),
+       let group = splitGroupProvider?(id),
+       let index = layout.globalTabIDs.firstIndex(of: group.leftTabID),
+       let first = frame(of: layout.globalTabIDs[0], in: .global) {
+      let columns = max(1, Int((topPinFrame.width + BrowserLayout.sidebarTopPinSpacing)
+        / (layout.tileSize.width + BrowserLayout.sidebarTopPinSpacing)))
+      let slot = index + 1
+      return CGRect(x: first.minX + CGFloat(slot % columns) * (layout.tileSize.width + BrowserLayout.sidebarTopPinSpacing),
+        y: first.minY + CGFloat(slot / columns) * (layout.tileSize.height + BrowserLayout.sidebarTopPinSpacing),
+        width: layout.tileSize.width, height: layout.tileSize.height)
     }
     return frame(of: id, in: tier)
   }
@@ -363,13 +403,8 @@ final class SidebarTabDrag {
     guard isMinimizingPane, tabID == id, let commit = paneCollapseCommit else { return }
     paneCollapseCommit = nil
     let tier = sourceTier
-    // The group leader's old registration describes the whole split row.
-    // Wait for the newly detached tab's own row before capturing its landing.
-    if panelRows.values.contains(where: {
-      $0.row.tier == tier && $0.row.draggableTabID == id && $0.row.splitGroup != nil
-    }) {
-      items[ItemKey(id: id, tier: tier)] = nil
-    }
+    // The destination was already registered under the detached tab identity.
+    // Do not discard it when detaching the original split leader.
     var transaction = Transaction(animation: nil)
     transaction.disablesAnimations = true
     var committed = false
@@ -378,10 +413,9 @@ final class SidebarTabDrag {
     programmaticLandingPending = false
     if let frame = frame(of: id, in: tier) {
       land(in: frame, style: Style(tier))
-    } else {
-      // New rows report their frame via register; no timed pause between halves.
-      settle(id, in: tier)
     }
+    // Registration can confirm the prebuilt slot later. Never use the drag's
+    // shorter frame-wait timeout to cancel a still-running collapse flight.
   }
 
   func movePane(to point: CGPoint) {
@@ -451,6 +485,7 @@ final class SidebarTabDrag {
     finish(animated: false)
     generation += 1
     let id = key.id
+    liftedSourceTabIDs = Set(splitGroupProvider?(id)?.tabIDs ?? [id])
     startedFromStableTab = isStableTab?(id) ?? false
     let tierIDs = layout.tabIDs(in: key.tier)
     let next = tierIDs.firstIndex(of: id).flatMap { index in
@@ -488,6 +523,7 @@ final class SidebarTabDrag {
 
   func prepareSplitLanding(tabIDs: [UUID]) {
     splitLandingTabIDs = tabIDs
+    splitLandingDuration = BrowserSplitRevealTransition.Direction.enter.duration
   }
 
   /// Hand the floating glass over to the native page viewport. That common
@@ -496,8 +532,9 @@ final class SidebarTabDrag {
     let source = presentedFloatingFrame ?? CGRect(
       x: anchor.x - grab.x * size.width, y: anchor.y - grab.y * size.height,
       width: size.width, height: size.height)
-    var transaction = Transaction(animation: nil)
-    transaction.disablesAnimations = true
+    let transaction = Transaction(animation: nil)
+    // The floating glass hands off immediately. Sidebar's retained controls
+    // still need their own layout animation when the source joins its new row.
     withTransaction(transaction) {
       // All drag sources relinquish their glass together. The receiving native
       // viewport owns both expansion and material dissolve from this frame on.
@@ -624,7 +661,6 @@ final class SidebarTabDrag {
       paneLandingFrame = frame
       landingFlight += 1
       onPaneCollapseFrame?(id, frame)
-      if paneCollapseFlightFinished { finish(animated: false) }
       return
     }
     guard !reduceMotion else {
@@ -650,8 +686,9 @@ final class SidebarTabDrag {
 
   func paneCollapseDidFinish(_ id: UUID) {
     guard isMinimizingPane, tabID == id else { return }
-    paneCollapseFlightFinished = true
-    if paneLandingFrame != nil { finish(animated: false) }
+    // The projected slot is already the final identity/position, including
+    // offscreen rows. Geometry callbacks cannot delay or truncate this handoff.
+    finish(animated: false)
   }
 
   func cancelPaneCollapse(_ id: UUID) {
@@ -665,7 +702,6 @@ final class SidebarTabDrag {
     onPreviewEnd?()
     landingTier = nil
     paneCollapseCommit = nil
-    paneCollapseFlightFinished = false
     programmaticLandingPending = false
     landingFlight += 1
     setAutoscroll(0)
@@ -679,9 +715,13 @@ final class SidebarTabDrag {
       paneSourceTabIDs = []
       paneGlassOpacity = 1
       isMinimizingPane = false
+      paneCollapse = nil
+      paneCollapseDuration = nil
       paneLandingFrame = nil
       isExpandingIntoSplit = false
       splitLandingTabIDs = nil
+      splitLandingDuration = nil
+      liftedSourceTabIDs = []
       presentedFloatingFrame = nil
       target = nil
       phase = .lifted
@@ -850,38 +890,6 @@ extension View {
     } action: { frame in
       action(frame)
     }
-  }
-}
-
-/// Makes a top pin tile or tab row draggable and reports where it is.
-struct SidebarTabDragItem: ViewModifier {
-  let drag: SidebarTabDrag
-  let tabID: UUID
-  let tier: WorkspaceCollection.TabTier
-  var isCompact = false
-  @State private var token = UUID()
-  @State private var lastFrame = LastFrame()
-
-  /// A lazy stack can bring back a row it removed with its old state, and
-  /// then its unchanged frame is not reported again; the row re-registers
-  /// that frame when it reappears. Holding it here does not re-render the row.
-  private final class LastFrame {
-    var value: CGRect?
-  }
-
-  func body(content: Content) -> some View {
-    content
-      .opacity(drag.sourceOpacity(of: tabID))
-      // Visibility is a container handoff; the Tab owns material transitions.
-      .animation(nil, value: drag.sourceOpacity(of: tabID))
-      .onSidebarFrameChange { frame in
-        lastFrame.value = frame
-        drag.register(tabID, in: tier, frame: frame, token: token, isCompact: isCompact)
-      }
-      .onAppear {
-        if let frame = lastFrame.value { drag.register(tabID, in: tier, frame: frame, token: token, isCompact: isCompact) }
-      }
-      .onDisappear { drag.unregister(tabID, in: tier, token: token) }
   }
 }
 

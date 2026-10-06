@@ -11,6 +11,7 @@ extension AnimationValues {
     @MainActor static var contentFadeDuration: TimeInterval { AnimationValues.duration(0.135) }
     @MainActor static var contentWaitDuration: TimeInterval { AnimationValues.duration(0.75) }
     @MainActor static var handleDuration: TimeInterval { AnimationValues.duration(0.2) }
+    @MainActor static var sidebarHandoffRetentionDuration: TimeInterval { AnimationValues.duration(1.0 / 60) }
 
     static let sidebarDetachFraction = 0.5
     static let dismissScale: CGFloat = 0.94

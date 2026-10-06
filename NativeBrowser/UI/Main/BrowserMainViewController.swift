@@ -230,20 +230,21 @@ final class BrowserMainViewController: NSViewController {
         drag.cancelPaneCollapse(id)
         return
       }
+      guard let duration = drag.paneCollapseDuration else { return }
       let windowFrame = self.sidebarItem.viewController.view.convert(frame, to: nil)
       let label = AnyView(BrowserTabDragPresentation(drag: drag, workspace: self.runtime.workspaceStore)
-        .dragLabel(id, style: SidebarTabDrag.Style(paneTier(id))))
+        .collapseLabel(id, style: SidebarTabDrag.Style(paneTier(id))))
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       // Geometry continues across this logical midpoint on the compositor.
-      collapse.begin(to: windowFrame, label: label, onMidpoint: { [weak self, weak drag, weak collapse] in
+      collapse.begin(to: windowFrame, label: label, duration: duration, onMidpoint: { [weak self, weak drag, weak collapse] in
         guard let self, let collapse, self.sidebarCollapseView === collapse else { return }
         drag?.commitPaneCollapse(id)
       }) { [weak self, weak drag, weak collapse] in
         guard let self, let collapse, self.sidebarCollapseView === collapse else { return }
         drag?.paneCollapseDidFinish(id)
       }
-      self.runtime.workspaceStore.sessionManager.collapsePaneToSidebar(id, to: windowFrame)
+      self.runtime.workspaceStore.sessionManager.collapsePaneToSidebar(id, to: windowFrame, duration: duration)
       CATransaction.commit()
     }
     drag.onPaneCollapseFrame = { [weak self, weak drag] id, frame in
@@ -264,8 +265,9 @@ final class BrowserMainViewController: NSViewController {
       self.sidebarCollapseView = nil
       if let collapse, collapse.isFlightFinished {
         // Keep the final label until SwiftUI has rendered the revealed row.
+        let retention = collapse.handoffRetentionDuration
         Task { @MainActor in
-          try? await Task.sleep(for: .milliseconds(16))
+          try? await Task.sleep(for: .seconds(retention))
           collapse.removeFromSuperview()
         }
       } else {
@@ -477,6 +479,23 @@ private struct BrowserTabDragPresentation: View {
         pageURL: tab.url, session: workspace.session(for: id),
         title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
         rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
+    }
+  }
+
+  /// Land with the row's real typography and close-button reservation. Drag
+  /// labels have different weight/truncation and visibly jump at the handoff.
+  @ViewBuilder
+  fileprivate func collapseLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
+    if let tab = workspace.tab(withID: id) {
+      if style == .row {
+        SidebarRowLabel(title: tab.displayTitle) {
+          TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
+            size: SidebarTabAppearance.faviconSize)
+        }
+        .padding(.trailing, BrowserLayout.sidebarTabTrailingControlWidth)
+      } else {
+        dragLabel(id, style: style)
+      }
     }
   }
 

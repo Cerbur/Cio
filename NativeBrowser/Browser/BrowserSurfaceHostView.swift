@@ -18,6 +18,7 @@ final class BrowserSurfaceHostView: NSView {
   var onMinimizeSplitPane: ((UUID) -> Bool)?
   private var liftedPaneID: UUID?
   private var retainedSidebarPaneID: UUID?
+  private var retainedSidebarCollapseDuration: TimeInterval?
   private var paneDropIndex: Int?
   private var isPreparingSplitDrop = false
   private var deferredRevealTabIDs = Set<UUID>()
@@ -60,8 +61,8 @@ final class BrowserSurfaceHostView: NSView {
   private func startFlight(_ id: UUID, pane: CGRect,
                            from: BrowserSplitRevealTransition.Geometry,
                            to: BrowserSplitRevealTransition.Geometry,
-                           direction: BrowserSplitRevealTransition.Direction) {
-    pages[id]?.splitTransition.animate(in: pane, from: from, to: to, direction: direction) { [weak self] in
+                           direction: BrowserSplitRevealTransition.Direction, duration: TimeInterval? = nil) {
+    pages[id]?.splitTransition.animate(in: pane, from: from, to: to, direction: direction, duration: duration) { [weak self] in
       guard let self else { return }
       self.applyPlacements(self.targets)
     }
@@ -106,13 +107,14 @@ final class BrowserSurfaceHostView: NSView {
   func holdPaneForSidebar(_ id: UUID) -> CGRect? {
     guard let page = pages[id], targets[id] != nil else { return nil }
     retainedSidebarPaneID = id
-    page.splitControl.isHidden = true
+    page.splitControl.setPresented(false)
     page.toolbar?.setPageControlsVisible(false, animated: true)
     return page.viewport.convert(page.viewport.bounds, to: nil)
   }
 
-  func collapsePaneToSidebar(_ id: UUID, to windowFrame: CGRect) {
+  func collapsePaneToSidebar(_ id: UUID, to windowFrame: CGRect, duration: TimeInterval) {
     guard retainedSidebarPaneID == id, let page = pages[id] else { return }
+    retainedSidebarCollapseDuration = duration
     let pane = page.viewport.frame
     var destination = BrowserSplitRevealTransition.Geometry.card(convert(windowFrame, from: nil), pane: pane, group: pane)
     destination.glassOpacity = 0
@@ -120,12 +122,15 @@ final class BrowserSurfaceHostView: NSView {
     // The glass and page travel continuously to the row. Keep the split until
     // the compositor midpoint, when the page has fully dissolved into glass.
     startFlight(id, pane: pane, from: page.splitTransition.source(in: pane),
-                to: destination, direction: .sidebarCollapse)
+                to: destination, direction: .sidebarCollapse, duration: duration)
     applySurfaceLayout()
   }
 
   func endPaneSidebarCollapse(_ id: UUID) {
-    if retainedSidebarPaneID == id { retainedSidebarPaneID = nil }
+    if retainedSidebarPaneID == id {
+      retainedSidebarPaneID = nil
+      retainedSidebarCollapseDuration = nil
+    }
     if pages[id]?.splitTransition.direction == .sidebarCollapse || targets[id]?.toolbarVisible == true {
       pages[id]?.splitTransition.cancel()
     }
@@ -331,7 +336,7 @@ final class BrowserSurfaceHostView: NSView {
     defer { CATransaction.commit() }
     var previewFrame: CGRect?
     var previewHasMaterial = false
-    setDividerFrames([])
+    var dividerFrames: [CGRect] = []
     var next: [UUID: PagePlacement] = [:]
     if let id = liftedPaneID, let split, split.contains(id) {
       // A hover outside the content is not a detach. Reserve the lifted slot
@@ -339,7 +344,7 @@ final class BrowserSurfaceHostView: NSView {
       let index = paneDropIndex ?? split.tabIDs.firstIndex(of: id)!
       let shown = split.movingPane(id, to: index)
       let frames = shown.paneFrames(in: bounds)
-      setDividerFrames(frames.dividers)
+      dividerFrames = frames.dividers
       for (position, member) in shown.tabIDs.enumerated() {
         if member == id {
           previewFrame = frames.panes[position]
@@ -357,7 +362,7 @@ final class BrowserSurfaceHostView: NSView {
       previewFrame = frames.panes[targetIndex]
       previewHasMaterial = !target.replacesPane && split.middleTabID == nil
 
-      setDividerFrames(frames.dividers)
+      dividerFrames = frames.dividers
       for id in split.tabIDs {
         if !previewHasMaterial, let index = split.tabIDs.firstIndex(of: id) {
           // Replacement highlights the live page until release. Hovering must
@@ -387,7 +392,7 @@ final class BrowserSurfaceHostView: NSView {
         previewFrame = side == .left ? frames.panes[0].union(frames.panes[1])
           : frames.panes[1].union(frames.panes[2])
 
-        setDividerFrames(frames.dividers)
+        dividerFrames = frames.dividers
         next[selectedTabID] = PagePlacement(frame: frames.panes[survivorIndex],
           roundedEdge: roundedEdge(at: survivorIndex, count: 3))
       } else {
@@ -404,7 +409,7 @@ final class BrowserSurfaceHostView: NSView {
       shown.fraction = resizingFraction ?? split.fraction
       shown.secondFraction = resizingSecondFraction ?? split.secondFraction
       let frames = shown.paneFrames(in: bounds)
-      setDividerFrames(frames.dividers)
+      dividerFrames = frames.dividers
       for (index, id) in split.tabIDs.enumerated() {
         next[id] = PagePlacement(frame: frames.panes[index],
                                  roundedEdge: roundedEdge(at: index, count: split.tabIDs.count))
@@ -417,6 +422,7 @@ final class BrowserSurfaceHostView: NSView {
         targets[$0]?.toolbarVisible != true || pages[$0]?.splitTransition.isReturning == true
       })
     }
+    setDividerFrames(dividerFrames)
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
     updatePreviewFrame(previewFrame, hasMaterial: previewHasMaterial,
                        animated: animatedPresentation && deferredRevealTabIDs.isEmpty)
@@ -562,8 +568,10 @@ final class BrowserSurfaceHostView: NSView {
     for (id, source) in entries {
       guard let placement = next[id] else { continue }
       let layoutDirection: BrowserSplitRevealTransition.Direction = retainedSidebarPaneID != nil ? .sidebarSurvivor : .layout
+      let duration = layoutDirection == .sidebarSurvivor && source.glassOpacity == 0
+        ? retainedSidebarCollapseDuration.map { $0 * (1 - BrowserSplitRevealTransition.sidebarDetachFraction) } : nil
       startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame),
-        direction: source.glassOpacity > 0 ? .enter : layoutDirection)
+        direction: source.glassOpacity > 0 ? .enter : layoutDirection, duration: duration)
     }
     applyPlacements(next, animatedVisibility: animatedVisibility && window != nil,
                     animatedLayout: canAnimate && (animated || !entries.isEmpty))
@@ -574,6 +582,17 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
+    // One completion barrier for the entire group, including outgoing pages.
+    // Each compositor completion calls back here; only the final one reveals
+    // the divider and every handle together. No guessed delay or extra flight.
+    let splitControlsVisible = split != nil && liftedPaneID == nil && previewTarget == nil
+      && retainedSidebarPaneID == nil && deferredRevealTabIDs.isEmpty && !isPreparingSplitDrop
+      && !isCovered && workspace?.isSpotlightPresented != true
+      && !pages.values.contains { $0.splitTransition.isAnimating }
+    let controlRevealDuration = AnimationValues.SplitControl.revealDuration
+    for view in [divider, secondDivider] {
+      view.setIndicatorVisible(splitControlsVisible && !view.isHidden, duration: controlRevealDuration)
+    }
     for (id, page) in pages {
       if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
       if page.splitTransition.isExiting {
@@ -604,9 +623,8 @@ final class BrowserSurfaceHostView: NSView {
         chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
         paneFrame: placement.frame,
         addressFrame: page.toolbar?.addressCapsuleFrame(in: self),
-        visible: split?.contains(id) == true && !page.splitTransition.isAnimating
-          && liftedPaneID == nil && previewTarget == nil && !isCovered
-          && workspace?.isSpotlightPresented != true)
+        visible: splitControlsVisible && split?.contains(id) == true,
+        revealDuration: controlRevealDuration)
     }
     placements = next
   }
@@ -735,21 +753,83 @@ private final class BrowserPageViewportView: NSView {
 /// Tracks the divider in AppKit so Chromium never handles this drag.
 private final class BrowserSplitDividerView: NSView {
   var onDrag: ((CGFloat, Bool) -> Void)?
+  private let indicator = SplitDividerIndicatorView()
+  private var rolloverArea: NSTrackingArea?
+  private var hovered = false
+  private var dragging = false
   override var isFlipped: Bool { true }
 
-  override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
-
-  override func draw(_ dirtyRect: NSRect) {
-    NSColor.separatorColor.withAlphaComponent(0.35).setFill()
-    NSBezierPath(roundedRect: CGRect(x: bounds.midX - 1.5, y: bounds.midY - 22, width: 3, height: 44),
-                 xRadius: 1.5, yRadius: 1.5).fill()
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    indicator.boxType = .custom
+    indicator.borderType = .noBorder
+    indicator.titlePosition = .noTitle
+    indicator.cornerRadius = 1.5
+    indicator.contentViewMargins = .zero
+    indicator.wantsLayer = true
+    indicator.layer?.opacity = 0
+    addSubview(indicator)
+    updateEmphasis()
   }
+
+  override func layout() {
+    super.layout()
+    let frame = CGRect(x: bounds.midX - 1.5, y: bounds.midY - 22, width: 3, height: 44)
+    if indicator.frame != frame { indicator.frame = frame }
+  }
+
+  func setIndicatorVisible(_ visible: Bool, duration: TimeInterval) {
+    SplitControlMotion.setVisible(visible, on: indicator.layer, duration: duration)
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let rolloverArea { removeTrackingArea(rolloverArea) }
+    let area = NSTrackingArea(rect: .zero,
+      options: [.mouseEnteredAndExited, .inVisibleRect, .activeInKeyWindow],
+      owner: self, userInfo: nil)
+    addTrackingArea(area)
+    rolloverArea = area
+    hovered = window.map {
+      $0.isKeyWindow && !isHiddenOrHasHiddenAncestor
+        && bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
+    } ?? false
+    updateEmphasis()
+  }
+
+  override func mouseEntered(with event: NSEvent) { hovered = true; updateEmphasis() }
+  override func mouseExited(with event: NSEvent) { hovered = false; updateEmphasis() }
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    updateEmphasis()
+  }
+
+  private func updateEmphasis() {
+    // Match the address reload icon's black/white hover treatment, including
+    // per-window appearance overrides.
+    let hoverColor: NSColor = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      ? .white : .black
+    effectiveAppearance.performAsCurrentDrawingAppearance {
+      indicator.fillColor = hovered || dragging ? hoverColor
+        : NSColor.separatorColor.withAlphaComponent(AnimationValues.SplitControl.dividerIdleOpacity)
+    }
+    SplitControlMotion.setEmphasized(hovered || dragging, on: indicator.layer,
+                                    scale: AnimationValues.SplitControl.dividerHoverScale)
+  }
+
+  override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
 
   override func mouseDown(with event: NSEvent) {
     guard let window, let superview else { return }
     let grab = convert(event.locationInWindow, from: nil).x
+    dragging = true
+    updateEmphasis()
     NSCursor.resizeLeftRight.push()
-    defer { NSCursor.pop() }
+    defer {
+      NSCursor.pop()
+      dragging = false
+      updateTrackingAreas()
+    }
     while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
       let x = superview.convert(next.locationInWindow, from: nil).x - grab
       let finished = next.type == .leftMouseUp
@@ -757,4 +837,13 @@ private final class BrowserSplitDividerView: NSView {
       if finished { break }
     }
   }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+/// The native rounded indicator never takes events from the full-height 8pt
+/// divider hit area. Hover growth belongs solely to its visual layer.
+private final class SplitDividerIndicatorView: NSBox {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

@@ -19,6 +19,7 @@ final class BrowserSplitPaneControl: NSView {
   private let actionContent = SplitPaneActionContentView()
   nonisolated(unsafe) private var dismissalMonitor: Any?
   private var expanded = false
+  private var presented = false
   private var collapsedFrame = CGRect.zero
   private var expandedFrame = CGRect.zero
   var onDrag: ((BrowserSplitPaneDragEvent) -> Bool)?
@@ -33,7 +34,7 @@ final class BrowserSplitPaneControl: NSView {
   override var mouseDownCanMoveWindow: Bool { false }
 
   override func hitTest(_ point: NSPoint) -> NSView? {
-    guard !isHiddenOrHasHiddenAncestor, alphaValue > 0,
+    guard presented, !isHiddenOrHasHiddenAncestor, alphaValue > 0,
           bounds.contains(convert(point, from: superview)) else { return nil }
     if expanded {
       // Glass hit-testing can pass through transparent regions. Resolve the
@@ -62,6 +63,11 @@ final class BrowserSplitPaneControl: NSView {
 
   override init(frame: NSRect) {
     super.init(frame: frame)
+    wantsLayer = true
+    layer?.opacity = 0
+    isHidden = true
+    handle.wantsLayer = true
+    handle.contentTintColor = .secondaryLabelColor
     handle.title = ""
     handle.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Split Page Actions")?
       .withSymbolConfiguration(.init(pointSize: 13, weight: .bold))
@@ -132,9 +138,8 @@ final class BrowserSplitPaneControl: NSView {
   }
 
   func place(in contentHost: NSView, chromeHost: NSView?, paneFrame: CGRect,
-             addressFrame: CGRect?, visible: Bool) {
-    isHidden = !visible
-    if !visible { collapse(); return }
+             addressFrame: CGRect?, visible: Bool, revealDuration: TimeInterval) {
+    if !visible { setPresented(false); return }
     guard let chromeHost else { return }
     // Page chrome can mount its address overlay during layout. Keep this
     // floating control above it so the capsule owns clicks in the covered area.
@@ -157,10 +162,18 @@ final class BrowserSplitPaneControl: NSView {
     frame = expanded ? expandedFrame : collapsedFrame
     handle.frame = handleFrame(in: bounds.size)
     capsule.frame = bounds
+    setPresented(true, revealDuration: revealDuration)
+  }
+
+  func setPresented(_ visible: Bool, revealDuration: TimeInterval = 0) {
+    presented = visible
+    if !visible { collapse() }
+    isHidden = !visible
+    SplitControlMotion.setVisible(visible, on: layer, duration: revealDuration)
   }
 
   func containsControl(at point: CGPoint) -> Bool {
-    !isHiddenOrHasHiddenAncestor && window != nil && bounds.contains(convert(point, from: nil))
+    presented && !isHiddenOrHasHiddenAncestor && window != nil && bounds.contains(convert(point, from: nil))
   }
 
   func addressLayoutDidChange() {
@@ -292,6 +305,44 @@ private final class SplitPaneHandleButton: NSButton {
   var onBegin: ((CGPoint) -> Bool)?
   var onMove: ((CGPoint) -> Void)?
   var onEnd: ((Bool) -> Void)?
+  private var rolloverArea: NSTrackingArea?
+  private var hovered = false
+  private var pressed = false
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let rolloverArea { removeTrackingArea(rolloverArea) }
+    let area = NSTrackingArea(rect: .zero,
+      options: [.mouseEnteredAndExited, .inVisibleRect, .activeInKeyWindow],
+      owner: self, userInfo: nil)
+    addTrackingArea(area)
+    rolloverArea = area
+    hovered = window.map {
+      $0.isKeyWindow && !isHiddenOrHasHiddenAncestor
+        && bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
+    } ?? false
+    updateEmphasis()
+  }
+
+  override func mouseEntered(with event: NSEvent) { hovered = true; updateEmphasis() }
+  override func mouseExited(with event: NSEvent) { hovered = false; updateEmphasis() }
+  override func highlight(_ flag: Bool) {
+    super.highlight(flag)
+    pressed = flag
+    updateEmphasis()
+  }
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    updateEmphasis()
+  }
+
+  private func updateEmphasis() {
+    let hoverColor: NSColor = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      ? .white : .black
+    contentTintColor = hovered || pressed ? hoverColor : .secondaryLabelColor
+    SplitControlMotion.setEmphasized(hovered || pressed, on: layer,
+                                    scale: AnimationValues.SplitControl.handleHoverScale)
+  }
 
   override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

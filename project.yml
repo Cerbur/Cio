@@ -148,6 +148,7 @@ targets:
       - path: NativeBrowser/UI/Spotlight/SpotlightInputState.swift
       - path: NativeBrowser/UI/Main/BrowserShellLayout.swift
       - path: NativeBrowser/UI/Sidebar/SpaceTabPanelRow.swift
+      - path: NativeBrowser/UI/Sidebar/SidebarTabPanelLayout.swift
       - path: NativeBrowser/Browser/BrowserSplitLayout.swift
       # The Milestone 4 workspace model is pure Foundation: it is compiled
       # into this target so Space/tab membership, ordering, selection and
