@@ -27,10 +27,12 @@ final class SpaceToolbarController: NSObject {
     self.onToggle = onToggle
     let presentation = ToolbarPresentationState()
     self.presentation = presentation
-    let height = AddressCapsuleLayout.height
+    let height = BrowserLayout.chromeControlSize
     let button = NSButton(frame: NSRect(x: 0, y: 0, width: height, height: height))
     button.setButtonType(.momentaryPushIn)
-    button.bezelStyle = .toolbar
+    // The shell is not an NSToolbar. Use the glass bezel itself for native
+    // circular hover, press and release feedback over the shared material.
+    button.bezelStyle = .glass
     button.borderShape = .circle
     button.controlSize = .large
     button.isBordered = true
@@ -74,7 +76,7 @@ final class SpaceToolbarController: NSObject {
     if controlHost.superview !== host {
       host.addSubview(controlHost, positioned: .above, relativeTo: nil)
     }
-    let height = AddressCapsuleLayout.height
+    let height = BrowserLayout.chromeControlSize
     let left = max(windowControlsTrailingEdge + BrowserLayout.chromeControlSpacing,
                    sidebarAnchor.minX - height - BrowserLayout.chromeControlSpacing)
     let topInset = (BrowserLayout.chromeThickness - height) / 2

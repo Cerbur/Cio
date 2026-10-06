@@ -107,3 +107,64 @@ motion.animate(host, from: source, enabled: shouldAnimate)
 并在隐藏宿主布局完成后立即加入交接事务，不另等 page completion 或主队列 handoff。
 快速切换中反向恢复的 layout flight 也提供同一时钟，隐藏 toolbar 不退回独立时序。
 预览期间未提交的新 pane 仍保持隐藏；存活 toolbar 的移动和尺寸弹簧保持独立。
+
+## 22:56 录屏：按钮交互与中途布局
+
+录屏长 6.765 秒、4096×2196，共 323 个真实帧；按 120Hz / 8.33ms 拆为 812 个采样。
+重点逐帧对照 0.65–1.25 秒的 hover、1.2–1.8 秒的收起和 3.0–3.6 秒的展开：
+hover 背景在圆形内显示矩形；收起时侧栏按钮与导航胶囊重叠，展开时按钮短暂消失并出现在绿灯旁。
+
+自定义 shell 没有 NSToolbar 的交互环境。侧栏按钮使用 `.glass` bezel 与 `.circle` borderShape，
+由系统处理 hover、按压和松手回弹。导航按钮最初也采用各自的 `.glass` bezel，
+但 23:13 截图显示两块圆形材质的接缝；共享背景不能合并独立的 AppKit button bezel。
+导航现在使用一个持续挂载的 AppKit 原生按钮容器，内含两个独立 NSButton，
+显式设定 72×36 pt 后由一个系统 `.regular.interactive()` Capsule 包裹。
+各自保留 action、enabled、help、键盘与辅助功能行为，按钮不绘制独立 bordered bezel；
+材质隐藏时使用 `.identity`，保留按钮容器、玻璃 identity 与 namespace，并应用原生 `.materialize`。
+内容单独聚拢 / 扩散；导航不再叠加 `ToolbarGlassSurface` 或独立 AppKit glass bezel。
+两端 1 pt 留白与总宽度 74 pt 继续由共享 shell metrics 定义。
+
+连续布局不能依赖尚未提交或仍滞后的 backing-layer presentation frame。
+在同一事务内启动 flight 后立即重定向，旧实现把 model destination 当作当前位置，检查得到 120 pt 跳变。
+现在 geometry、velocity 和 compositor keyframes 都从同一个窗口坐标 flight、同一个捕获时钟采样，
+即使 presentation layer 尚不存在，也不会跳到中间终点。保持相同终点的完成通知不取消 flight。
+`GlassComponentLayoutMotionTests` 覆盖提交前捕获、同事务重定向和相同终点完成通知；
+构建及这些检查不代表原生 hover / 回弹已通过屏幕视觉验收。
+
+
+## 工具栏尺寸约束与 Debug 实机检查（2026-10-06）
+
+用户 23:21 截图中的胶囊确实比圆形侧栏按钮更扁。原因是只固定了外层 host 的 36 pt 高度，
+macOS 原生 GlassButtonStyle 仍按自身的 intrinsic cross-axis 尺寸绘制玻璃。
+`buttonSizing(.flexible)` 只约束 primary axis；macOS 中是宽度，不能据此推断玻璃高度。
+`glassEffectUnion` 会沿共同 shape 合并：把 shape 改成 Circle 会得到组级圆形，不能用它补救胶囊高度。
+
+最终实现先固定原生 action container 的 72×36 pt frame，再对整个容器应用一次系统
+`.glassEffect(.regular.interactive(), in: Capsule())`。它不是不响应事件的背景；
+两个持续挂载的 AppKit 按钮在两个 36×36 pt slot 中保留各自的 action、enabled、help 和 accessibility，
+不绘制独立玻璃 bezel。玻璃身份、native materialize 和 first-level motion 作用于整个胶囊。
+Host 的宽度是 74 pt，两端各 1 pt；所有尺寸集中在 `BrowserShellLayout.swift`。
+侧栏按钮也改为直接使用 `BrowserLayout.chromeControlSize`，不再借用地址栏高度。
+
+验收中的独立 SwiftUI Button / 每按钮 NSViewRepresentable 方案曾在导航或窗口恢复时卡住，
+采样主线程显示 AppKit key-view-loop 遍历进入 SwiftUI FocusNavigationSequence 后持续循环。
+切换为单一 AppKit NSViewRepresentable 容器后，启动和同一组 Back/Forward 操作恢复正常；
+无需关闭按钮的键盘焦点或辅助功能。导航动作也在 Chromium 切换文档前把键盘交回稳定页面容器。
+这个观察只说明该宿主组合下的实机结果，不能据此声称所有 SwiftUI Button 都有此问题。
+
+本次按照仓库规定构建、结束旧验收进程，并通过绝对 Debug app 路径启动和连接新实例。
+Computer use 已检查：
+
+- 单页和双页的静止状态：圆按钮与完整导航胶囊等高，导航没有接缝或两个独立圆形背景。
+- 临时页面 `example.com → iana.org`：Back / Forward 点击正常，独立 enabled 状态随历史更新。
+- 指针停在启用的 Back 上：系统玻璃出现局部高光，胶囊仍完整且没有矩形 hover 板。
+- Sidebar 收起和展开：圆按钮、胶囊保持相同静止高度，返回既有锚点并保持间距。
+
+现有 computer-use 接口不能单独保持 mouse-down 并采集 120Hz 的按压 / 回弹序列；
+因此上述检查不等于新动画每一帧的 120Hz 录屏验收。按压反馈仍由原生 NSButton 与系统 interactive glass 处理。
+尺寸、形状、锚点和状态更新规则已经加入根目录 `AGENTS.md`，后续更改必须同时保留。
+
+Apple 参考：
+[ButtonSizing](https://developer.apple.com/documentation/swiftui/buttonsizing)、
+[glassEffectUnion](https://developer.apple.com/documentation/swiftui/view/glasseffectunion(id:namespace:))、
+[Applying Liquid Glass to custom views](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)。

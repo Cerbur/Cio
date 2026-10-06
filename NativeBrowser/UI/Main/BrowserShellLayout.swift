@@ -37,8 +37,12 @@ enum BrowserLayout {
   static let sidebarScrollFadeHeight = sidebarScrollTransitionHeight
   static let sidebarScrollBlurRadius: CGFloat = 18
   static let sidebarRowSpacing: CGFloat = 5
+  // Resting visible glass / hit slots, not merely hosting-view dimensions.
+  // See the toolbar control geometry contract in AGENTS.md.
   static let chromeControlSize: CGFloat = 36
   static let chromeControlSpacing: CGFloat = 10
+  static let navigationCapsuleEndInset: CGFloat = 1
+  static let navigationCapsuleWidth = 2 * chromeControlSize + 2 * navigationCapsuleEndInset
   static let pageControlInset: CGFloat = 7
   static let splitPaneHandleSize = CGSize(width: 36, height: 8)
   static let splitPaneCapsuleSize = CGSize(width: 96, height: 30)

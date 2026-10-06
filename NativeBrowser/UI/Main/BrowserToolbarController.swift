@@ -36,9 +36,8 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 final class ToolbarChromeView: NSView {
   var onGeometryRequest: (() -> Void)?
   func refreshLayout() { onGeometryRequest?() }
-  private let navigationGroup: NSHostingView<ToolbarNativeControlsView>
-  private let backButton: NSButton
-  private let forwardButton: NSButton
+  private let navigationGroup: NSHostingView<ToolbarNavigationControlsView>
+  private let navigationState = ToolbarNavigationState()
   private let addressView: AddressOverlayHostingView
   private let presentation: ToolbarPresentationState
   private let navigationMotion = GlassComponentLayoutMotion()
@@ -61,20 +60,11 @@ final class ToolbarChromeView: NSView {
     addressMotion.animate(addressView, from: source.address, enabled: enabled)
   }
 
-  fileprivate init(backButton: NSButton, forwardButton: NSButton,
-                   addressView: AddressOverlayHostingView,
-                   presentation: ToolbarPresentationState) {
-    self.backButton = backButton
-    self.forwardButton = forwardButton
+  fileprivate init(addressView: AddressOverlayHostingView,
+                   presentation: ToolbarPresentationState,
+                   onBack: @escaping () -> Void, onForward: @escaping () -> Void) {
     self.addressView = addressView
     self.presentation = presentation
-    let height = AddressCapsuleLayout.height
-    let navigationContent = NSView(frame: NSRect(x: 0, y: 0,
-                                                width: 2 + 2 * height, height: height))
-    navigationContent.addSubview(backButton)
-    navigationContent.addSubview(forwardButton)
-    backButton.frame = NSRect(x: 1, y: 0, width: height, height: height)
-    forwardButton.frame = NSRect(x: 1 + height, y: 0, width: height, height: height)
     // Custom shell chrome doesn't receive NSToolbar's automatic group glass.
     // Embed the native buttons as content over the system glass material,
     // adaptive symbol appearance and supported glass interaction feedback.
@@ -87,17 +77,16 @@ final class ToolbarChromeView: NSView {
     // If platform limitations or another requirement conflict with this contract,
     // explain the conflict and obtain an explicit human trade-off decision before
     // changing the style or relaxing its native behavior or layout constraints.
-    // SwiftUI supplies one native Liquid Glass surface and its public
-    // materialize transition; the AppKit buttons remain mounted inside it.
-    navigationGroup = NSHostingView(rootView: ToolbarNativeControlsView(
-      content: navigationContent, presentation: presentation,
-      size: NSSize(width: 2 + 2 * height, height: height)))
+    // One interactive system glass wraps a stable AppKit action container.
+    // Explicit geometry precedes the material; independent bordered NSButton
+    // bezels would draw separate circles over the shared capsule.
+    navigationGroup = NSHostingView(rootView: ToolbarNavigationControlsView(
+      state: navigationState, presentation: presentation, onBack: onBack, onForward: onForward))
     super.init(frame: NSRect(x: 0, y: 0, width: 1, height: BrowserLayout.chromeThickness))
     navigationGroup.wantsLayer = true
     addressView.wantsLayer = true
     navigationGroup.safeAreaRegions = []
     navigationGroup.clipsToBounds = false
-    navigationContent.autoresizingMask = [.width, .height]
     addSubview(navigationGroup)
   }
 
@@ -115,9 +104,8 @@ final class ToolbarChromeView: NSView {
   /// window dragging, without making it the owner of any page controls.
   func containsControl(at windowPoint: NSPoint) -> Bool {
     guard presentation.isVisible, let window else { return false }
-    for button in [backButton, forwardButton] where button.window === window {
-      if button.bounds.contains(button.convert(windowPoint, from: nil)) { return true }
-    }
+    if navigationGroup.window === window,
+       navigationGroup.bounds.contains(navigationGroup.convert(windowPoint, from: nil)) { return true }
     if let host = addressView.superview,
        addressView.hitTest(host.convert(windowPoint, from: nil)) != nil { return true }
     return false
@@ -128,8 +116,8 @@ final class ToolbarChromeView: NSView {
   }
 
   func setNavigationState(canGoBack: Bool, canGoForward: Bool, hasSession: Bool) {
-    backButton.isEnabled = hasSession && canGoBack
-    forwardButton.isEnabled = hasSession && canGoForward
+    navigationState.update(canGoBack: hasSession && canGoBack,
+                           canGoForward: hasSession && canGoForward)
   }
 
   func applyLayout(browserRect: NSRect, preparingToShow: Bool = false) {
@@ -143,8 +131,11 @@ final class ToolbarChromeView: NSView {
                              reservedEdge + BrowserLayout.chromeControlSpacing)
     let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
     let addressLeft = max(browserRect.midX - addressWidth / 2,
-                          navigationLeft + 2 + 2 * height + BrowserLayout.pageControlInset)
-    setFrame(NSRect(x: navigationLeft, y: y, width: 2 + 2 * height, height: height),
+                          navigationLeft + BrowserLayout.navigationCapsuleWidth + BrowserLayout.pageControlInset)
+    let navigationHeight = BrowserLayout.chromeControlSize
+    let navigationY = (bounds.height - navigationHeight) / 2
+    setFrame(NSRect(x: navigationLeft, y: navigationY,
+                    width: BrowserLayout.navigationCapsuleWidth, height: navigationHeight),
              on: navigationGroup)
     if let contentView = superview {
       if addressView.superview !== contentView {
@@ -529,47 +520,7 @@ final class BrowserToolbarController: NSObject {
       hasSession: hasSession)
   }
 
-  private func toolbarImage(named symbol: String, description: String) -> NSImage? {
-    let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .medium)
-    return NSImage(
-      systemSymbolName: symbol,
-      accessibilityDescription: description
-    )?.withSymbolConfiguration(configuration)
-  }
-
-  private func makeButton(
-    label: String,
-    symbol: String,
-    action: Selector,
-    usesSharedGlass: Bool = false
-  ) -> NSButton {
-    let size = BrowserLayout.chromeControlSize
-    let button = NSButton(frame: NSRect(x: 0, y: 0, width: size, height: size))
-    // Page navigation buttons receive glass from their shared native capsule.
-    // Retain independent enabled states and system hover feedback.
-    button.setButtonType(.momentaryPushIn)
-    button.bezelStyle = usesSharedGlass ? .toolbar : .glass
-    button.borderShape = .circle
-    button.controlSize = .large
-    button.isBordered = true
-    button.showsBorderOnlyWhileMouseInside = usesSharedGlass
-    button.title = ""
-    button.image = toolbarImage(named: symbol, description: label)
-    button.imagePosition = .imageOnly
-    button.toolTip = label
-    button.setAccessibilityLabel(label)
-    button.target = self
-    button.action = action
-    return button
-  }
-
   private func makeChromeView() -> ToolbarChromeView {
-    let backButton = makeButton(
-      label: "Back", symbol: "chevron.backward", action: #selector(goBack(_:)),
-      usesSharedGlass: true)
-    let forwardButton = makeButton(
-      label: "Forward", symbol: "chevron.forward", action: #selector(goForward(_:)),
-      usesSharedGlass: true)
     let addressView = AddressOverlayHostingView(rootView: ToolbarAddressFieldView(
       workspace: workspace,
       tabID: tabID,
@@ -593,10 +544,10 @@ final class BrowserToolbarController: NSObject {
     addressView.clipsToBounds = false
     addressOverlay = addressView
     let view = ToolbarChromeView(
-      backButton: backButton,
-      forwardButton: forwardButton,
       addressView: addressView,
-      presentation: toolbarPresentation)
+      presentation: toolbarPresentation,
+      onBack: { [weak self] in self?.goBack() },
+      onForward: { [weak self] in self?.goForward() })
     view.setAccessibilityRole(.toolbar)
     view.setAccessibilityLabel("Page Toolbar")
     chromeView = view
@@ -610,19 +561,23 @@ final class BrowserToolbarController: NSObject {
     return view
   }
 
-  @objc private func goBack(_ sender: NSButton) {
-    guard !isDisposed, toolbarPresentation.isVisible, sender.isEnabled,
-          let session = boundSession else { return }
+  private func goBack() {
+    guard !isDisposed, toolbarPresentation.isVisible,
+          let session = boundSession, session.canGoBack else { return }
     siteInformation.dismiss()
     activatePane(for: session)
+    // Return the keyboard to the stable page container before Chromium hides
+    // the previous document view during navigation.
+    session.focusPage()
     session.goBack()
   }
 
-  @objc private func goForward(_ sender: NSButton) {
-    guard !isDisposed, toolbarPresentation.isVisible, sender.isEnabled,
-          let session = boundSession else { return }
+  private func goForward() {
+    guard !isDisposed, toolbarPresentation.isVisible,
+          let session = boundSession, session.canGoForward else { return }
     siteInformation.dismiss()
     activatePane(for: session)
+    session.focusPage()
     session.goForward()
   }
 

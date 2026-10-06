@@ -89,8 +89,9 @@ struct ToolbarNativeControlsView: View {
       .frame(width: size.width, height: size.height)
       .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
       .background {
-        ToolbarGlassSurface(presentation: presentation, cornerRadius: size.height / 2,
-                            interactive: true)
+        // Interaction belongs to the native glass buttons above this surface.
+        // A hit-test-disabled SwiftUI background cannot own their press state.
+        ToolbarGlassSurface(presentation: presentation, cornerRadius: size.height / 2)
       }
       .modifier(ToolbarComponentVisibility(presentation: presentation))
   }
