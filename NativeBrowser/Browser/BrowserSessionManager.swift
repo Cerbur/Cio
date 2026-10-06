@@ -282,12 +282,21 @@ final class BrowserSessionManager: ObservableObject {
     return surfaceHost.commitSplitPreview(keepingLiftedPaneHidden: keepingLiftedPaneHidden, commit)
   }
 
+  func commitSplitDrop(_ commit: () -> Bool) -> Bool {
+    guard let surfaceHost else { return commit() }
+    return surfaceHost.commitSplitDrop(commit)
+  }
+
   func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
     surfaceHost?.splitLandingFrame(for: tabIDs)
   }
 
-  func setSplitReveal(for tabIDs: [UUID], frame: CGRect?) {
-    surfaceHost?.setSplitReveal(for: tabIDs, frame: frame)
+  func revealSplitPages(for tabIDs: [UUID], from frame: CGRect, onCompletion: @escaping () -> Void) {
+    guard let surfaceHost else {
+      onCompletion()
+      return
+    }
+    surfaceHost.revealSplitPages(for: tabIDs, from: frame, onCompletion: onCompletion)
   }
 
   /// Keeps one container for every live session and makes only the workspace's

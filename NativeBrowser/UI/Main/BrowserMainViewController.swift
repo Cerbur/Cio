@@ -23,6 +23,7 @@ final class BrowserMainViewController: NSViewController {
   private weak var overlayDrag: SidebarTabDrag?
   private var splitDropTarget: BrowserSplitLayout.DropTarget?
   private var paneDropIndex: Int?
+  private var panePreviewIndex: Int?
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
   let spaceSplitController: NSSplitViewController
@@ -284,7 +285,8 @@ final class BrowserMainViewController: NSViewController {
                              frame: sidebar.convert(frame, from: nil),
                              groupTabIDs: group.tabIDs) else { return false }
         splitLandingTabIDs = [id]
-        self.paneDropIndex = nil
+        self.panePreviewIndex = group.tabIDs.firstIndex(of: id)
+        self.paneDropIndex = self.panePreviewIndex
         workspace.sessionManager.beginPaneLift(id, to: sidebar.convert(drag.paneLiftTargetFrame, to: nil))
         return true
       case .move(let point):
@@ -314,9 +316,18 @@ final class BrowserMainViewController: NSViewController {
       let browser = self.browserItem.viewController.view
       let local = browser.convert(point, from: self.sidebarItem.viewController.view)
       if drag.isPaneDrag, let group = self.runtime.workspaceStore.activeSplit {
-        let canDrop = browser.bounds.contains(local)
-        self.paneDropIndex = canDrop ? group.dropPaneIndex(at: local.x, in: browser.bounds) : nil
-        self.runtime.workspaceStore.sessionManager.previewPaneDrag(id, index: self.paneDropIndex)
+        // The lifted pane still occupies a slot until the drop commits. Moving
+        // above the content into the toolbar must not expand its neighbours.
+        let index = group.dropPaneIndex(at: local.x, in: browser.bounds, previous: self.panePreviewIndex)
+        self.panePreviewIndex = index
+        // The toolbar presents the same slot as the content beneath it. Both
+        // must commit that slot instead of treating a toolbar drop as cancel.
+        let dropBounds = CGRect(x: browser.bounds.minX,
+          y: browser.bounds.minY - BrowserLayout.chromeThickness,
+          width: browser.bounds.width, height: browser.bounds.height + BrowserLayout.chromeThickness)
+        let canDrop = dropBounds.contains(local)
+        self.paneDropIndex = canDrop ? index : nil
+        self.runtime.workspaceStore.sessionManager.previewPaneDrag(id, index: index)
         return
       }
       let canSplit = self.runtime.presentedInternalPanel == nil
@@ -329,13 +340,13 @@ final class BrowserMainViewController: NSViewController {
           incomingPaneCount: count))) : nil
       self.runtime.workspaceStore.sessionManager.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
     }
-    drag.onSplitRevealFrame = { [weak self] frame in
-      guard let self else { return }
-      let windowFrame = frame.flatMap { frame in
-        self.dragOverlay?.convert(frame, to: nil)
+    drag.onSplitReveal = { [weak self] frame, onCompletion in
+      guard let self, let overlay = self.dragOverlay else {
+        onCompletion()
+        return
       }
-      self.runtime.workspaceStore.sessionManager.setSplitReveal(
-        for: splitLandingTabIDs, frame: windowFrame)
+      self.runtime.workspaceStore.sessionManager.revealSplitPages(
+        for: splitLandingTabIDs, from: overlay.convert(frame, to: nil), onCompletion: onCompletion)
     }
     drag.onSplitLandingFrame = { [weak self] in
       guard let self, let frame = self.runtime.workspaceStore.sessionManager
@@ -348,7 +359,7 @@ final class BrowserMainViewController: NSViewController {
         guard let index = self.paneDropIndex else { return false }
         splitLandingTabIDs = [id]
         drag?.prepareSplitLanding(tabIDs: splitLandingTabIDs)
-        return self.runtime.workspaceStore.sessionManager.commitSplitPreview {
+        return self.runtime.workspaceStore.sessionManager.commitSplitDrop {
           self.runtime.workspaceStore.reorderSplitPane(id, to: index)
         }
       }
@@ -356,7 +367,7 @@ final class BrowserMainViewController: NSViewController {
       let incomingIDs = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs ?? [id]
       drag?.prepareSplitLanding(tabIDs: incomingIDs)
       self.splitDropTarget = nil
-      let committed = self.runtime.workspaceStore.sessionManager.commitSplitPreview {
+      let committed = self.runtime.workspaceStore.sessionManager.commitSplitDrop {
         self.runtime.workspaceStore.splitTab(id, at: target)
       }
       splitLandingTabIDs = []
@@ -377,6 +388,7 @@ final class BrowserMainViewController: NSViewController {
     drag.onPreviewEnd = { [weak self] in
       self?.splitDropTarget = nil
       self?.paneDropIndex = nil
+      self?.panePreviewIndex = nil
       self?.runtime.workspaceStore.sessionManager.previewPaneDrag(nil)
       self?.runtime.workspaceStore.sessionManager.previewSplit(at: nil)
     }

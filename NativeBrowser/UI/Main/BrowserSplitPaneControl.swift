@@ -318,7 +318,11 @@ private final class SplitPaneHandleButton: NSButton {
       }
       if next.type == .leftMouseUp {
         if !dragging, bounds.contains(convert(next.locationInWindow, from: nil)) { _ = sendAction(action, to: target) }
-        if dragging { onEnd?(false) }
+        if dragging {
+          // Commit the release position even when no drag event preceded it.
+          onMove?(next.locationInWindow)
+          onEnd?(false)
+        }
         return
       }
       let point = next.locationInWindow

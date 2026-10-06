@@ -130,53 +130,6 @@ enum BrowserSplitRevealTransition {
     }
   }
 
-  @MainActor
-  static func capture(_ page: BrowserPagePresentation) -> Geometry {
-    let pane = page.viewport.frame
-    guard let layer = page.viewport.layer else { return .page(pane) }
-    let shown = layer.presentation() ?? layer
-    let scale = CGSize(width: max(0.001, shown.transform.m11), height: max(0.001, shown.transform.m22))
-    let pivot = CGPoint(x: layer.anchorPoint.x * pane.width, y: layer.anchorPoint.y * pane.height)
-    let origin = CGPoint(x: pane.minX + pivot.x + shown.transform.m41 - pivot.x * scale.width,
-                         y: pane.minY + pivot.y + shown.transform.m42 - pivot.y * scale.height)
-    let crop = (shown.mask as? CAShapeLayer)?.path?.boundingBoxOfPath ?? page.viewport.bounds
-    return Geometry(center: CGPoint(x: origin.x + pane.width / 2 * scale.width,
-                                    y: origin.y + pane.height / 2 * scale.height),
-      outline: CGRect(x: origin.x + crop.minX * scale.width, y: origin.y + crop.minY * scale.height,
-                      width: crop.width * scale.width, height: crop.height * scale.height),
-      scale: scale, renderSize: pane.size, glassOpacity: page.splitGlassOpacity, opacity: shown.opacity)
-  }
-
-  @MainActor
-  static func animate(_ page: BrowserPagePresentation, pane: CGRect,
-                      from initial: Geometry, to destination: Geometry, direction: Direction,
-                      completion: any CAAnimationDelegate) {
-    guard let layer = page.viewport.layer, pane.width > 0, pane.height > 0 else { return }
-    let initial = initial.rebased(to: pane.size)
-    let destination = destination.rebased(to: pane.size)
-    page.viewport.frame = pane
-    page.viewport.isHidden = false
-    page.surface.setSurfaceVisible(true)
-    let surfaceFrame = CGRect(origin: .zero, size: pane.size)
-    if page.surface.frame != surfaceFrame { page.surface.frame = surfaceFrame }
-    // ChromiumContainerView.setFrameSize already lays out the native hosts
-    // and notifies CEF synchronously. Forcing the subtree here repeats that
-    // work at the exact moment the compositor flight should start.
-    // The incoming card stays above the gently receding replacement page.
-    layer.zPosition = direction == .replacementExit ? 0 : 1
-    page.splitControl.isHidden = true
-    if initial.glassOpacity > 0 || destination.glassOpacity > 0 {
-      page.beginSplitRevealGlass(direction: direction,
-        fromOpacity: initial.glassOpacity, toOpacity: destination.glassOpacity)
-    } else {
-      // Keep live material for card reveals/exits. Merely making room for a
-      // neighbour should not create a second backdrop.
-      page.endSplitRevealGlass()
-    }
-    animate(layer: layer, pane: pane, from: initial, to: destination,
-            direction: direction, completion: completion)
-  }
-
   /// The page and its detached sidebar glass use identical compositor samples.
   /// Neither Chromium nor the material's view tree is resized during the flight.
   @MainActor

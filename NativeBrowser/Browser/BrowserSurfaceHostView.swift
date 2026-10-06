@@ -1,18 +1,5 @@
 import AppKit
 
-/// Each page finishes on its own compositor clock. Transaction completion can
-/// wait for a longer sibling reveal and leave an outgoing card hanging around.
-@MainActor
-private final class BrowserSplitFlightCompletion: NSObject, CAAnimationDelegate {
-  private let completion: @MainActor () -> Void
-  init(_ completion: @escaping @MainActor () -> Void) { self.completion = completion }
-
-  nonisolated func animationDidStop(_ animation: CAAnimation, finished: Bool) {
-    guard finished else { return }
-    Task { @MainActor [weak self] in self?.completion() }
-  }
-}
-
 /// Stable page registry and outer layout container. Each tab keeps one page UI
 /// instance; this host only chooses its placement, crop and toolbar visibility.
 /// BrowserSessionManager retains ownership of Chromium runtime lifetimes.
@@ -32,72 +19,52 @@ final class BrowserSurfaceHostView: NSView {
   private var liftedPaneID: UUID?
   private var retainedSidebarPaneID: UUID?
   private var paneDropIndex: Int?
-  private struct PageFlight {
-    let token: UUID
-    let frame: CGRect
-    let direction: BrowserSplitRevealTransition.Direction
-    let completion: BrowserSplitFlightCompletion
-  }
-  private var pageFlights: [UUID: PageFlight] = [:]
-  private var restorationCards: [UUID: BrowserSplitRevealTransition.Geometry] = [:]
+  private var isPreparingSplitDrop = false
+  private var deferredRevealTabIDs = Set<UUID>()
 
-  /// The drag overlay hands its actual glass frame to the same animator used
-  /// by preview changes and cancellation. Completion belongs to the flight,
-  /// not the sidebar's timer, so ending a drag cannot cut another page short.
-  func setSplitReveal(for tabIDs: [UUID], frame: CGRect?) {
-    guard let frame, let destination = splitLandingFrame(for: tabIDs),
-          !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-    let source = convert(frame, from: nil)
-    let group = convert(destination, from: nil)
-    guard source.width > 0, source.height > 0, group.width > 0, group.height > 0 else { return }
-    for id in tabIDs {
-      guard let placement = targets[id] else { continue }
-      startFlight(id, pane: placement.frame,
-        from: .card(source, pane: placement.frame, group: group),
-        to: .page(placement.frame), direction: .enter)
+  /// Every drag source hands off one card to the same native page reveal. The
+  /// layout is committed first without an intermediate automatic restoration.
+  func revealSplitPages(for tabIDs: [UUID], from windowFrame: CGRect, onCompletion: @escaping () -> Void) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    deferredRevealTabIDs.formUnion(tabIDs)
+    defer {
+      deferredRevealTabIDs.removeAll()
+      applyPlacements(targets)
+      CATransaction.commit()
+    }
+    liftedPaneID = nil
+    paneDropIndex = nil
+    previewTarget = nil
+    applySurfaceLayout(animatedPresentation: true, animatedVisibility: false)
+    let source = convert(windowFrame, from: nil)
+    let group = splitLandingFrame(for: tabIDs).map { convert($0, from: nil) }
+    guard let group, source.width > 0, source.height > 0, group.width > 0, group.height > 0,
+          !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+      for id in tabIDs { pages[id]?.splitTransition.cancel() }
+      onCompletion()
+      return
+    }
+    var remaining = Set(tabIDs).filter { targets[$0] != nil && pages[$0] != nil }
+    guard !remaining.isEmpty else { onCompletion(); return }
+    for id in Array(remaining) {
+      guard let placement = targets[id], let page = pages[id] else { continue }
+      page.splitTransition.reveal(from: source, into: placement.frame, group: group) { [weak self] in
+        if let self { self.applyPlacements(self.targets) }
+        remaining.remove(id)
+        if remaining.isEmpty { onCompletion() }
+      }
     }
   }
 
-  private func stopFlight(_ id: UUID, preservingPendingContent: Bool = false) {
-    pageFlights.removeValue(forKey: id)
-    pages[id]?.endSplitRevealGlass(preservingPendingContent: preservingPendingContent)
-    pages[id]?.viewport.layer?.removeAnimation(forKey: "split-reveal-transform")
-    pages[id]?.viewport.layer?.removeAnimation(forKey: "split-reveal-opacity")
-    pages[id]?.viewport.layer?.mask = nil
-    pages[id]?.viewport.layer?.zPosition = 0
-  }
-
-  /// A token invalidates stale completion when a preview is cancelled or
-  /// retargeted. Capture presentation geometry BEFORE removing any animation.
   private func startFlight(_ id: UUID, pane: CGRect,
                            from: BrowserSplitRevealTransition.Geometry,
                            to: BrowserSplitRevealTransition.Geometry,
                            direction: BrowserSplitRevealTransition.Direction) {
-    guard let page = pages[id], pane.width > 0, pane.height > 0 else { return }
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
-    stopFlight(id)
-    restorationCards.removeValue(forKey: id)
-    let token = UUID()
-    let completion = BrowserSplitFlightCompletion { [weak self, weak page] in
-      guard let self, let page, self.pageFlights[id]?.token == token else { return }
-      CATransaction.begin()
-      CATransaction.setDisableActions(true)
-      defer { CATransaction.commit() }
-      self.stopFlight(id, preservingPendingContent: direction == .enter)
-      if direction.isExit {
-        // Keep the departure geometry so an interrupted selection can return
-        // continuously, including a replacement that has already faded out.
-        self.restorationCards[id] = to
-        page.hide(animated: false)
-        page.surface.setSurfaceVisible(false)
-      }
+    pages[id]?.splitTransition.animate(in: pane, from: from, to: to, direction: direction) { [weak self] in
+      guard let self else { return }
       self.applyPlacements(self.targets)
     }
-    pageFlights[id] = PageFlight(token: token, frame: pane, direction: direction, completion: completion)
-    BrowserSplitRevealTransition.animate(page, pane: pane, from: from, to: to,
-                                        direction: direction, completion: completion)
   }
 
   private func centeredCard(in pane: CGRect) -> CGRect {
@@ -107,10 +74,10 @@ final class BrowserSurfaceHostView: NSView {
   }
 
   private func beginSplitExit(_ id: UUID, pane: CGRect, isReplacement: Bool = false) {
-    guard pageFlights[id]?.direction.isExit != true, restorationCards[id] == nil,
+    guard pages[id]?.splitTransition.isExiting != true, pages[id]?.splitTransition.restoration == nil,
           window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
           pane.width > 0, pane.height > 0, let page = pages[id] else { return }
-    let source = BrowserSplitRevealTransition.capture(page)
+    let source = page.splitTransition.source(in: pane)
     page.toolbar?.setPageControlsVisible(false, animated: true)
     startFlight(id, pane: pane, from: source,
       to: isReplacement ? .replacedPage(pane) : .card(centeredCard(in: pane), pane: pane, group: pane),
@@ -118,9 +85,12 @@ final class BrowserSurfaceHostView: NSView {
   }
 
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
-    guard liftedPaneID != tabID || paneDropIndex != index else { return }
+    let slot = tabID.flatMap { id in
+      index ?? (liftedPaneID == id ? paneDropIndex : nil) ?? split?.tabIDs.firstIndex(of: id)
+    }
+    guard liftedPaneID != tabID || paneDropIndex != slot else { return }
     liftedPaneID = tabID
-    paneDropIndex = index
+    paneDropIndex = slot
     applySurfaceLayout(animatedPresentation: true)
   }
 
@@ -129,12 +99,13 @@ final class BrowserSurfaceHostView: NSView {
   func beginPaneLift(_ id: UUID, to windowFrame: CGRect) {
     guard let page = pages[id], let pane = targets[id]?.frame else { return }
     liftedPaneID = id
-    paneDropIndex = nil
+    paneDropIndex = split?.tabIDs.firstIndex(of: id)
+    page.toolbar?.setPageControlsVisible(false, animated: true)
     if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
       var destination = BrowserSplitRevealTransition.Geometry.card(convert(windowFrame, from: nil), pane: pane, group: pane)
       destination.glassOpacity = 0
       destination.opacity = 0
-      startFlight(id, pane: pane, from: BrowserSplitRevealTransition.capture(page),
+      startFlight(id, pane: pane, from: page.splitTransition.source(in: pane),
                   to: destination, direction: .paneLift)
     }
     applySurfaceLayout(animatedPresentation: true)
@@ -156,15 +127,16 @@ final class BrowserSurfaceHostView: NSView {
     destination.opacity = 0
     // The glass and page travel continuously to the row. Keep the split until
     // the compositor midpoint, when the page has fully dissolved into glass.
-    startFlight(id, pane: pane, from: BrowserSplitRevealTransition.capture(page),
+    startFlight(id, pane: pane, from: page.splitTransition.source(in: pane),
                 to: destination, direction: .sidebarCollapse)
     applySurfaceLayout()
   }
 
   func endPaneSidebarCollapse(_ id: UUID) {
     if retainedSidebarPaneID == id { retainedSidebarPaneID = nil }
-    if pageFlights[id]?.direction == .sidebarCollapse { stopFlight(id) }
-    if targets[id]?.toolbarVisible == true { restorationCards.removeValue(forKey: id) }
+    if pages[id]?.splitTransition.direction == .sidebarCollapse || targets[id]?.toolbarVisible == true {
+      pages[id]?.splitTransition.cancel()
+    }
     applySurfaceLayout()
   }
 
@@ -276,11 +248,10 @@ final class BrowserSurfaceHostView: NSView {
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
       if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
-      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || id == retainedSidebarPaneID || pageFlights[id]?.direction.isExit == true)
+      surface.setSurfaceVisible(nextVisibleIDs.contains(id) || id == retainedSidebarPaneID || pages[id]?.splitTransition.isExiting == true)
     }
     for id in Array(pages.keys) where containers[id] == nil {
-      stopFlight(id)
-      restorationCards.removeValue(forKey: id)
+      pages[id]?.splitTransition.cancel()
       guard let page = pages.removeValue(forKey: id) else { continue }
       page.hide(animated: window != nil && !isSinglePageTabSwitch)
       // Only runtime closure retires a page instance. Leave its native overlay
@@ -305,6 +276,22 @@ final class BrowserSurfaceHostView: NSView {
     applySurfaceLayout(animatedPresentation: true)
   }
 
+  /// Insertion, replacement and pane moves all defer incoming pages until the
+  /// floating card is handed off. The outgoing replacement and survivors can
+  /// start immediately, retaining their existing motion and geometry.
+  func commitSplitDrop(_ commit: () -> Bool) -> Bool {
+    let animates = window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    isPreparingSplitDrop = animates
+    if animates, let liftedPaneID { deferredRevealTabIDs.insert(liftedPaneID) }
+    let committed = commitSplitPreview(keepingLiftedPaneHidden: animates, commit)
+    isPreparingSplitDrop = false
+    if !committed {
+      deferredRevealTabIDs.removeAll()
+      applySurfaceLayout(animatedPresentation: true)
+    }
+    return committed
+  }
+
   /// Commit directly from the current preview placement. No full-width reset,
   /// no replacement toolbar, and no reparenting of the surviving Chromium view.
   func commitSplitPreview(keepingLiftedPaneHidden: Bool = false, _ commit: () -> Bool) -> Bool {
@@ -315,7 +302,10 @@ final class BrowserSurfaceHostView: NSView {
     isCommittingSplitPreview = hadPreview
     defer {
       isCommittingSplitPreview = false
-      liftedPaneID = nil
+      // A pane drop hands its card to the native reveal before ending the
+      // preview. Retain the lift through that handoff, including reduced motion
+      // and a failed drop, so clearing it always restores the final layout.
+      if !keepingLiftedPaneHidden { liftedPaneID = nil }
     }
     let committed = commit()
     if !committed { applySurfaceLayout(animatedPresentation: hadPreview) }
@@ -325,11 +315,15 @@ final class BrowserSurfaceHostView: NSView {
   /// Read final geometry rather than the in-flight survivor crop. The drag
   /// overlay uses window coordinates to expand into one pane or an incoming pair.
   func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
-    guard window != nil, !tabIDs.isEmpty else { return nil }
+    guard window != nil, !tabIDs.isEmpty, let split else { return nil }
+    let frames = split.paneFrames(in: bounds).panes
     var frame: CGRect?
     for id in tabIDs {
-      guard split?.contains(id) == true, let target = targets[id] else { return nil }
-      frame = frame.map { $0.union(target.frame) } ?? target.frame
+      guard let index = split.tabIDs.firstIndex(of: id) else { return nil }
+      // The lifted page stays hidden through commit, so its target can be
+      // absent until the card is handed back to the committed pane.
+      let pane = frames[index]
+      frame = frame.map { $0.union(pane) } ?? pane
     }
     return frame.map { convert($0, to: nil) }
   }
@@ -343,32 +337,19 @@ final class BrowserSurfaceHostView: NSView {
     setDividerFrames([])
     var next: [UUID: PagePlacement] = [:]
     if let id = liftedPaneID, let split, split.contains(id) {
-      if let index = paneDropIndex {
-        let shown = split.movingPane(id, to: index)
-        let frames = shown.paneFrames(in: bounds)
-        setDividerFrames(frames.dividers)
-        for (position, member) in shown.tabIDs.enumerated() {
-          if member == id {
-            previewFrame = frames.panes[position]
-            previewHasMaterial = true
-
-          } else {
-            next[member] = PagePlacement(frame: frames.panes[position],
-              roundedEdge: roundedEdge(at: position, count: shown.tabIDs.count))
-          }
-        }
-      } else {
-        let remaining = split.tabIDs.filter { $0 != id }
-        if remaining.count == 2 {
-          let shown = BrowserSplitLayout(leftTabID: remaining[0], rightTabID: remaining[1])
-          let frames = shown.paneFrames(in: bounds)
-          setDividerFrames(frames.dividers)
-          for (position, member) in remaining.enumerated() {
-            next[member] = PagePlacement(frame: frames.panes[position],
-              roundedEdge: roundedEdge(at: position, count: 2))
-          }
-        } else if let member = remaining.first {
-          next[member] = PagePlacement(frame: bounds)
+      // A hover outside the content is not a detach. Reserve the lifted slot
+      // throughout the gesture; only a committed sidebar drop removes it.
+      let index = paneDropIndex ?? split.tabIDs.firstIndex(of: id)!
+      let shown = split.movingPane(id, to: index)
+      let frames = shown.paneFrames(in: bounds)
+      setDividerFrames(frames.dividers)
+      for (position, member) in shown.tabIDs.enumerated() {
+        if member == id {
+          previewFrame = frames.panes[position]
+          previewHasMaterial = true
+        } else {
+          next[member] = PagePlacement(frame: frames.panes[position],
+            roundedEdge: roundedEdge(at: position, count: shown.tabIDs.count))
         }
       }
     } else if let target = previewTarget, let split {
@@ -434,8 +415,14 @@ final class BrowserSurfaceHostView: NSView {
     } else if let selectedTabID, pages[selectedTabID] != nil {
       next[selectedTabID] = PagePlacement(frame: bounds)
     }
+    if isPreparingSplitDrop {
+      deferredRevealTabIDs.formUnion(next.keys.filter {
+        targets[$0]?.toolbarVisible != true || pages[$0]?.splitTransition.isReturning == true
+      })
+    }
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
-    updatePreviewFrame(previewFrame, hasMaterial: previewHasMaterial, animated: animatedPresentation)
+    updatePreviewFrame(previewFrame, hasMaterial: previewHasMaterial,
+                       animated: animatedPresentation && deferredRevealTabIDs.isEmpty)
   }
 
   /// Grow the native drop region from the outer edge while the survivor loses
@@ -558,30 +545,19 @@ final class BrowserSurfaceHostView: NSView {
     for (id, placement) in next {
       // Layout notifications must not interpret the held contraction as a
       // returning page and replace it with a full-size reveal before commit.
-      if id == retainedSidebarPaneID { continue }
+      if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
       guard let page = pages[id] else { continue }
       if !placement.toolbarVisible {
         if let previous = targets[id], previous.toolbarVisible { beginSplitExit(id, pane: previous.frame) }
         continue
       }
-      let returning = restorationCards[id] != nil || pageFlights[id]?.direction.isExit == true
+      let returning = page.splitTransition.isReturning
       let changed = targets[id]?.frame != placement.frame || targets[id]?.toolbarVisible != true
       guard returning || changed else { continue }
       if canAnimate && (animated || returning) {
-        var source: BrowserSplitRevealTransition.Geometry
-        if let card = restorationCards[id] {
-          source = card
-        } else if !page.viewport.isHidden, page.viewport.frame.width > 0, page.viewport.frame.height > 0 {
-          source = BrowserSplitRevealTransition.capture(page)
-          // Keep any material already visible during an interrupted reveal.
-          // Width-only survivor motion needs no extra live glass backdrop.
-        } else {
-          source = .card(centeredCard(in: placement.frame), pane: placement.frame, group: placement.frame)
-        }
-        entries[id] = source
+        entries[id] = page.splitTransition.source(in: placement.frame)
       }
-      stopFlight(id)
-      restorationCards.removeValue(forKey: id)
+      page.splitTransition.cancel()
     }
     targets = next
     applyPlacements(next, animatedVisibility: animatedVisibility && window != nil)
@@ -598,13 +574,13 @@ final class BrowserSurfaceHostView: NSView {
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     for (id, page) in pages {
-      if id == retainedSidebarPaneID { continue }
-      if pageFlights[id]?.direction.isExit == true {
+      if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
+      if page.splitTransition.isExiting {
         // Pin the outgoing Chromium size and shared parent while survivors and
         // incoming pages settle. Layout must not hide or resize this viewport.
         continue
       }
-      if restorationCards[id] != nil {
+      if page.splitTransition.restoration != nil {
         page.hide(animated: false)
         continue
       }
@@ -612,22 +588,22 @@ final class BrowserSurfaceHostView: NSView {
         page.hide(animated: animatedVisibility)
         continue
       }
-      if let flight = pageFlights[id] {
+      if let flightFrame = page.splitTransition.frame {
         // Preview settling must not resize this viewport or Chromium while
         // their common parent is running the compositor reveal.
-        placement.frame = flight.frame
+        placement.frame = flightFrame
       }
-      if pageFlights[id] == nil { applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge) }
+      if !page.splitTransition.isAnimating { applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge) }
       page.surface.setSurfaceVisible(true)
       page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
-                  toolbarVisible: placement.toolbarVisible && !isCovered,
+                  toolbarVisible: placement.toolbarVisible && !isCovered && !page.splitTransition.defersChrome,
                   toolbarLayoutFrame: placement.frame,
                   animatedVisibility: animatedVisibility)
       page.splitControl.place(in: self,
         chromeHost: (chromeOverlayHost as? BrowserToolbarLayoutHosting)?.splitPaneOverlayHost,
         paneFrame: placement.frame,
         addressFrame: page.toolbar?.addressCapsuleFrame(in: self),
-        visible: split?.contains(id) == true && pageFlights[id] == nil
+        visible: split?.contains(id) == true && !page.splitTransition.isAnimating
           && liftedPaneID == nil && previewTarget == nil && !isCovered
           && workspace?.isSpotlightPresented != true)
     }

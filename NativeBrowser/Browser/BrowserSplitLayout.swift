@@ -128,8 +128,15 @@ struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
   }
 
   /// Reordering targets the pane under the pointer, including resized panes.
-  func dropPaneIndex(at x: CGFloat, in bounds: CGRect) -> Int {
+  func dropPaneIndex(at x: CGFloat, in bounds: CGRect, previous: Int? = nil) -> Int {
     let dividers = paneFrames(in: bounds).dividers
+    if let previous, (0...dividers.count).contains(previous) {
+      // Keep the current slot across small pointer movements at a divider.
+      // These boundaries belong to the committed layout, never its animation.
+      let lower = previous == 0 ? -CGFloat.infinity : dividers[previous - 1].midX - Self.dropBoundarySlop
+      let upper = previous == dividers.count ? CGFloat.infinity : dividers[previous].midX + Self.dropBoundarySlop
+      if x >= lower && x <= upper { return previous }
+    }
     return dividers.firstIndex(where: { x < $0.midX }) ?? dividers.count
   }
 
