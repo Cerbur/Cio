@@ -300,7 +300,7 @@ final class SidebarTabDrag {
     let liftTimer = Timer(timeInterval: 0.016, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self, self.generation == generation, self.isPaneDrag, self.isDragging else { return }
-        withAnimation(self.reduceMotion ? nil : BrowserSplitRevealTransition.Direction.exit.animation) {
+        withAnimation(self.reduceMotion ? nil : BrowserSplitRevealTransition.Direction.paneLift.animation) {
           self.size = self.blockSize(for: self.style)
           self.paneGlassOpacity = 1
           self.isLifted = true

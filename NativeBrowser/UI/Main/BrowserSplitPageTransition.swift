@@ -63,6 +63,19 @@ final class BrowserSplitPageTransition {
             direction: .enter, onCompletion: onCompletion)
   }
 
+  /// The same departure for split switches, replacements and preview eviction.
+  /// Freeze Chromium at its current render size and capture any interrupted
+  /// flight before fading; only an explicit lift/collapse travels to a card.
+  func dismiss(onCompletion: @escaping () -> Void) {
+    guard let page, !page.viewport.isHidden, !isExiting, restoration == nil,
+          page.viewport.frame.width > 0, page.viewport.frame.height > 0 else { return }
+    let pane = page.viewport.frame
+    let initial = source(in: pane)
+    page.toolbar?.setPageControlsVisible(false, animated: true)
+    animate(in: pane, from: initial, to: .dismissedPage(pane),
+            direction: .dismiss, onCompletion: onCompletion)
+  }
+
   func animate(in pane: CGRect, from initial: BrowserSplitRevealTransition.Geometry,
                to destination: BrowserSplitRevealTransition.Geometry,
                direction: BrowserSplitRevealTransition.Direction, onCompletion: @escaping () -> Void) {
@@ -82,7 +95,10 @@ final class BrowserSplitPageTransition {
       defer { CATransaction.commit() }
       self.clearFlight(preservingPendingContent: direction == .enter)
       if direction.isExit {
-        self.restoration = destination
+        // A completed dismissal is hidden, not a parked near-full-size page.
+        // Its next entry uses the normal glass-card pose; an interrupted
+        // dismissal still resumes from the live presentation captured above.
+        self.restoration = direction == .dismiss ? nil : destination
         page.hide(animated: false)
         page.surface.setSurfaceVisible(false)
       }
@@ -96,7 +112,7 @@ final class BrowserSplitPageTransition {
     page.surface.setSurfaceVisible(true)
     let surfaceFrame = CGRect(origin: .zero, size: pane.size)
     if page.surface.frame != surfaceFrame { page.surface.frame = surfaceFrame }
-    layer.zPosition = direction == .replacementExit ? 0 : 1
+    layer.zPosition = direction == .dismiss ? 0 : 1
     page.splitControl.isHidden = true
     if initial.glassOpacity > 0 || destination.glassOpacity > 0 {
       beginGlass(direction: direction, from: initial.glassOpacity, to: destination.glassOpacity)

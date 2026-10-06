@@ -67,21 +67,13 @@ final class BrowserSurfaceHostView: NSView {
     }
   }
 
-  private func centeredCard(in pane: CGRect) -> CGRect {
-    let size = BrowserSplitRevealTransition.cardSize
-    return CGRect(x: pane.midX - size.width / 2, y: pane.midY - size.height / 2,
-                  width: size.width, height: size.height)
-  }
-
-  private func beginSplitExit(_ id: UUID, pane: CGRect, isReplacement: Bool = false) {
-    guard pages[id]?.splitTransition.isExiting != true, pages[id]?.splitTransition.restoration == nil,
-          window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-          pane.width > 0, pane.height > 0, let page = pages[id] else { return }
-    let source = page.splitTransition.source(in: pane)
-    page.toolbar?.setPageControlsVisible(false, animated: true)
-    startFlight(id, pane: pane, from: source,
-      to: isReplacement ? .replacedPage(pane) : .card(centeredCard(in: pane), pane: pane, group: pane),
-      direction: isReplacement ? .replacementExit : .exit)
+  private func dismissPage(_ id: UUID) {
+    guard window != nil, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+          let page = pages[id] else { return }
+    page.splitTransition.dismiss { [weak self] in
+      guard let self else { return }
+      self.applyPlacements(self.targets)
+    }
   }
 
   func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
@@ -216,12 +208,14 @@ final class BrowserSurfaceHostView: NSView {
   func present(containers: [UUID: ChromiumContainerView], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
     let pairChanged = self.split?.tabIDs != split?.tabIDs
     let nextVisibleIDs = Set(split?.tabIDs ?? selectedTabID.map { [$0] } ?? [])
-    if let previous = self.split {
-      let frames = previous.paneFrames(in: bounds).panes
-      let isReplacement = isCommittingSplitPreview && split?.tabIDs.count == previous.tabIDs.count
-      for (index, id) in previous.tabIDs.enumerated()
+    if pairChanged {
+      // Both directions of a split switch share replacement's departure.
+      // Include the outgoing single page so it does not abruptly vanish while
+      // the incoming split cards are still small.
+      let previousIDs = self.split?.tabIDs ?? self.selectedTabID.map { [$0] } ?? []
+      for id in previousIDs
         where !nextVisibleIDs.contains(id) && id != liftedPaneID && id != retainedSidebarPaneID && containers[id] != nil {
-        beginSplitExit(id, pane: frames[index], isReplacement: isReplacement)
+        dismissPage(id)
       }
     }
     // A single-page tab switch replaces the toolbar in its existing slot. Both
@@ -238,6 +232,9 @@ final class BrowserSurfaceHostView: NSView {
     for (id, surface) in containers {
       if pages[id] == nil {
         let viewport = BrowserPageViewportView(frame: surface.frame)
+        // A new runtime has never had a visible page pose. Keep it hidden until
+        // placement so the shared entry captures a glass card, not host.bounds.
+        viewport.isHidden = true
         let page = BrowserPagePresentation(tabID: id, surface: surface, viewport: viewport)
         pages[id] = page
         page.splitControl.onDrag = { [weak self] event in self?.onSplitPaneDrag?(id, event) ?? false }
@@ -548,7 +545,7 @@ final class BrowserSurfaceHostView: NSView {
       if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
       guard let page = pages[id] else { continue }
       if !placement.toolbarVisible {
-        if let previous = targets[id], previous.toolbarVisible { beginSplitExit(id, pane: previous.frame) }
+        if targets[id]?.toolbarVisible == true { dismissPage(id) }
         continue
       }
       let returning = page.splitTransition.isReturning

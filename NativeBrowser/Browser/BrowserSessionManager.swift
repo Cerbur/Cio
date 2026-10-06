@@ -313,6 +313,10 @@ final class BrowserSessionManager: ObservableObject {
       } else {
         let created = ChromiumContainerView(frame: host.bounds)
         created.autoresizingMask = [.width, .height]
+        // Presentation needs first-load readiness before it starts the glass
+        // reveal. The session's container binding and CEF creation still happen
+        // below, after the host has mounted and assigned the final pane size.
+        created.delegate = sessions[tabID]
         containers[tabID] = created
         live[tabID] = created
       }

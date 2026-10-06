@@ -14,7 +14,7 @@ enum BrowserSplitRevealTransition {
   static let layoutDuration: TimeInterval = 0.26 * durationScale
   static let contentFadeDuration: TimeInterval = 0.18 * durationScale
   static let contentWaitDuration: TimeInterval = 1 * durationScale
-  private static let replacementScale: CGFloat = 0.94
+  private static let dismissScale: CGFloat = 0.94
   static let sampleCount = 120
   static let glassHoldFraction = 0.08
   static let glassFadeFraction = 0.92
@@ -23,13 +23,13 @@ enum BrowserSplitRevealTransition {
   private static let exitEasing: (Float, Float, Float, Float) = (0.3, 0, 0.65, 1)
 
   enum Direction {
-    case enter, exit, replacementExit, paneLift, sidebarCollapse, sidebarSurvivor, layout
-    var isExit: Bool { self == .exit || self == .replacementExit || self == .paneLift || self == .sidebarCollapse }
+    case enter, dismiss, paneLift, sidebarCollapse, sidebarSurvivor, layout
+    var isExit: Bool { self == .dismiss || self == .paneLift || self == .sidebarCollapse }
     var duration: TimeInterval {
       switch self {
       case .enter, .sidebarCollapse: BrowserSplitRevealTransition.duration
       case .sidebarSurvivor: BrowserSplitRevealTransition.duration * (1 - sidebarDetachFraction)
-      case .exit, .replacementExit, .paneLift: exitDuration
+      case .dismiss, .paneLift: exitDuration
       case .layout: layoutDuration
       }
     }
@@ -38,7 +38,7 @@ enum BrowserSplitRevealTransition {
       // mirrored entry curve finishes at high speed and makes the hide snap.
       switch self {
       case .enter, .sidebarCollapse: enterEasing
-      case .exit, .replacementExit, .paneLift: exitEasing
+      case .dismiss, .paneLift: exitEasing
       case .layout, .sidebarSurvivor: layoutEasing
       }
     }
@@ -75,12 +75,12 @@ enum BrowserSplitRevealTransition {
   // Reuse the timing samples across pages and the region boundary. Retargeting
   // a drag need not solve the cubic 120 times again for every visible page.
   private static let enterSamples = (0...sampleCount).map { Direction.enter.progress(at: Double($0) / Double(sampleCount)) }
-  private static let exitSamples = (0...sampleCount).map { Direction.exit.progress(at: Double($0) / Double(sampleCount)) }
+  private static let exitSamples = (0...sampleCount).map { Direction.dismiss.progress(at: Double($0) / Double(sampleCount)) }
   private static let layoutSamples = (0...sampleCount).map { Direction.layout.progress(at: Double($0) / Double(sampleCount)) }
   static func progressSamples(_ direction: Direction) -> [CGFloat] {
     switch direction {
     case .enter, .sidebarCollapse: enterSamples
-    case .exit, .replacementExit, .paneLift: exitSamples
+    case .dismiss, .paneLift: exitSamples
     case .layout, .sidebarSurvivor: layoutSamples
     }
   }
@@ -110,11 +110,13 @@ enum BrowserSplitRevealTransition {
                                   y: card.midY + (pane.midY - group.midY) * scale),
                   outline: card, scale: CGSize(width: scale, height: scale), renderSize: pane.size, glassOpacity: 1)
     }
-    static func replacedPage(_ pane: CGRect) -> Self {
+    /// Switching and replacement both recede gently at the current render size.
+    /// A departing page never grows a new glass card over its successor.
+    static func dismissedPage(_ pane: CGRect) -> Self {
       var result = page(pane)
-      result.scale = CGSize(width: replacementScale, height: replacementScale)
-      result.outline = pane.insetBy(dx: pane.width * (1 - replacementScale) / 2,
-                                   dy: pane.height * (1 - replacementScale) / 2)
+      result.scale = CGSize(width: dismissScale, height: dismissScale)
+      result.outline = pane.insetBy(dx: pane.width * (1 - dismissScale) / 2,
+                                   dy: pane.height * (1 - dismissScale) / 2)
       result.opacity = 0
       return result
     }
