@@ -14,6 +14,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
   private var sourceFrame: CGRect
   private var plannedLanding: CGRect?
   private var startTime: CFTimeInterval = 0
+  private var flightDuration: TimeInterval = 0
   private var midpointAction: (() -> Void)?
   private var completion: (() -> Void)?
   private(set) var isFlightFinished = false
@@ -60,6 +61,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     self.completion = completion
     plannedLanding = destination
     let direction = BrowserSplitRevealTransition.Direction.sidebarCollapse
+    flightDuration = direction.duration
     let origin = BrowserSplitRevealTransition.Geometry.page(sourceFrame)
     let landing = BrowserSplitRevealTransition.Geometry.card(destination, pane: sourceFrame, group: sourceFrame)
     let samples = BrowserSplitRevealTransition.progressSamples(direction)
@@ -68,9 +70,10 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
       let time = CGFloat(step) / CGFloat(BrowserSplitRevealTransition.sampleCount)
       // Complete the live-page/material handoff by the logical midpoint.
       return (1 - BrowserSplitRevealTransition.sidebarPageVisibility(at: time))
-        * (1 - smooth((amount - 0.9) / 0.1))
+        * (1 - smooth((amount - AnimationValues.SplitPages.sidebarGlassFadeStart)
+          / AnimationValues.SplitPages.sidebarGlassFadeSpan))
     }
-    configure(glassFade, direction: direction)
+    configure(glassFade)
     glass.layer?.add(glassFade, forKey: "sidebar-collapse-glass-fade")
 
     // Mount at the final row size before starting. There is no hosting-view
@@ -95,8 +98,9 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
         return NSValue(caTransform3D: CATransform3DMakeAffineTransform(value))
       }
       let opacity = CAKeyframeAnimation(keyPath: "opacity")
-      opacity.values = samples.map { smooth(($0 - 0.68) / 0.28) }
-      for animation in [transform, opacity] { configure(animation, direction: direction) }
+      opacity.values = samples.map { smooth(($0 - AnimationValues.SplitPages.sidebarLabelFadeStart)
+        / AnimationValues.SplitPages.sidebarLabelFadeSpan) }
+      for animation in [transform, opacity] { configure(animation) }
       contentLayer.add(transform, forKey: "sidebar-collapse-label-scale")
       contentLayer.add(opacity, forKey: "sidebar-collapse-label-fade")
     }
@@ -106,7 +110,7 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     let midpoint = CABasicAnimation(keyPath: "opacity")
     midpoint.fromValue = 0
     midpoint.toValue = 0
-    midpoint.duration = direction.duration * BrowserSplitRevealTransition.sidebarDetachFraction
+    midpoint.duration = flightDuration * BrowserSplitRevealTransition.sidebarDetachFraction
     midpoint.delegate = self
     midpoint.setValue(true, forKey: "sidebarCollapseMidpoint")
     midpointClock.add(midpoint, forKey: "sidebar-collapse-midpoint")
@@ -127,10 +131,10 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     let correction = CABasicAnimation(keyPath: "transform")
     correction.fromValue = NSValue(caTransform3D: (layer.presentation() ?? layer).transform)
     correction.toValue = NSValue(caTransform3D: CATransform3DMakeAffineTransform(transform))
-    correction.duration = max(0, BrowserSplitRevealTransition.duration - (CACurrentMediaTime() - startTime))
+    correction.duration = max(0, flightDuration - (CACurrentMediaTime() - startTime))
     correction.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
     layer.transform = CATransform3DMakeAffineTransform(transform)
-    if correction.duration > 1.0 / 120 { layer.add(correction, forKey: "sidebar-collapse-correction") }
+    if correction.duration > AnimationValues.SplitPages.minimumCorrectionDuration { layer.add(correction, forKey: "sidebar-collapse-correction") }
   }
 
   private func smooth(_ value: CGFloat) -> CGFloat {
@@ -138,8 +142,8 @@ final class BrowserSidebarCollapseView: NSView, CAAnimationDelegate {
     return value * value * (3 - 2 * value)
   }
 
-  private func configure(_ animation: CAAnimation, direction: BrowserSplitRevealTransition.Direction) {
-    animation.duration = direction.duration
+  private func configure(_ animation: CAAnimation) {
+    animation.duration = flightDuration
     animation.timingFunction = CAMediaTimingFunction(name: .linear)
     animation.fillMode = .both
     animation.isRemovedOnCompletion = false

@@ -22,3 +22,12 @@ These are user-defined constraints from [the layout session](codex://threads/01a
 - Prefer native AppKit or SwiftUI components, system styles, materials and SF Symbols for every UI component. Do not hand-draw replacements for components or interactions provided by the system.
 - Traffic lights must use the window's native close, minimize and zoom buttons, preserving system hover glyphs, activation, accessibility and button actions. Do not substitute custom circles, custom glyphs or imitation hover behavior.
 - Native behavior and the layout constraints above must both be satisfied. Do not silently relax spacing or alignment to fix hover, dragging or another interaction, and do not replace native behavior with custom drawing to preserve the layout.
+
+# Animation parameters
+
+- `NativeBrowser/Animation/` is the dedicated animation package, compiled into the existing app target. Keep shared motion implementations and preferences here; split tuning files by effect / component, extending the single `AnimationValues` namespace (for example `AnimationValues.SplitPages` or `AnimationValues.Toolbar`).
+- All new or modified custom window / UI animation effects must declare their tuning in this package. Do not write animation durations, delays, spring responses, damping, easing control points, speed multipliers or animation-specific scale / progress values directly in component files. Components must reference named `AnimationValues` properties.
+- Declare base timings at the Standard pace in the corresponding `*AnimationValues.swift` file. Resolve time values through `AnimationValues.duration(_:)`, which multiplies them by the persisted Settings speed ratio. Returned timings are already scaled: do not multiply again or cache them in a `static let`. Curves, damping and geometry stay independent of speed.
+- Animation-related handoff, retention and cleanup waits must also use named timing values and the same speed ratio. Capture the timing when a flight starts if later stages must stay on its clock; prefer completion callbacks over unrelated timers.
+- Preserve Reduce Motion behavior and system-owned native animation. Input debounce, Chromium scheduling, frame polling and pointer-driven scrolling are operational timing, not visual animation speed; do not scale them with the animation preference.
+- See `NativeBrowser/Animation/README.md` for the package layout and usage examples.

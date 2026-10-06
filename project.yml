@@ -83,6 +83,8 @@ targets:
         excludes:
           - "Resources/Info.plist"
           - "Helper/**"
+          # Developer documentation is not an application resource.
+          - "Animation/README.md"
           # The unit tests are their own target (NavigationInput.swift is
           # compiled into both).
           - "Tests/**"

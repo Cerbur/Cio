@@ -59,7 +59,7 @@ struct AddressSiteInformationView: View {
       .padding(20)
       .frame(maxWidth: .infinity, alignment: .leading)
       .frame(height: AddressSiteInformationState.contentHeight, alignment: .top)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: state.page)
+      .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.informationPageDuration), value: state.page)
       .accessibilityIdentifier("address-site-information")
     }
   }

@@ -5,27 +5,23 @@ import SwiftUI
 /// Chromium renders at the destination size once; its stable viewport and native
 /// glass share a compositor transform and rounded outline for the whole flight.
 enum BrowserSplitRevealTransition {
-  // Tune every split-page transition here, including the floating handle card.
-  static let cardSize = CGSize(width: 140, height: 196)
-  static let durationScale: TimeInterval = 0.75
-  static let duration: TimeInterval = 0.48 * durationScale
-  static let sidebarDetachFraction = 0.5
-  static let exitDuration: TimeInterval = 0.22 * durationScale
-  static let layoutDuration: TimeInterval = 0.26 * durationScale
-  static let contentFadeDuration: TimeInterval = 0.18 * durationScale
-  static let contentWaitDuration: TimeInterval = 1 * durationScale
-  private static let dismissScale: CGFloat = 0.94
-  static let sampleCount = 120
-  static let glassHoldFraction = 0.08
-  static let glassFadeFraction = 0.92
-  private static let enterEasing: (Float, Float, Float, Float) = (0.32, 0, 0.2, 1)
-  private static let layoutEasing: (Float, Float, Float, Float) = (0.18, 0.78, 0.24, 1)
-  private static let exitEasing: (Float, Float, Float, Float) = (0.3, 0, 0.65, 1)
+  private typealias Values = AnimationValues.SplitPages
+  static let cardSize = Values.cardSize
+  static let sidebarDetachFraction = Values.sidebarDetachFraction
+  static let sampleCount = Values.sampleCount
+  static let glassHoldFraction = Values.glassHoldFraction
+  static let glassFadeFraction = Values.glassFadeFraction
+
+  @MainActor static var duration: TimeInterval { Values.enterDuration }
+  @MainActor static var exitDuration: TimeInterval { Values.exitDuration }
+  @MainActor static var layoutDuration: TimeInterval { Values.layoutDuration }
+  @MainActor static var contentFadeDuration: TimeInterval { Values.contentFadeDuration }
+  @MainActor static var contentWaitDuration: TimeInterval { Values.contentWaitDuration }
 
   enum Direction {
     case enter, dismiss, paneLift, sidebarCollapse, sidebarSurvivor, layout
     var isExit: Bool { self == .dismiss || self == .paneLift || self == .sidebarCollapse }
-    var duration: TimeInterval {
+    @MainActor var duration: TimeInterval {
       switch self {
       case .enter, .sidebarCollapse: BrowserSplitRevealTransition.duration
       case .sidebarSurvivor: BrowserSplitRevealTransition.duration * (1 - sidebarDetachFraction)
@@ -37,9 +33,9 @@ enum BrowserSplitRevealTransition {
       // Reverse the geometry, but settle both ends of the quick exit. A literal
       // mirrored entry curve finishes at high speed and makes the hide snap.
       switch self {
-      case .enter, .sidebarCollapse: enterEasing
-      case .dismiss, .paneLift: exitEasing
-      case .layout, .sidebarSurvivor: layoutEasing
+      case .enter, .sidebarCollapse: Values.enterEasing
+      case .dismiss, .paneLift: Values.exitEasing
+      case .layout, .sidebarSurvivor: Values.layoutEasing
       }
     }
     var timingFunction: CAMediaTimingFunction {
@@ -59,14 +55,14 @@ enum BrowserSplitRevealTransition {
       }
       var lower = 0.0
       var upper = 1.0
-      for _ in 0..<20 {
+      for _ in 0..<Values.bezierIterations {
         let t = (lower + upper) / 2
         if bezier(t, x1, x2) < time { lower = t } else { upper = t }
       }
       return CGFloat(bezier((lower + upper) / 2, y1, y2))
     }
 
-    var animation: Animation {
+    @MainActor var animation: Animation {
       let (x1, y1, x2, y2) = controlPoints
       return .timingCurve(Double(x1), Double(y1), Double(x2), Double(y2), duration: duration)
     }
@@ -114,9 +110,9 @@ enum BrowserSplitRevealTransition {
     /// A departing page never grows a new glass card over its successor.
     static func dismissedPage(_ pane: CGRect) -> Self {
       var result = page(pane)
-      result.scale = CGSize(width: dismissScale, height: dismissScale)
-      result.outline = pane.insetBy(dx: pane.width * (1 - dismissScale) / 2,
-                                   dy: pane.height * (1 - dismissScale) / 2)
+      result.scale = CGSize(width: Values.dismissScale, height: Values.dismissScale)
+      result.outline = pane.insetBy(dx: pane.width * (1 - Values.dismissScale) / 2,
+                                   dy: pane.height * (1 - Values.dismissScale) / 2)
       result.opacity = 0
       return result
     }
@@ -196,6 +192,7 @@ enum BrowserSplitRevealTransition {
     mask.add(outline, forKey: "split-reveal-outline")
   }
 
+  @MainActor
   static func glassOpacityAnimation(_ direction: Direction, from: Float, to: Float) -> CAKeyframeAnimation {
     let animation = CAKeyframeAnimation(keyPath: "opacity")
     animation.values = (0...sampleCount).map { step in

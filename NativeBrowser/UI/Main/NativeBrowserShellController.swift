@@ -238,7 +238,7 @@ final class NativeBrowserShellController: NSViewController {
       spotlightPresentationState?.isPresented = isPresented
       if !isPresented {
         spotlightRemovalTask = Task { @MainActor [weak self, weak hostingView] in
-          try? await Task.sleep(for: .milliseconds(170))
+          try? await Task.sleep(for: .seconds(AnimationValues.Spotlight.retirementDuration))
           guard !Task.isCancelled,
                 let self, let hostingView,
                 self.spotlightHostingView === hostingView else { return }

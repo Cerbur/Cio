@@ -38,5 +38,12 @@ struct NativeBrowserApp: App {
       // selection rather than on whatever was selected when the menu was built.
       BrowserCommands(workspace: runtime.workspaceStore, runtime: runtime)
     }
+
+    // SwiftUI installs the native Settings menu item and Command-comma, which
+    // AppKit dispatches even while Chromium owns the browser's first responder.
+    Settings {
+      BrowserSettingsView()
+    }
+    .defaultSize(width: 760, height: 520)
   }
 }

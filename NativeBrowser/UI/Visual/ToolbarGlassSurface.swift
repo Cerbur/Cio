@@ -13,16 +13,8 @@ import SwiftUI
 /// immediately, without visibility animation. Split entry/exit and section
 /// visibility changes still use this contract; surviving controls only reflow.
 ///
-/// Apple recommends materialize for independent glass insertion/removal and
-/// permits custom transitions alongside it:
-/// https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views
-/// The scale and duration below implement our motion direction, not an Apple
-/// prescribed numeric specification. AppKit buttons retain their own glass;
-/// SwiftUI address glass uses the native materialize transition as well.
-enum ToolbarComponentAnimation {
-  static let duration: TimeInterval = 0.25
-  static let dispersedScale: CGFloat = 1.12
-}
+/// Numeric tuning lives in AnimationValues.Toolbar. AppKit buttons keep their
+/// native glass; SwiftUI address glass also uses the native materialize transition.
 
 /// Keep the native control/editor mounted so focus and native interaction state
 /// survive visibility changes. Scale the complete component around its centre,
@@ -33,7 +25,7 @@ struct ToolbarComponentVisibility: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .scaleEffect(presentation.isVisible || reduceMotion ? 1 : ToolbarComponentAnimation.dispersedScale)
+      .scaleEffect(presentation.isVisible || reduceMotion ? 1 : AnimationValues.Toolbar.dispersedScale)
       .opacity(presentation.isVisible ? 1 : 0)
       .allowsHitTesting(presentation.isVisible)
       .accessibilityHidden(!presentation.isVisible)
@@ -49,7 +41,7 @@ final class ToolbarPresentationState: ObservableObject {
   func setVisible(_ visible: Bool, animated: Bool) {
     guard isVisible != visible else { return }
     let animates = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    var transaction = Transaction(animation: animates ? .smooth(duration: ToolbarComponentAnimation.duration) : nil)
+    var transaction = Transaction(animation: animates ? .smooth(duration: AnimationValues.Toolbar.visibilityDuration) : nil)
     transaction.disablesAnimations = !animates
     withTransaction(transaction) { isVisible = visible }
   }

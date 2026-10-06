@@ -32,3 +32,9 @@ Space Pin collapse still snapshots the hidden tab IDs. Selecting another tab
 does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native
 sidebar toggle.
+
+Animation tuning lives in `NativeBrowser/Animation/`, under
+`AnimationValues.Sidebar` and `AnimationValues.TabDrag`. Timing properties
+already apply the Settings speed ratio. New effects must reference these named
+values rather than embedding durations, delays, spring response or damping in
+the panel / tab components. See the animation package README and root AGENTS.md.

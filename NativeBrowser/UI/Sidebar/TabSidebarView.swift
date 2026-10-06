@@ -84,7 +84,7 @@ private struct SpacePageTrack: View {
     .onChange(of: selectedIndex) { oldIndex, _ in
       outgoingIndex = oldIndex
       Task { @MainActor in
-        try? await Task.sleep(for: .milliseconds(400))
+        try? await Task.sleep(for: .seconds(AnimationValues.Sidebar.pageRetentionDuration))
         if outgoingIndex == oldIndex { outgoingIndex = nil }
       }
     }
@@ -144,7 +144,7 @@ struct TabSidebarView: View {
           count: workspace.spaces.count,
           displacement: pageSwipeState.displacement,
           width: geometry.size.width)
-        withAnimation(.smooth(duration: 0.34)) {
+        withAnimation(.smooth(duration: AnimationValues.Sidebar.pagingDuration)) {
           pageSwipeState.reset()
           workspace.selectSpace(id: workspace.spaces[next].id)
         }
@@ -203,7 +203,7 @@ struct TabSidebarView: View {
       .onChange(of: isSidebarHovered) { _, isHovered in
         if !isHovered {
           hoveredNewTabSpaceID = nil
-          withAnimation(.easeOut(duration: 0.18)) { isClearHovered = false }
+          withAnimation(.easeOut(duration: AnimationValues.Sidebar.clearHoverDuration)) { isClearHovered = false }
         }
       }
     }
@@ -252,7 +252,7 @@ struct TabSidebarView: View {
     .overlay(alignment: .top) {
       SidebarSpaceRow(space: space, isCollapsed: hiddenSpacePinIDs[space.id] != nil,
                       isTabDragActive: tabDrag.tabID != nil) {
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) {
+        withAnimation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
           if hiddenSpacePinIDs[space.id] != nil {
             hiddenSpacePinIDs.removeValue(forKey: space.id)
           } else {
@@ -312,7 +312,7 @@ struct TabSidebarView: View {
         .help("Close idle tabs except the active tab")
         .allowsHitTesting(clearingSpaceID == nil)
         .onHover { isHovered in
-          withAnimation(.easeOut(duration: 0.18)) { isClearHovered = isHovered }
+          withAnimation(.easeOut(duration: AnimationValues.Sidebar.clearHoverDuration)) { isClearHovered = isHovered }
         }
       }
     }
@@ -350,14 +350,14 @@ struct TabSidebarView: View {
   private func animateClear(in spaceID: UUID) {
     guard clearingSpaceID == nil else { return }
     clearingSpaceID = spaceID
-    withAnimation(.easeOut(duration: 0.14), completionCriteria: .logicallyComplete) {
+    withAnimation(.easeOut(duration: AnimationValues.Sidebar.clearTiltDuration), completionCriteria: .logicallyComplete) {
       isClearHovered = false
-      dumpAngle = 18
+      dumpAngle = AnimationValues.Sidebar.clearTiltAngle
     } completion: {
-      withAnimation(.easeInOut(duration: 0.16), completionCriteria: .logicallyComplete) {
+      withAnimation(.easeInOut(duration: AnimationValues.Sidebar.clearReturnDuration), completionCriteria: .logicallyComplete) {
         dumpAngle = 0
       } completion: {
-        withAnimation(.smooth(duration: 0.28)) {
+        withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
           workspace.clearTemporaryTabs(in: spaceID)
         }
         clearingSpaceID = nil
@@ -381,9 +381,9 @@ struct TabSidebarView: View {
             } onClose: {
               workspace.closeTab(id: tab.id)
             } onPinInSpace: {
-              withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
+              withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
             } onMakeTemporary: {
-              withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
+              withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
             }
             .modifier(SidebarTabDragItem(drag: tabDrag, tabID: tab.id, tier: .global))
           case .group(let group):
@@ -404,7 +404,7 @@ struct TabSidebarView: View {
             .help("Pin tabs for all Spaces")
           }
       }
-      .animation(.smooth(duration: 0.28), value: tileSlots.map(\.id))
+      .animation(.smooth(duration: AnimationValues.Sidebar.reorderDuration), value: tileSlots.map(\.id))
 
     }
     .help("Workspace pins stay visible when you switch Spaces")
@@ -475,7 +475,7 @@ struct TabSidebarView: View {
     } onClose: {
       workspace.closeTab(id: tab.id)
     } onPinGlobally: {
-      withAnimation(.smooth(duration: 0.28)) { _ = workspace.moveTab(tab.id, to: .global) }
+      withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.moveTab(tab.id, to: .global) }
     } onPinInSpace: {
       toggleSpacePin(tab.id)
     } onMakeTemporary: {
@@ -494,7 +494,7 @@ struct TabSidebarView: View {
 
   private func move(_ id: UUID, to target: SidebarTabDropTarget) -> Bool {
     var moved = false
-    withAnimation(.smooth(duration: 0.28)) {
+    withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
       if workspace.splitGroup(containing: id) != nil {
         moved = workspace.moveSplitGroup(containing: id, to: target.tier, before: target.before)
       } else {
@@ -563,7 +563,7 @@ struct TabSidebarView: View {
         let start = min(max(0, selectedIndex - 1), max(0, spaces.count - 4))
         ForEach(Array(spaces.dropFirst(start).prefix(4))) { space in
           Button {
-            withAnimation(.smooth(duration: 0.28)) { workspace.selectSpace(id: space.id) }
+            withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { workspace.selectSpace(id: space.id) }
           } label: {
             Group {
               if space.id == workspace.selectedSpaceID {
@@ -587,7 +587,7 @@ struct TabSidebarView: View {
           }
         }
         Button {
-          withAnimation(.smooth(duration: 0.28)) { _ = workspace.createSpace() }
+          withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) { _ = workspace.createSpace() }
         } label: {
           Image(systemName: "plus")
             .font(.system(size: 16, weight: .medium))
@@ -657,7 +657,8 @@ private struct ClearTrashIcon: View {
         path.addLine(to: CGPoint(x: 9, y: 3.5))
       }
       .stroke(style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
-      .rotationEffect(.degrees(isLidOpen ? -18 : 0), anchor: UnitPoint(x: 1 / 14, y: 3.5 / 14))
+      .rotationEffect(.degrees(isLidOpen ? AnimationValues.Sidebar.clearLidAngle : 0),
+                      anchor: UnitPoint(x: 1 / 14, y: 3.5 / 14))
     }
     .frame(width: 14, height: 14)
     .rotationEffect(.degrees(dumpAngle), anchor: .bottom)
@@ -726,7 +727,7 @@ private struct PinnedTile: View {
     .buttonStyle(.plain)
     .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover, idleFill: 0.04,
                                 usesScrollEdge: false, stableBorderOpacity: 0.5, hoverBorderOpacity: 0.25))
-    .scaleEffect(selected ? 1.02 : 1)
+    .scaleEffect(selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     .onHover { interaction.isHovered = $0 }
     .contextMenu {
       Button("Pin in This Space", action: onPinInSpace)
@@ -815,7 +816,7 @@ private struct SidebarSplitTabRow: View {
     .modifier(SidebarScrollEdge(isEnabled: tier != .global))
     .modifier(SidebarTabSurface(isStable: selected, isHovered: showsHover,
                                 idleFill: tier == .global ? 0.04 : 0.035, usesScrollEdge: tier != .global))
-    .scaleEffect(tier == .global && selected ? 1.02 : 1)
+    .scaleEffect(tier == .global && selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     .contextMenu {
       Button("Ungroup Tabs", action: onUngroup)
       Button("Swap Sides", action: onSwap)
@@ -843,7 +844,7 @@ private struct SidebarSplitTabRow: View {
       .opacity(showsHover ? 1 : 0)
       .allowsHitTesting(showsHover)
       .accessibilityHidden(!showsHover)
-      .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsHover)
+      .animation(reduceMotion ? nil : .easeOut(duration: AnimationValues.Sidebar.hoverDuration), value: showsHover)
       .help("Ungroup Tabs — keep the left tab active")
       .accessibilityLabel("Ungroup Tabs")
     }

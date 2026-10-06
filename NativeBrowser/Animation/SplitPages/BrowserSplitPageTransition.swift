@@ -42,7 +42,8 @@ final class BrowserSplitPageTransition {
     }
     let rendered = page.viewport.frame
     let shown = layer.presentation() ?? layer
-    let scale = CGSize(width: max(0.001, shown.transform.m11), height: max(0.001, shown.transform.m22))
+    let scale = CGSize(width: max(AnimationValues.SplitPages.minimumScale, shown.transform.m11),
+                       height: max(AnimationValues.SplitPages.minimumScale, shown.transform.m22))
     let pivot = CGPoint(x: layer.anchorPoint.x * rendered.width, y: layer.anchorPoint.y * rendered.height)
     let origin = CGPoint(x: rendered.minX + pivot.x + shown.transform.m41 - pivot.x * scale.width,
                          y: rendered.minY + pivot.y + shown.transform.m42 - pivot.y * scale.height)

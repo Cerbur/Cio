@@ -14,7 +14,7 @@ struct SpaceTabPanel<Content: View>: View {
         SpaceTabRowContainer(row: row, drag: drag) { content(row) }
       }
     }
-    .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: rows)
+    .animation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.reorderDuration), value: rows)
   }
 }
 

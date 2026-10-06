@@ -58,10 +58,14 @@ struct SidebarTabSurface: ViewModifier {
         .clipShape(SidebarTabAppearance.glassShape)
         .glassEffect(.regular, in: SidebarTabAppearance.glassShape)
         .glassEffectTransition(reduceMotion || presentation.preservesGlassContinuity ? .identity : .materialize)
-        .scaleEffect(presentation.isLifted && !reduceMotion ? 1.04 : 1,
+        .scaleEffect(presentation.isLifted && !reduceMotion ? AnimationValues.TabDrag.liftedScale : 1,
                      anchor: UnitPoint(x: presentation.grab.x, y: presentation.grab.y))
-        .shadow(color: .black.opacity(presentation.isLifted ? 0.2 : 0.06),
-                radius: presentation.isLifted ? 16 : 5, y: presentation.isLifted ? 9 : 2)
+        .shadow(color: .black.opacity(presentation.isLifted
+                  ? AnimationValues.TabDrag.liftedShadowOpacity : AnimationValues.TabDrag.restingShadowOpacity),
+                radius: presentation.isLifted
+                  ? AnimationValues.TabDrag.liftedShadowRadius : AnimationValues.TabDrag.restingShadowRadius,
+                y: presentation.isLifted
+                  ? AnimationValues.TabDrag.liftedShadowOffset : AnimationValues.TabDrag.restingShadowOffset)
         .transition(presentation.transition)
     } else {
       content

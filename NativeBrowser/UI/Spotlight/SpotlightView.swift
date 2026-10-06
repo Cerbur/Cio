@@ -15,6 +15,7 @@ final class SpotlightPresentationState: ObservableObject {
 }
 
 struct SpotlightView: View {
+  private typealias Values = AnimationValues.Spotlight
   @ObservedObject var presentation: SpotlightPresentationState
   @ObservedObject var autocomplete: SpotlightAutocompleteService
   let onSelect: (SpotlightMode) -> Void
@@ -67,17 +68,21 @@ struct SpotlightView: View {
   private var suggestionCornerRadius: CGFloat { expandedCornerRadius - suggestionInset }
 
   private var panelShape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: 17 + (expandedCornerRadius - 17) * glassProgress, style: .continuous)
+    let collapsedRadius = Values.collapsedGlassDiameter / 2
+    return RoundedRectangle(
+      cornerRadius: collapsedRadius + (expandedCornerRadius - collapsedRadius) * glassProgress,
+      style: .continuous)
   }
 
   var body: some View {
     GeometryReader { geometry in
       let panelWidth = min(geometry.size.width - 48, 720)
       let panelTop = max(16, geometry.size.height / 3 - 33)
-      let glassWidth = 34 + (panelWidth - 34) * glassProgress
-      let glassHeight = 34 + (panelHeight - 34) * glassProgress
+      let diameter = Values.collapsedGlassDiameter
+      let glassWidth = diameter + (panelWidth - diameter) * glassProgress
+      let glassHeight = diameter + (panelHeight - diameter) * glassProgress
       // Close toward the original capsule center, even after suggestions expand the panel.
-      let glassOffset: CGFloat = 16 * (1 - glassProgress)
+      let glassOffset = Values.collapsedGlassOffset * (1 - glassProgress)
       ZStack(alignment: .top) {
         Color.clear
           .contentShape(Rectangle())
@@ -150,7 +155,7 @@ struct SpotlightView: View {
       if reduceMotion {
         panelHeight = height
       } else {
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+        withAnimation(.spring(response: Values.suggestionsResponse, dampingFraction: Values.suggestionsDamping)) {
           panelHeight = height
         }
       }
@@ -271,25 +276,25 @@ struct SpotlightView: View {
       if reduceMotion {
         glassProgress = 1
       } else {
-        withAnimation(.spring(response: 0.31, dampingFraction: 0.68)) {
+        withAnimation(.spring(response: Values.revealResponse, dampingFraction: Values.revealDamping)) {
           glassProgress = 1
         }
       }
-      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.12)) {
+      withAnimation(.easeOut(duration: reduceMotion ? Values.reducedMotionRevealDuration : Values.revealFadeDuration)) {
         glassOpacity = 1
       }
-      withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.12).delay(reduceMotion ? 0 : 0.067)) {
+      withAnimation(.easeOut(duration: reduceMotion ? Values.reducedMotionRevealDuration : Values.revealFadeDuration).delay(reduceMotion ? 0 : Values.contentRevealDelay)) {
         isContentVisible = true
       }
       focusGeneration += 1
     } else {
-      withAnimation(.easeIn(duration: 0.025)) { isContentVisible = false }
+      withAnimation(.easeIn(duration: Values.contentDismissDuration)) { isContentVisible = false }
       if reduceMotion {
         glassProgress = 0
       } else {
-        withAnimation(.easeInOut(duration: 0.13)) { glassProgress = 0 }
+        withAnimation(.easeInOut(duration: Values.glassDismissDuration)) { glassProgress = 0 }
       }
-      withAnimation(.easeIn(duration: 0.03).delay(reduceMotion ? 0 : 0.1)) {
+      withAnimation(.easeIn(duration: Values.dismissFadeDuration).delay(reduceMotion ? 0 : Values.dismissFadeDelay)) {
         glassOpacity = 0
       }
     }

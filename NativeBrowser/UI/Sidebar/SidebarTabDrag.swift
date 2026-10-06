@@ -47,6 +47,8 @@ struct SidebarTabDragLayout {
 @MainActor
 @Observable
 final class SidebarTabDrag {
+  private typealias Values = AnimationValues.TabDrag
+
   enum Style: Equatable {
     case row
     case tile
@@ -467,14 +469,15 @@ final class SidebarTabDrag {
     anchor = start
     // The tab's slot becomes a gap in the same place, under the new block.
     target = homeTarget
-    withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) {
+    withAnimation(reduceMotion ? nil : .smooth(duration: Values.liftDuration)) {
       tabID = id
     }
     // Rise on the next frame so the block visibly lifts out of its slot.
     let generation = generation
     Task { @MainActor [weak self] in
       guard let self, self.generation == generation, self.isDragging else { return }
-      withAnimation(self.reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.68)) {
+      withAnimation(self.reduceMotion ? nil : .spring(
+        response: Values.liftResponse, dampingFraction: Values.liftDamping)) {
         self.isLifted = true
       }
     }
@@ -543,7 +546,9 @@ final class SidebarTabDrag {
     finish(animated: false)
     guard !reduceMotion, let frame = frame(of: id, in: source),
           frame.intersects(visibleSpaceFrame) else {
-      withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) { _ = move(id, target) }
+      withAnimation(reduceMotion ? nil : .smooth(duration: Values.reorderDuration)) {
+        _ = move(id, target)
+      }
       return
     }
     generation += 1
@@ -563,7 +568,7 @@ final class SidebarTabDrag {
     // Keep the overlay at its origin for its first frame before aiming it at
     // the destination reported by the updated list.
     var moved = false
-    withAnimation(.smooth(duration: 0.28)) { moved = move(id, target) }
+    withAnimation(.smooth(duration: Values.reorderDuration)) { moved = move(id, target) }
     landingTier = moved ? target.tier : source
     Task { @MainActor [weak self] in
       try? await Task.sleep(for: .milliseconds(16))
@@ -583,7 +588,7 @@ final class SidebarTabDrag {
     let generation = generation
     let flight = landingFlight
     Task { @MainActor [weak self] in
-      try? await Task.sleep(for: .milliseconds(150))
+      try? await Task.sleep(for: .seconds(Values.landingFrameWaitDuration))
       guard let self, self.generation == generation, self.landingFlight == flight else { return }
       // The tab kept its frame, or it now sits outside the visible list.
       if let frame = self.frame(of: id, in: tier) {
@@ -604,7 +609,9 @@ final class SidebarTabDrag {
       finish(animated: false)
     } else {
       // The tier closes the gap it opened and restores the original tab slot.
-      withAnimation(reduceMotion ? nil : .smooth(duration: 0.28)) { phase = .landing }
+      withAnimation(reduceMotion ? nil : .smooth(duration: Values.reorderDuration)) {
+        phase = .landing
+      }
       settle(id, in: sourceTier)
     }
   }
@@ -627,7 +634,8 @@ final class SidebarTabDrag {
     landingFlight += 1
     let flight = landingFlight
     let generation = generation
-    withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
+    withAnimation(.spring(response: Values.landingResponse,
+                          dampingFraction: Values.landingDamping)) {
       self.style = style
       size = frame.size
       anchor = CGPoint(
@@ -662,7 +670,8 @@ final class SidebarTabDrag {
     landingFlight += 1
     setAutoscroll(0)
     let animateHandoff = animated && !reduceMotion
-    var transaction = Transaction(animation: animateHandoff ? .easeOut(duration: 0.18) : nil)
+    var transaction = Transaction(animation: animateHandoff
+      ? .easeOut(duration: Values.handoffDuration) : nil)
     transaction.disablesAnimations = !animateHandoff
     withTransaction(transaction) {
       tabID = nil
@@ -723,13 +732,16 @@ final class SidebarTabDrag {
       resolved = spaceTarget(for: id, in: layout)
     }
     if resolved != target {
-      withAnimation(reduceMotion ? nil : .smooth(duration: 0.26)) { target = resolved }
+      withAnimation(reduceMotion ? nil : .smooth(duration: Values.targetDuration)) {
+        target = resolved
+      }
     }
 
     // Presentation follows the region even when that tier cannot accept a drop.
     let nextStyle: Style = isOutsideSidebar ? .card : (isOverTopPins ? .tile : .row)
     guard nextStyle != style else { return }
-    withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.78)) {
+    withAnimation(reduceMotion ? nil : .spring(response: Values.morphResponse,
+                                              dampingFraction: Values.morphDamping)) {
       style = nextStyle
       size = blockSize(for: nextStyle)
     }

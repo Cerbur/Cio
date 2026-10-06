@@ -253,7 +253,7 @@ final class BrowserSurfaceHostView: NSView {
       page.hide(animated: window != nil && !isSinglePageTabSwitch)
       // Only runtime closure retires a page instance. Leave its native overlay
       // mounted until the common first-level component exit has completed.
-      DispatchQueue.main.asyncAfter(deadline: .now() + ToolbarComponentAnimation.duration + 0.05) {
+      DispatchQueue.main.asyncAfter(deadline: .now() + AnimationValues.Toolbar.retirementDuration) {
         page.dispose()
       }
     }

@@ -116,7 +116,7 @@ struct ToolbarAddressFieldView: View {
             .padding(-NativeAddressFocusRing.inset)
             // Keep the native ring mounted so losing focus can finish fading
             // out. Scope the animation to opacity, preserving capsule geometry.
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { content in
+            .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.focusRingDuration)) { content in
               content.opacity(focusRingOpacity)
             }
             .allowsHitTesting(false)
@@ -131,11 +131,11 @@ struct ToolbarAddressFieldView: View {
                        AddressCapsuleLayout.height + AddressSiteInformationState.contentHeight), alignment: .top)
     .allowsHitTesting(presentation.isVisible)
     .accessibilityHidden(!presentation.isVisible)
-    .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
+    .animation(reduceMotion ? nil : .spring(response: AnimationValues.AddressField.expansionResponse, dampingFraction: AnimationValues.AddressField.expansionDamping),
                value: interaction.isFocused)
-    .animation(reduceMotion ? nil : .spring(response: 0.31, dampingFraction: 0.68),
+    .animation(reduceMotion ? nil : .spring(response: AnimationValues.AddressField.expansionResponse, dampingFraction: AnimationValues.AddressField.expansionDamping),
                value: rowCount)
-    .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.82),
+    .animation(reduceMotion ? nil : .spring(response: AnimationValues.AddressField.siteInformationResponse, dampingFraction: AnimationValues.AddressField.siteInformationDamping),
                value: siteInformation.isPresented)
     .onChange(of: interaction.isFocused) { _, focused in
       if focused, let session { autocomplete.begin(session.addressField.editText) }
@@ -291,12 +291,12 @@ private struct AddressCompactText: View {
           .truncationMode(.tail)
           .padding(.horizontal, 2)
           .transition(reduceMotion ? .opacity
-            : .offset(x: -12).combined(with: .opacity))
+            : .offset(x: AnimationValues.AddressField.compactTextOffset).combined(with: .opacity))
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
-    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isFocused)
+    .animation(reduceMotion ? nil : .easeOut(duration: AnimationValues.AddressField.buttonFocusDuration), value: isFocused)
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
@@ -313,8 +313,8 @@ private struct AddressFaviconButton: View {
   var body: some View {
     Button(action: onSiteInformationToggle) {
       TabFaviconView(pageURL: session.url, session: session, size: AddressCapsuleLayout.faviconSize)
-        .scaleEffect(isHovered ? 16.0 / 14.0 : 1)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isHovered)
+        .scaleEffect(isHovered ? AnimationValues.AddressField.hoverScale : 1)
+        .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.hoverDuration), value: isHovered)
         .frame(width: AddressCapsuleLayout.endControlHitDiameter,
                height: AddressCapsuleLayout.endControlHitDiameter)
         .contentShape(Circle())
@@ -334,6 +334,8 @@ private struct AddressReloadButton: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var rotationStart = Date()
+  // Capture the cycle at load start so changing Settings cannot jump its phase.
+  @State private var rotationDuration = AnimationValues.AddressField.reloadRotationDuration
   @State private var isHovered = false
 
   var body: some View {
@@ -343,7 +345,7 @@ private struct AddressReloadButton: View {
           TimelineView(.animation) { context in
             reloadSymbol
               .rotationEffect(.degrees(
-                context.date.timeIntervalSince(rotationStart) / 0.9 * 360))
+                context.date.timeIntervalSince(rotationStart) / rotationDuration * 360))
           }
         } else {
           reloadSymbol
@@ -359,7 +361,10 @@ private struct AddressReloadButton: View {
     .accessibilityLabel(session.isLoading ? "Stop" : "Reload")
     .accessibilityIdentifier("address-reload")
     .onChange(of: session.isLoading) { _, isLoading in
-      if isLoading { rotationStart = Date() }
+      if isLoading {
+        rotationStart = Date()
+        rotationDuration = AnimationValues.AddressField.reloadRotationDuration
+      }
     }
   }
 
@@ -369,8 +374,8 @@ private struct AddressReloadButton: View {
     return Image(systemName: "arrow.triangle.2.circlepath")
       .font(.system(size: 14, weight: .semibold))
       .foregroundStyle(highlightsHover ? hoverColor : Color.secondary)
-      .scaleEffect(highlightsHover ? 16.0 / 14.0 : 1)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.15),
+      .scaleEffect(highlightsHover ? AnimationValues.AddressField.hoverScale : 1)
+      .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.hoverDuration),
                  value: highlightsHover)
   }
 }

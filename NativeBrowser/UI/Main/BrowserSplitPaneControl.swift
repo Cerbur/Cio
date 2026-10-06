@@ -193,7 +193,8 @@ final class BrowserSplitPaneControl: NSView {
     // Both resting frames share a horizontal centre. Animate the vertical
     // travel and symmetric growth together, keeping each child centred too.
     NSAnimationContext.runAnimationGroup { context in
-      context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.2 : 0
+      context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        ? AnimationValues.SplitPages.handleDuration : 0
       context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
       animator().frame = destination
       capsule.animator().frame = CGRect(origin: .zero, size: size)

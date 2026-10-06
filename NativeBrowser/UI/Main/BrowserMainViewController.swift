@@ -169,7 +169,7 @@ final class BrowserMainViewController: NSViewController {
   private func toggleSpaceSidebar() {
     if sidebarItem.isCollapsed {
       NSAnimationContext.runAnimationGroup { context in
-        context.duration = 0.28
+        context.duration = AnimationValues.Sidebar.collapseDuration
         sidebarItem.animator().isCollapsed = false
       }
       let width = expandedSidebarWidth
@@ -177,7 +177,7 @@ final class BrowserMainViewController: NSViewController {
     } else {
       expandedSidebarWidth = sidebarItem.viewController.view.frame.width
       NSAnimationContext.runAnimationGroup { context in
-        context.duration = 0.28
+        context.duration = AnimationValues.Sidebar.collapseDuration
         sidebarItem.animator().isCollapsed = true
       }
     }
