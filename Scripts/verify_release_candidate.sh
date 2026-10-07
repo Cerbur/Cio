@@ -2,7 +2,7 @@
 #
 # Build and exercise the locally signed Release candidate. This deliberately
 # does not require a Developer ID identity, notarization, stapling or an
-# archive/DMG; those are Milestone 9 work.
+# archive/DMG.
 #
 set -uo pipefail
 
@@ -102,17 +102,11 @@ echo "app: $APP"
 echo
 
 echo "1. clean Release build"
-if xcodegen generate > "$WORK_DIR/xcodegen.log" 2>&1 \
-  && "$REPO_ROOT/Scripts/sync_scheme.sh" > "$WORK_DIR/scheme.log" 2>&1 \
-  && xcodebuild \
-       -project "$REPO_ROOT/NativeBrowser.xcodeproj" \
-       -scheme NativeBrowser \
-       -configuration Release \
-       -derivedDataPath "$REPO_ROOT/build/DerivedData" \
-       clean build > "$WORK_DIR/build.log" 2>&1; then
+if CONFIGURATION=Release "$REPO_ROOT/Scripts/build.sh" clean > "$WORK_DIR/build.log" 2>&1 && [ -x "$EXECUTABLE" ]; then
   pass "Release build succeeded"
 else
-  fail "Release build failed"
+  fail "Release build failed or product is missing"
+  exit 1
 fi
 
 echo
@@ -179,7 +173,7 @@ echo "  com.apple.security.cs.disable-library-validation: required by the ad-hoc
 
 echo
 echo "3. Release fixture and deterministic launch"
-python3 "$REPO_ROOT/Scripts/milestone7_fixture_server.py" --port "$PORT" &
+python3 "$REPO_ROOT/Scripts/verification_fixture_server.py" --port "$PORT" &
 FIXTURE_PID=$!
 FIXTURE_READY=0
 for _ in $(seq 1 50); do
@@ -341,7 +335,7 @@ run_with_timeout 300 "$EXECUTABLE" \
   --home-url="$RESTORE_HOME_URL" > "$RESTORE_SEED_LOG" 2>&1
 RESTORE_SEED_CODE=$?
 if [ "$RESTORE_SEED_CODE" -eq 0 ]; then pass "Release session-restore seed exited 0"; else fail "Release session-restore seed exited $RESTORE_SEED_CODE"; fi
-for check in window-appeared seeded-three-spaces-and-two-tabs seed-runtimes-created seed-clean-shutdown; do
+for check in window-appeared seed-runtimes-created seed-clean-shutdown; do
   check_contains "Release restore seed: $check" "session-restore-self-test: pass $check" "$RESTORE_SEED_LOG"
 done
 check_contains "Release restore seed persisted six domain tabs" "domain-tabs=6" "$RESTORE_SEED_LOG"
@@ -356,6 +350,7 @@ check_absent "Release restore seed log omits query secret" "$FAKE_SECRET" "$REST
 check_absent "Release restore seed log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_SEED_LOG"
 check_no_native_browser_process "Release session-restore seed left no residual process"
 
+cp "$RESTORE_DATA_DIR/session-v1.json" "$WORK_DIR/restore-seed-session.json"
 RESTORE_VERIFY_LOG="$WORK_DIR/session-restore-verify.log"
 NATIVEBROWSER_DATA_DIR="$RESTORE_DATA_DIR" \
 NATIVEBROWSER_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
@@ -372,8 +367,6 @@ for check in \
   startup-restored-domain-before-lazy-activation \
   startup-selected-tab-only-runtime \
   startup-selected-browser-ready \
-  startup-space-order-and-selections-restored \
-  startup-urls-and-titles-restored \
   lazy-tab-had-no-session-before-selection \
   lazy-tab-created-on-first-activation \
   switching-back-reuses-both-sessions \
@@ -392,6 +385,11 @@ check_contains "Release restore shuts CEF down cleanly" \
 check_absent "Release restore verify log omits query secret" "$FAKE_SECRET" "$RESTORE_VERIFY_LOG"
 check_absent "Release restore verify log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_VERIFY_LOG"
 check_no_native_browser_process "Release session-restore verify left no residual process"
+if python3 "$REPO_ROOT/Scripts/check_restore_report.py" "$RESTORE_SEED_LOG" "$RESTORE_VERIFY_LOG" "$WORK_DIR/restore-seed-session.json"; then
+  pass "Release persisted UUID graph and current restore invariants"
+else
+  fail "Release persisted UUID graph and current restore invariants"
+fi
 
 echo
 echo "Evidence:"

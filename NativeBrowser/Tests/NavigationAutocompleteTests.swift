@@ -153,14 +153,21 @@ final class NavigationAutocompleteTests: XCTestCase {
     }
     let service = NavigationAutocompleteService(history: try makeHistory(), searchProvider: provider)
     service.update("first")
-    try await Task.sleep(for: .milliseconds(10))
+    let firstDeadline = Date().addingTimeInterval(2)
+    while await log.requests.isEmpty, Date() < firstDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
     let firstRequests = await log.requests
     XCTAssertEqual(firstRequests.map(\.query), ["first"])
     service.update("second")
     service.update("third")
-    try await Task.sleep(for: .milliseconds(80))
+    let nextDeadline = Date().addingTimeInterval(2)
+    while await log.requests.count < 2, Date() < nextDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
     let requests = await log.requests
     XCTAssertEqual(requests.map(\.query), ["first", "third"])
+    guard requests.count == 2 else { return }
     XCTAssertGreaterThanOrEqual(requests[1].at - requests[0].at, 0.025)
   }
 

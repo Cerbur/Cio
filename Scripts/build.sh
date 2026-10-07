@@ -20,7 +20,7 @@ fi
 
 xcodegen generate
 # XcodeGen's generated scheme has no TestAction, so the shared scheme from
-# SchemeTemplates/ (which includes the Milestone 2 unit tests) is installed
+# SchemeTemplates/ (which includes the unit tests) is installed
 # before xcodebuild reads it.
 "$REPO_ROOT/Scripts/sync_scheme.sh"
 
@@ -29,8 +29,8 @@ xcodebuild \
   -scheme NativeBrowser \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED_DATA" \
-  build \
-  "$@"
+  "$@" \
+  build
 
 APP_EXECUTABLE="$DERIVED_DATA/Build/Products/$CONFIGURATION/NativeBrowser.app/Contents/MacOS/NativeBrowser"
 if command -v pgrep >/dev/null 2>&1; then

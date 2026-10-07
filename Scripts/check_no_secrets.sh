@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Repository secret check (pre-Milestone-3 security fix).
+# Repository secret check.
 #
 #   Scripts/check_no_secrets.sh
 #

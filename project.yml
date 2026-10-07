@@ -2,7 +2,7 @@
 #
 #   xcodegen generate          # (re)create NativeBrowser.xcodeproj
 #   Scripts/fetch_cef.sh       # download the CEF distribution (once)
-#   xcodebuild -project NativeBrowser.xcodeproj -scheme NativeBrowser build
+#   CONFIGURATION=Debug Scripts/build.sh
 #
 # The generated .xcodeproj is not committed; project.yml is the source of truth.
 #
@@ -113,7 +113,7 @@ targets:
     scheme:
       configVariants: []
       # The scheme is committed as a template (SchemeTemplates/) because the
-      # Milestone 2 unit tests need a TestAction; XcodeGen's generated scheme
+      # unit tests need a TestAction; XcodeGen's generated scheme
       # has none, and a build phase refreshes the copy after every generate.
     dependencies:
       # Build ordering only: the helper executable is copied into the
@@ -130,7 +130,7 @@ targets:
         path: Scripts/package_cef_runtime.sh
         basedOnDependencyAnalysis: false
 
-  # Milestone 2 unit tests. NavigationInput.swift and URLLogSanitizer.swift are
+  # Standalone unit tests. NavigationInput.swift and URLLogSanitizer.swift are
   # compiled into this target directly (see their "keep this file dependency
   # free" notes), so the tests do not need the application, do not link CEF and
   # never start Chromium. The target deliberately has no TEST_HOST: it is a
@@ -154,7 +154,7 @@ targets:
       - path: NativeBrowser/UI/Sidebar/SpaceTabPanelRow.swift
       - path: NativeBrowser/UI/Sidebar/SidebarTabPanelLayout.swift
       - path: NativeBrowser/Browser/BrowserSplitLayout.swift
-      # The Milestone 4 workspace model is pure Foundation: it is compiled
+      # The workspace model is pure Foundation: it is compiled
       # into this target so Space/tab membership, ordering, selection and
       # recently-closed rules are tested with no application, no window and no
       # CEF.

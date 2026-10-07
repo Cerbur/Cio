@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic loopback fixture server for Milestones 7 and 8."""
+"""Deterministic loopback fixture server for browser verification."""
 
 from __future__ import annotations
 
