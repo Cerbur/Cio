@@ -45,12 +45,12 @@ python3 "$AUTOMATE" \
   --download-dir="$TASK_BUILD_DIR" --branch=7977 --checkout="$CEF_COMMIT" \
   --arm64-build --no-debug-build --minimal-distrib-only \
   --no-distrib-docs --no-distrib-symbols --no-distrib-archive \
-  --distrib-subdir=nativebrowser-codecs --force-build --force-distrib
+  --distrib-subdir=cio-codecs --force-build --force-distrib
 
-CEF_DISTRIBUTION="$TASK_BUILD_DIR/chromium/src/cef/binary_distrib/nativebrowser-codecs"
+CEF_DISTRIBUTION="$TASK_BUILD_DIR/chromium/src/cef/binary_distrib/cio-codecs"
 # Retain the actual compiler configuration alongside the produced runtime.
 cp "$TASK_BUILD_DIR/chromium/src/out/Release_GN_arm64/args.gn" \
-  "$CEF_DISTRIBUTION/nativebrowser-codecs.args.gn"
+  "$CEF_DISTRIBUTION/cio-codecs.args.gn"
 "$REPO_ROOT/Scripts/install_cef_runtime.sh" "$CEF_DISTRIBUTION"
 cd "$REPO_ROOT"
 CONFIGURATION=Debug "$REPO_ROOT/Scripts/build.sh"

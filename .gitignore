@@ -9,7 +9,7 @@ DerivedData/
 xcuserdata/
 
 # Generated Xcode project (regenerate with: xcodegen generate)
-NativeBrowser.xcodeproj/
+Cio.xcodeproj/
 
 # CEF binary distribution (fetch with: Scripts/fetch_cef.sh)
 ThirdParty/CEF/

@@ -1,0 +1,398 @@
+//
+//  BrowserSessionManager.swift
+//  Cio
+//
+//  Runtime owner for Chromium sessions and stable browser surfaces.
+//
+//  Milestone 4 deliberately keeps workspace/domain policy out of this type.
+//  BrowserWorkspaceStore owns Spaces, BrowserTabs, ordering, selection and
+//  recently-closed policy. This manager owns only BrowserSession objects,
+//  closing-session retention, ChromiumContainerView objects and the stable
+//  BrowserSurfaceHostView synchronization.
+//
+
+import AppKit
+import Foundation
+
+@MainActor
+final class BrowserSessionManager: ObservableObject {
+  // MARK: - Published runtime state
+
+  /// Every Chromium runtime still owned by the application, including sessions
+  /// whose visible tab has already been removed but which await OnBeforeClose.
+  @Published private(set) var liveSessionCount = 0
+
+  // MARK: - Hooks
+
+  /// Lifecycle milestones used by the verification tooling. Diagnostics only.
+  var onLifecycleEvent: ((String) -> Void)?
+
+  /// Typed notification used by ApplicationRuntime's termination coordinator.
+  /// The callback carries the exact session released by OnBeforeClose.
+  var onLiveSessionDidClose: ((BrowserSession) -> Void)?
+
+  /// CEF accepted or cancelled an ordinary user close. The workspace store
+  /// uses these callbacks to delay domain removal until acceptance.
+  var onCloseAccepted: ((BrowserSession) -> Void)?
+  var onCloseCancelled: ((BrowserSession) -> Void)?
+
+  /// Fallback notification for an unexpected browser teardown. The workspace
+  /// can reconcile a still-present domain tab without releasing ownership early.
+  var onSessionDidClose: ((BrowserSession) -> Void)?
+
+  /// Runtime metadata callback. BrowserWorkspaceStore uses the session identity
+  /// to update exactly one BrowserTab in the pure domain model.
+  var onTabMetadataChanged: ((BrowserSession) -> Void)?
+
+  /// Popup callback. The workspace store resolves the source session's Space.
+  var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
+
+  /// Application-level history callback. The manager forwards typed events but
+  /// does not own history records.
+  var onMainFrameLoadFinished: ((BrowserSession, URL) -> Void)?
+  var onTitleChanged: ((BrowserSession) -> Void)?
+
+  /// Application-level download callbacks. The manager remains a runtime
+  /// session owner and only forwards value events.
+  var onDownloadRequested: ((BrowserSession, UInt32, URL, String, DownloadMetadata) -> String)?
+  var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
+
+  /// Called when the runtime registry changes so the workspace store can redraw
+  /// its status bar without becoming a second runtime registry.
+  var onRuntimeStateChanged: (() -> Void)?
+
+  // MARK: - Runtime registry
+
+  private var sessions: [UUID: BrowserSession] = [:]
+  /// Registration order keeps runtime diagnostics and surface updates
+  /// deterministic without making this manager a domain tab-order owner.
+  private var sessionOrder: [UUID] = []
+  /// Sessions requested to close, retained until the typed OnBeforeClose path.
+  private var closingTabIDs: [UUID] = []
+  /// Ordinary close requests waiting for CEF's beforeunload result.
+  private var pendingCloseTabIDs: [UUID] = []
+  private var containers: [UUID: ChromiumContainerView] = [:]
+  var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)? {
+    didSet { surfaceHost?.onSplitPaneDrag = onSplitPaneDrag }
+  }
+  var onMinimizeSplitPane: ((UUID) -> Bool)? {
+    didSet { surfaceHost?.onMinimizeSplitPane = onMinimizeSplitPane }
+  }
+  func beginPaneLift(_ id: UUID, to frame: CGRect) { surfaceHost?.beginPaneLift(id, to: frame) }
+  func holdPaneForSidebar(_ id: UUID) -> CGRect? { surfaceHost?.holdPaneForSidebar(id) }
+  func collapsePaneToSidebar(_ id: UUID, to frame: CGRect, duration: TimeInterval) {
+    surfaceHost?.collapsePaneToSidebar(id, to: frame, duration: duration)
+  }
+  func endPaneSidebarCollapse(_ id: UUID) { surfaceHost?.endPaneSidebarCollapse(id) }
+  func previewPaneDrag(_ tabID: UUID?, index: Int? = nil) {
+    surfaceHost?.previewPaneDrag(tabID, index: index)
+  }
+  private weak var surfaceHost: BrowserSurfaceHostView?
+  private var selectedSurfaceTabID: UUID?
+  private var splitLayout: BrowserSplitLayout?
+
+  private(set) var isTerminating = false
+
+  init() {}
+
+  // MARK: - Queries
+
+  func session(for tabID: UUID) -> BrowserSession? {
+    sessions[tabID]
+  }
+
+  var hasLiveSessions: Bool { !sessions.isEmpty }
+
+  /// Every live runtime in deterministic registration order, followed by any
+  /// closing runtime not present in that order.
+  var liveSessions: [BrowserSession] {
+    liveSessionOrder.compactMap { sessions[$0] }
+  }
+
+  var liveSessionOrder: [UUID] {
+    var seen = Set<UUID>()
+    var order: [UUID] = []
+    for tabID in sessionOrder + pendingCloseTabIDs + closingTabIDs
+    where sessions[tabID] != nil && seen.insert(tabID).inserted {
+      order.append(tabID)
+    }
+    return order
+  }
+
+  func isClosing(tabID: UUID) -> Bool {
+    closingTabIDs.contains(tabID) || pendingCloseTabIDs.contains(tabID)
+  }
+
+  func isClosePending(tabID: UUID) -> Bool {
+    pendingCloseTabIDs.contains(tabID)
+  }
+
+  /// The Chromium identifier of every live session that has completed browser
+  /// creation. This is a runtime diagnostic, not a second ownership registry.
+  var liveBrowserIdentifiers: [Int] {
+    liveSessions.compactMap { $0.browserIdentifier }
+  }
+
+  // MARK: - Runtime lifecycle
+
+  /// Creates exactly one runtime for a domain tab identity. The manager does
+  /// not store the tab or decide where it belongs; the workspace store does.
+  @discardableResult
+  func createSession(
+    for tabID: UUID,
+    initialURL: URL,
+    initialTitle: String = ""
+  ) -> BrowserSession? {
+    guard !isTerminating else {
+      AppLog.session.error("refusing to create a session while the application is terminating")
+      return nil
+    }
+    guard sessions[tabID] == nil else {
+      AppLog.session.error("refusing to create a duplicate session for a tab")
+      return sessions[tabID]
+    }
+
+    let session = BrowserSession(
+      tabID: tabID,
+      initialURL: initialURL,
+      initialTitle: initialTitle)
+    session.onLifecycleEvent = { [weak self] event in
+      self?.onLifecycleEvent?(event)
+    }
+    session.onTabMetadataChanged = { [weak self] session in
+      self?.onTabMetadataChanged?(session)
+    }
+    session.onClosed = { [weak self] session in
+      self?.sessionDidClose(session)
+    }
+    session.onCloseAccepted = { [weak self] session in
+      self?.sessionDidAcceptClose(session)
+    }
+    session.onCloseCancelled = { [weak self] session in
+      self?.sessionDidCancelClose(session)
+    }
+    session.onOpenNewTabRequest = { [weak self] session, url in
+      self?.onOpenNewTabRequest?(session, url)
+    }
+    session.onMainFrameLoadFinished = { [weak self] session, url in
+      self?.onMainFrameLoadFinished?(session, url)
+    }
+    session.onTitleChanged = { [weak self] session in
+      self?.onTitleChanged?(session)
+    }
+    session.onDownloadRequested = {
+      [weak self] session, downloadID, sourceURL, suggestedFileName, metadata in
+      self?.onDownloadRequested?(
+        session, downloadID, sourceURL, suggestedFileName, metadata) ?? ""
+    }
+    session.onDownloadUpdated = { [weak self] session, update in
+      self?.onDownloadUpdated?(session, update)
+    }
+
+    sessions[tabID] = session
+    sessionOrder.append(tabID)
+    publishRuntimeState()
+    return session
+  }
+
+  /// Requests destruction of exactly one runtime. The session remains in the
+  /// registry until BrowserBridge reports OnBeforeClose.
+  func requestClose(tabID: UUID, terminating: Bool = false) {
+    guard let session = sessions[tabID], !session.isClosed else { return }
+    guard terminating || !isTerminating else { return }
+
+    if terminating {
+      isTerminating = true
+      pendingCloseTabIDs.removeAll { $0 == tabID }
+      if !closingTabIDs.contains(tabID) {
+        closingTabIDs.append(tabID)
+      }
+    } else {
+      guard !isClosePending(tabID: tabID), !closingTabIDs.contains(tabID) else { return }
+      pendingCloseTabIDs.append(tabID)
+    }
+    session.close(terminating: terminating)
+    syncSurface()
+  }
+
+  /// Application termination: request every runtime across every Space in one
+  /// turn. The workspace store never creates replacements during this path.
+  func requestCloseAllForTermination() {
+    guard !isTerminating else { return }
+    isTerminating = true
+    let live = liveSessions
+    AppLog.cef.info(
+      "termination: closing \(live.count, privacy: .public) live browser session(s)")
+    emit("session:close-all(count=\(live.count))")
+
+    for session in live where !session.isClosed {
+      pendingCloseTabIDs.removeAll { $0 == session.tabID }
+      if !closingTabIDs.contains(session.tabID) {
+        closingTabIDs.append(session.tabID)
+      }
+      session.close(terminating: true)
+    }
+    syncSurface()
+  }
+
+  /// Manual diagnostic hook for callers that explicitly need to release a
+  /// browser view. Normal application termination never uses this path: it
+  /// waits for every typed OnBeforeClose callback instead of falling back.
+  func releaseBrowserViews() {
+    for session in liveSessions where !session.isClosed {
+      session.releaseBrowserView()
+    }
+  }
+
+  // MARK: - Surface ownership
+
+  /// Attaches the one stable AppKit host for the application window.
+  func attachSurfaceHost(_ host: BrowserSurfaceHostView) {
+    if surfaceHost !== host {
+      surfaceHost?.onDarkAppearanceChange = nil
+    }
+    surfaceHost = host
+    host.onSplitPaneDrag = onSplitPaneDrag
+    host.onMinimizeSplitPane = onMinimizeSplitPane
+    host.onDarkAppearanceChange = { [weak self] dark in
+      self?.liveSessions.forEach { $0.setDarkAppearance(dark) }
+    }
+    syncSurface()
+    host.syncChromiumAppearance()
+  }
+
+  /// Publishes the effective selected tab from the workspace owner. The manager
+  /// accepts only this derived selection; it does not maintain a tab list or a
+  /// second selected-tab source of truth.
+  func setSelectedSurfaceTabID(_ tabID: UUID?) {
+    selectedSurfaceTabID = tabID
+    syncSurface()
+  }
+
+  func setSurfacePresentation(selectedTabID: UUID?, split: BrowserSplitLayout?) {
+    selectedSurfaceTabID = selectedTabID
+    splitLayout = split
+    syncSurface()
+  }
+
+  func previewSplit(at target: BrowserSplitLayout.DropTarget?, incomingPaneCount: Int = 1) {
+    surfaceHost?.previewSplit(at: target, incomingPaneCount: incomingPaneCount)
+  }
+
+  func commitSplitPreview(keepingLiftedPaneHidden: Bool = false, _ commit: () -> Bool) -> Bool {
+    guard let surfaceHost else { return commit() }
+    return surfaceHost.commitSplitPreview(keepingLiftedPaneHidden: keepingLiftedPaneHidden, commit)
+  }
+
+  func commitSplitDrop(_ commit: () -> Bool) -> Bool {
+    guard let surfaceHost else { return commit() }
+    return surfaceHost.commitSplitDrop(commit)
+  }
+
+  func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
+    surfaceHost?.splitLandingFrame(for: tabIDs)
+  }
+
+  func revealSplitPages(for tabIDs: [UUID], from frame: CGRect, onCompletion: @escaping () -> Void) {
+    guard let surfaceHost else {
+      onCompletion()
+      return
+    }
+    surfaceHost.revealSplitPages(for: tabIDs, from: frame, onCompletion: onCompletion)
+  }
+
+  /// Keeps one container for every live session and makes only the workspace's
+  /// effective selected tab visible. Inactive Space sessions remain mounted and
+  /// live; switching Spaces never reaches BrowserBridge::CreateBrowser.
+  private func syncSurface() {
+    guard let host = surfaceHost else { return }
+
+    var live: [UUID: ChromiumContainerView] = [:]
+    for tabID in liveSessionOrder {
+      guard sessions[tabID] != nil else { continue }
+      if let existing = containers[tabID] {
+        live[tabID] = existing
+      } else {
+        let created = ChromiumContainerView(frame: host.bounds)
+        created.autoresizingMask = [.width, .height]
+        // Presentation needs first-load readiness before it starts the glass
+        // reveal. The session's container binding and CEF creation still happen
+        // below, after the host has mounted and assigned the final pane size.
+        created.delegate = sessions[tabID]
+        containers[tabID] = created
+        live[tabID] = created
+      }
+    }
+
+    let staleContainers = containers.filter { live[$0.key] == nil }
+    for (tabID, container) in staleContainers {
+      container.removeFromSuperview()
+      containers.removeValue(forKey: tabID)
+    }
+
+    host.present(containers: live, selectedTabID: selectedSurfaceTabID, split: splitLayout)
+
+    // Attach after the containers are subviews. BrowserSession creates its CEF
+    // browser only once the container has a window, and never on a visibility
+    // or selection update.
+    for tabID in liveSessionOrder {
+      guard let session = sessions[tabID], let container = live[tabID] else { continue }
+      session.attach(to: container)
+    }
+  }
+
+  // MARK: - Runtime callbacks
+
+  private func sessionDidAcceptClose(_ session: BrowserSession) {
+    guard sessions[session.tabID] === session else { return }
+    pendingCloseTabIDs.removeAll { $0 == session.tabID }
+    if !closingTabIDs.contains(session.tabID) {
+      closingTabIDs.append(session.tabID)
+    }
+    emit("session:close-accepted")
+    onCloseAccepted?(session)
+    syncSurface()
+  }
+
+  private func sessionDidCancelClose(_ session: BrowserSession) {
+    guard sessions[session.tabID] === session else { return }
+    pendingCloseTabIDs.removeAll { $0 == session.tabID }
+    emit("session:close-cancelled")
+    onCloseCancelled?(session)
+    syncSurface()
+  }
+
+  private func sessionDidClose(_ session: BrowserSession) {
+    let tabID = session.tabID
+    guard sessions[tabID] === session else { return }
+
+    sessions.removeValue(forKey: tabID)
+    sessionOrder.removeAll { $0 == tabID }
+    pendingCloseTabIDs.removeAll { $0 == tabID }
+    closingTabIDs.removeAll { $0 == tabID }
+    liveSessionCount = sessions.count
+    onRuntimeStateChanged?()
+    AppLog.cef.info(
+      "session released id=\(session.id.uuidString, privacy: .public) live=\(self.sessions.count, privacy: .public)"
+    )
+    emit("session:released")
+
+    // OnBeforeClose has already run, so the Chromium view is no longer owned by
+    // CEF and the container may finally leave the stable host.
+    if let container = containers.removeValue(forKey: tabID) {
+      container.removeFromSuperview()
+    }
+    syncSurface()
+    onSessionDidClose?(session)
+    onLiveSessionDidClose?(session)
+  }
+
+  private func publishRuntimeState() {
+    liveSessionCount = sessions.count
+    onRuntimeStateChanged?()
+  }
+
+  private func emit(_ event: String) {
+    onLifecycleEvent?(event)
+  }
+}

@@ -75,7 +75,7 @@ fi
 
 echo
 echo "3. the harness token, when the environment exposes one"
-TOKEN_FILE="$(mktemp -t nativebrowser-token)"
+TOKEN_FILE="$(mktemp -t cio-token)"
 chmod 600 "$TOKEN_FILE"
 trap 'rm -f "$TOKEN_FILE"' EXIT
 printf '%s\n' "${DSH_WEB_URL:-}" | sed -n 's/.*[?&]token=\([^&]*\).*/\1/p' > "$TOKEN_FILE"

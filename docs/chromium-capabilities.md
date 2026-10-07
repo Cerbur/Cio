@@ -40,7 +40,7 @@ listener. A successful compilation alone does not validate this integration.
 Debug disables Chromium's `MacAppCodeSignClone` updater feature, following
 [Chrome for Testing's rationale](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.83/chrome/browser/mac/code_sign_clone_manager.mm).
 In a rebuilt ad-hoc bundle its background hard-link operation was observed
-blocking CEF shutdown. NativeBrowser has no Chrome auto-update flow. This
+blocking CEF shutdown. Cio has no Chrome auto-update flow. This
 switch does not disable macOS signing or signature verification; Release
 retains the default. App termination closes the inspector and releases its
 protocol registration before tearing down the inspected page.
@@ -50,7 +50,7 @@ The built-in Web Inspector communicates in-process and needs no open port.
 To enable external CDP tools, launch the Debug executable explicitly:
 
 ```sh
-NATIVEBROWSER_CDP_PORT=9222 build/DerivedData/Build/Products/Debug/NativeBrowser.app/Contents/MacOS/NativeBrowser
+CIO_CDP_PORT=9222 build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio
 ```
 
 Then inspect the loopback endpoint:
@@ -63,8 +63,8 @@ curl http://127.0.0.1:9222/json/list
 The results expose WebSocket URLs for CDP tools (DOM, Runtime, Network,
 Accessibility, screenshots). In Chrome, open `chrome://inspect/#devices` and
 configure `localhost:9222`. Choose another port such as
-`NATIVEBROWSER_CDP_PORT=9223` if 9222 is occupied. An unset variable or
-`NATIVEBROWSER_CDP_PORT=0` leaves the endpoint disabled. Explicit Chromium
+`CIO_CDP_PORT=9223` if 9222 is occupied. An unset variable or
+`CIO_CDP_PORT=0` leaves the endpoint disabled. Explicit Chromium
 `--remote-debugging-port` arguments can also enable it in Debug builds.
 Release removes remote debugging port/pipe switches and opens no CDP listener.
 
@@ -85,7 +85,7 @@ the checkout. The app continues using the standard runtime until this succeeds.
 ```sh
 # Use a sufficiently large volume; the script installs the result and runs
 # the app's required Debug build from the repository root.
-Scripts/build_cef_codecs.sh /Volumes/BuildSSD/nativebrowser-cef
+Scripts/build_cef_codecs.sh /Volumes/BuildSSD/cio-cef
 
 # Or install an existing full, EXACT-version macOS arm64 CEF distribution:
 Scripts/install_cef_runtime.sh /absolute/path/to/cef_distribution

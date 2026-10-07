@@ -17,8 +17,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 # Verification runs use their own browser data directory: Chromium encrypts
 # stored cookies and passwords with a "Chromium Safe Storage" keychain item, so
 # reusing a profile written by an earlier build makes macOS ask for keychain
@@ -29,7 +29,7 @@ PORT="${M1_FIXTURE_PORT:-43121}"
 BASE_URL="http://127.0.0.1:$PORT"
 HOME_URL="$BASE_URL/page-a"
 # M1 verifies one-tab rendering/lifecycle, not workspace restore.
-export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
+export CIO_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -116,7 +116,7 @@ echo "Rendering, navigation callbacks and real application termination"
 GUI_LOG="$WORK_DIR/launch.log"
 QUIT_AFTER=10
 GUI_START=$(date +%s)
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
+CIO_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
   --home-url="$HOME_URL" --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))

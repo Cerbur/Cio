@@ -17,8 +17,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 FRAMEWORKS="$APP/Contents/Frameworks"
 # Verification runs use their own browser data directory: Chromium encrypts
 # stored cookies and passwords with a "Chromium Safe Storage" keychain item, so
@@ -28,7 +28,7 @@ DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
 # M0 verifies CEF lifecycle only. Keep the new M6 workspace snapshot out of
 # this regression run even when the caller reuses DATA_DIR.
-export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
+export CIO_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -87,7 +87,7 @@ echo
 # ---------------------------------------------------------------------------
 echo "1-3. headless CEF lifecycle (--cef-self-test)"
 SELF_TEST_LOG="$WORK_DIR/self-test.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" run_with_timeout 60 "$EXECUTABLE" --cef-self-test \
+CIO_DATA_DIR="$DATA_DIR" run_with_timeout 60 "$EXECUTABLE" --cef-self-test \
   > "$SELF_TEST_LOG" 2>&1
 SELF_TEST_STATUS=$?
 if [ "$SELF_TEST_STATUS" -eq 0 ]; then
@@ -108,7 +108,7 @@ echo "1-2. application launch, AppKit/SwiftUI boundary and clean termination"
 echo "     (waits for the window, then --quit-after=${LAUNCH_TIMEOUT})"
 GUI_LOG="$WORK_DIR/launch.log"
 rm -rf "$DATA_DIR/launch"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/launch" run_with_timeout 60 "$EXECUTABLE" \
+CIO_DATA_DIR="$DATA_DIR/launch" run_with_timeout 60 "$EXECUTABLE" \
   --wait-for-window --quit-after=$LAUNCH_TIMEOUT > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 if [ "$GUI_STATUS" -eq 0 ]; then
@@ -150,17 +150,17 @@ fi
 echo
 echo "5. helper applications"
 for SUFFIX in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
-  HELPER="$FRAMEWORKS/NativeBrowser Helper$SUFFIX.app"
-  HELPER_EXE="$HELPER/Contents/MacOS/NativeBrowser Helper$SUFFIX"
+  HELPER="$FRAMEWORKS/Cio Helper$SUFFIX.app"
+  HELPER_EXE="$HELPER/Contents/MacOS/Cio Helper$SUFFIX"
   if [ -x "$HELPER_EXE" ]; then
-    pass "NativeBrowser Helper$SUFFIX.app has its executable"
+    pass "Cio Helper$SUFFIX.app has its executable"
   else
-    fail "NativeBrowser Helper$SUFFIX.app is missing Contents/MacOS/NativeBrowser Helper$SUFFIX"
+    fail "Cio Helper$SUFFIX.app is missing Contents/MacOS/Cio Helper$SUFFIX"
     continue
   fi
   BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HELPER/Contents/Info.plist" 2>/dev/null)"
   case "$BUNDLE_ID" in
-    com.example.NativeBrowser.helper*) pass "bundle identifier $BUNDLE_ID" ;;
+    com.example.Cio.helper*) pass "bundle identifier $BUNDLE_ID" ;;
     *) fail "unexpected helper bundle identifier: $BUNDLE_ID" ;;
   esac
   # otool mishandles paths containing parentheses, so probe a copy.
@@ -169,11 +169,11 @@ for SUFFIX in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
   HELPER_LINKAGE="$(otool -L "$PROBE" 2>/dev/null)"
   rm -f "$PROBE"
   if [ -z "$HELPER_LINKAGE" ]; then
-    fail "could not inspect NativeBrowser Helper$SUFFIX"
+    fail "could not inspect Cio Helper$SUFFIX"
   elif printf '%s' "$HELPER_LINKAGE" | grep -q "Chromium Embedded Framework"; then
-    fail "NativeBrowser Helper$SUFFIX links the framework directly"
+    fail "Cio Helper$SUFFIX links the framework directly"
   else
-    pass "NativeBrowser Helper$SUFFIX loads the framework at runtime"
+    pass "Cio Helper$SUFFIX loads the framework at runtime"
   fi
 done
 

@@ -9,8 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 
-PAYLOAD = (b"NativeBrowser Milestone 7 fixture payload\n" * 1024)
-SLOW_PAYLOAD = (b"NativeBrowser slow fixture payload\n" * 4096)
+PAYLOAD = (b"Cio Milestone 7 fixture payload\n" * 1024)
+SLOW_PAYLOAD = (b"Cio slow fixture payload\n" * 4096)
 
 
 class FixtureHandler(BaseHTTPRequestHandler):

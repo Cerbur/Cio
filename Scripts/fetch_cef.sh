@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Downloads and extracts the CEF binary distribution used by NativeBrowser.
+# Downloads and extracts the CEF binary distribution used by Cio.
 #
 # The distribution is not committed to the repository; run this script once
 # after cloning. The result lands in ThirdParty/CEF and is picked up by

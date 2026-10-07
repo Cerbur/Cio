@@ -3,7 +3,7 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
 FRAMEWORKS="$APP/Contents/Frameworks"
 WORK_DIR="$REPO_ROOT/build/verification/bundle"
 mkdir -p "$WORK_DIR"
@@ -20,17 +20,17 @@ check_linkage() {
 }
 codesign --verify --deep --strict "$APP"
 codesign --verify --deep --strict "$FRAMEWORKS/Chromium Embedded Framework.framework"
-check_linkage "$APP/Contents/MacOS/NativeBrowser"
+check_linkage "$APP/Contents/MacOS/Cio"
 count="$(find "$FRAMEWORKS" -maxdepth 1 -name '*.app' -type d | wc -l | tr -d ' ')"
 [ "$count" -eq 5 ] || { echo "FAIL: expected five Helpers, found $count" >&2; exit 1; }
 suffixes=("" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)")
 ids=("" ".alerts" ".gpu" ".plugin" ".renderer")
 for index in "${!suffixes[@]}"; do
-  name="NativeBrowser Helper${suffixes[$index]}"
+  name="Cio Helper${suffixes[$index]}"
   helper="$FRAMEWORKS/$name.app"
   codesign --verify --deep --strict "$helper"
   actual_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$helper/Contents/Info.plist")"
-  [ "$actual_id" = "com.example.NativeBrowser.helper${ids[$index]}" ]
+  [ "$actual_id" = "com.example.Cio.helper${ids[$index]}" ]
   actual_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$helper/Contents/Info.plist")"
   [ "$actual_executable" = "$name" ]
   check_linkage "$helper/Contents/MacOS/$name"

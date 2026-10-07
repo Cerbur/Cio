@@ -2,7 +2,7 @@
 #
 # Session restore acceptance checks: durable workspace restore and lazy runtimes.
 #
-# This verifier deliberately launches two separate NativeBrowser processes.
+# This verifier deliberately launches two separate Cio processes.
 # The external watchdog is test infrastructure only; production shutdown still
 # waits for typed OnBeforeClose callbacks without a timeout fallback.
 #
@@ -10,11 +10,11 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data/milestone6}"
 WORK_DIR="$REPO_ROOT/build/verification/milestone6"
-TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowserTests.xctest"
+TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/CioTests.xctest"
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -28,9 +28,9 @@ check_absent() {
   if grep -qF -e "$2" "$3" 2>/dev/null; then fail "$1 (found: $2)"; else pass "$1"; fi
 }
 
-check_no_native_browser_process() {
+check_no_cio_process() {
   if pgrep -f -e "$EXECUTABLE" >/dev/null 2>&1; then
-    fail "$1 (NativeBrowser process remains)"
+    fail "$1 (Cio process remains)"
   else
     pass "$1"
   fi
@@ -108,15 +108,15 @@ SEED_LOG="$WORK_DIR/seed.log"
 FAKE_SECRET="fake-secret-value"
 FAKE_FRAGMENT="fragment-secret"
 HOME_URL="https://example.com/?code=$FAKE_SECRET#$FAKE_FRAGMENT"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$DATA_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
   --session-restore-self-test=seed \
   --home-url="$HOME_URL" > "$SEED_LOG" 2>&1
 SEED_CODE=$?
 if [ "$SEED_CODE" -eq 0 ]; then pass "seed process exited 0"; else fail "seed process exited $SEED_CODE"; fi
 if [ "$SEED_CODE" -gt 128 ]; then fail "seed process died from signal $((SEED_CODE - 128))"; fi
-check_no_native_browser_process "seed left no residual NativeBrowser process"
+check_no_cio_process "seed left no residual Cio process"
 
 SESSION_FILE="$DATA_DIR/session-v1.json"
 if [ -f "$SESSION_FILE" ]; then pass "session snapshot exists"; else fail "session snapshot is missing"; fi
@@ -142,14 +142,14 @@ check_contains "seed shut CEF down cleanly" \
 echo
 echo "3. Verify process and lazy activation"
 VERIFY_LOG="$WORK_DIR/verify.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$DATA_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
   --session-restore-self-test=verify > "$VERIFY_LOG" 2>&1
 VERIFY_CODE=$?
 if [ "$VERIFY_CODE" -eq 0 ]; then pass "verify process exited 0"; else fail "verify process exited $VERIFY_CODE"; fi
 if [ "$VERIFY_CODE" -gt 128 ]; then fail "verify process died from signal $((VERIFY_CODE - 128))"; fi
-check_no_native_browser_process "verify left no residual NativeBrowser process"
+check_no_cio_process "verify left no residual Cio process"
 
 for CHECK in \
   startup-restored-domain-before-lazy-activation \

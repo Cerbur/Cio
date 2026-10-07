@@ -3,12 +3,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-EXECUTABLE="$REPO_ROOT/build/DerivedData/Build/Products/Debug/NativeBrowser.app/Contents/MacOS/NativeBrowser"
+EXECUTABLE="$REPO_ROOT/build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio"
 LOG="$REPO_ROOT/build/appearance-verification.log"
 DATA_DIR="$REPO_ROOT/build/verification-data/appearance-regression"
 
 mkdir -p "$DATA_DIR"
-if ! NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
+if ! CIO_DISABLE_SESSION_PERSISTENCE=1 CIO_DATA_DIR="$DATA_DIR" \
   caffeinate -i "$EXECUTABLE" --browser-self-test --appearance-self-test \
   --home-url="file://$REPO_ROOT/Scripts/appearance_fixture.html" > "$LOG" 2>&1; then
   cat "$LOG"

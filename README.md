@@ -1,4 +1,4 @@
-# NativeBrowser
+# Cio
 
 A macOS Chromium browser shell using SwiftUI, AppKit, Objective-C++ and CEF. The native shell owns Spaces, tab tiers, split pages, Spotlight, address editing, History, Downloads and Settings. Chromium owns page rendering and navigation. Browser surfaces and their native editors remain mounted across selection and UI updates.
 
@@ -11,7 +11,7 @@ Scripts/fetch_cef.sh                  # once, if ThirdParty/CEF is absent
 CONFIGURATION=Debug Scripts/build.sh
 ```
 
-The build regenerates NativeBrowser.xcodeproj from project.yml, installs the shared scheme, compiles the wrapper when needed and packages/signs CEF and five Helper applications. The product is build/DerivedData/Build/Products/Debug/NativeBrowser.app. Use CONFIGURATION=Release with the same script for Release. Generated projects, CEF binaries and build output are ignored.
+The build regenerates Cio.xcodeproj from project.yml, installs the shared scheme, compiles the wrapper when needed and packages/signs CEF and five Helper applications. The product is build/DerivedData/Build/Products/Debug/Cio.app. Use CONFIGURATION=Release with the same script for Release. Generated projects, CEF binaries and build output are ignored.
 
 The CEF framework is loaded at runtime; otool -L must not show a direct CEF dependency. Scripts/package_cef_runtime.sh stays an Xcode build phase. Helper executable names follow the main product name and share one framework through `../../..`. See [Chromium capabilities](docs/chromium-capabilities.md) for accessibility, Web Inspector/CDP and the codec runtime recipe.
 
@@ -47,7 +47,7 @@ The pre-refactor baseline had passing build, 244 passing unit tests, runtime/bun
 ## Layout
 
 ```text
-NativeBrowser/
+Cio/
   App/                    entry point, scene, menus, runtime, diagnostics, logging
   Bridge/                 Objective-C++ boundary, event support, bridging header
   Browser/                domain values, workspace policy, sessions and CEF containers
@@ -66,7 +66,7 @@ NativeBrowser/
   Helper/                 separate CEF process entry point
   Resources/              Info.plist and signing entitlements
   Tests/                  standalone logic/native-model tests
-SchemeTemplates/NativeBrowser.xcscheme
+SchemeTemplates/Cio.xcscheme
 Scripts/                  reproducible build and verification tools
 ThirdParty/               untracked CEF distribution and wrapper products
 project.yml               sole Xcode project definition
@@ -89,7 +89,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design and lifetime detai
 
 ## Data and development signing
 
-The main bundle ID is com.example.NativeBrowser. Browser profile, session-v1.json and history.sqlite3 use ~/Library/Application Support/NativeBrowser/ by default. NATIVEBROWSER_DATA_DIR overrides storage for verification; NATIVEBROWSER_DOWNLOADS_DIR overrides the download destination. Local data is not migrated implicitly.
+The main bundle ID is com.example.Cio. Browser profile, session-v1.json and history.sqlite3 use ~/Library/Application Support/Cio/ by default. CIO_DATA_DIR overrides storage for verification; CIO_DOWNLOADS_DIR overrides the download destination. Local data is not migrated implicitly.
 
 Development signing is ad-hoc. A changed binary identity can cause a Chromium Safe Storage keychain dialog that blocks CEF initialization. The scripts cannot answer it. Stop and report a blocked run; do not change keychain contents or policy to manufacture a passing result.
 

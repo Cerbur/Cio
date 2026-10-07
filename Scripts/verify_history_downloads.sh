@@ -5,9 +5,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
-TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowserTests.xctest"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
+TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/CioTests.xctest"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data/milestone7}"
 DOWNLOADS_DIR="${DOWNLOADS_DIR:-$REPO_ROOT/build/verification-downloads/milestone7}"
 WORK_DIR="$REPO_ROOT/build/verification/milestone7"
@@ -30,9 +30,9 @@ check_absent() {
   if grep -qF -e "$2" "$3" 2>/dev/null; then fail "$1 (found sensitive value)"; else pass "$1"; fi
 }
 
-check_no_native_browser_process() {
+check_no_cio_process() {
   if pgrep -f -e "$EXECUTABLE" >/dev/null 2>&1; then
-    fail "$1 (NativeBrowser process remains)"
+    fail "$1 (Cio process remains)"
   else
     pass "$1"
   fi
@@ -101,9 +101,9 @@ fi
 echo
 echo "2. real CEF seed process"
 SEED_LOG="$WORK_DIR/seed.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+CIO_DATA_DIR="$DATA_DIR" \
+CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 180 "$EXECUTABLE" \
   --milestone7-self-test=seed \
   --home-url="$HOME_URL" \
@@ -112,7 +112,7 @@ run_with_timeout 180 "$EXECUTABLE" \
 SEED_CODE=$?
 if [ "$SEED_CODE" -eq 0 ]; then pass "seed process exited 0"; else fail "seed process exited with $SEED_CODE"; fi
 if [ "$SEED_CODE" -gt 128 ]; then fail "seed process died from signal $((SEED_CODE - 128))"; fi
-check_no_native_browser_process "seed left no residual NativeBrowser process"
+check_no_cio_process "seed left no residual Cio process"
 
 for CHECK in \
   real-cef-initial-page-load \
@@ -166,7 +166,7 @@ if [ "$?" -eq 0 ]; then pass "SQLite rows, title, counts, redirect and exact URL
 
 PAYLOAD_HASH="$(python3 - <<'PY'
 import hashlib
-payload = b"NativeBrowser Milestone 7 fixture payload\n" * 1024
+payload = b"Cio Milestone 7 fixture payload\n" * 1024
 print(hashlib.sha256(payload).hexdigest())
 PY
 )"
@@ -190,9 +190,9 @@ if [ "$?" -eq 0 ]; then pass "download bytes/hash, names and containment verifie
 echo
 echo "3. real CEF persistence/relaunch process"
 VERIFY_LOG="$WORK_DIR/verify.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+CIO_DATA_DIR="$DATA_DIR" \
+CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 180 "$EXECUTABLE" \
   --milestone7-self-test=verify \
   --home-url="$HOME_URL" \
@@ -201,7 +201,7 @@ run_with_timeout 180 "$EXECUTABLE" \
 VERIFY_CODE=$?
 if [ "$VERIFY_CODE" -eq 0 ]; then pass "verify process exited 0"; else fail "verify process exited with $VERIFY_CODE"; fi
 if [ "$VERIFY_CODE" -gt 128 ]; then fail "verify process died from signal $((VERIFY_CODE - 128))"; fi
-check_no_native_browser_process "verify left no residual NativeBrowser process"
+check_no_cio_process "verify left no residual Cio process"
 for CHECK in history-db-persisted-visit-count history-db-persisted-title history-db-persisted-redirect-result history-db-persisted-failed-load-exclusion real-cef-relaunch-load download-list-is-process-memory-only clean-browser-shutdown cef-shutdown-once; do
   check_contains "relaunch self-test: $CHECK" "m7-self-test: pass $CHECK" "$VERIFY_LOG"
 done

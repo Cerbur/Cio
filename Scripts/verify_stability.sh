@@ -8,9 +8,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
-TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowserTests.xctest"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
+TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/CioTests.xctest"
 WORK_DIR="$REPO_ROOT/build/verification/milestone8"
 DATA_DIR="$REPO_ROOT/build/verification-data/milestone8"
 DOWNLOADS_DIR="$REPO_ROOT/build/verification-downloads/milestone8"
@@ -29,7 +29,7 @@ check_contains() {
 
 check_no_process() {
   if pgrep -f -e "$EXECUTABLE" >/dev/null 2>&1; then
-    fail "$1 (NativeBrowser process remains)"
+    fail "$1 (Cio process remains)"
   else
     pass "$1"
   fi
@@ -109,9 +109,9 @@ done
 if [ "$FIXTURE_READY" -eq 1 ]; then pass "loopback fixture server started"; else fail "loopback fixture server started"; fi
 
 STRESS_LOG="$WORK_DIR/stress.log"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+CIO_DATA_DIR="$DATA_DIR" \
+CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 600 "$EXECUTABLE" \
   --use-mock-keychain \
   --milestone8-self-test=stress \
@@ -129,9 +129,9 @@ check_no_process "M8 stress left no residual process"
 echo
 echo "4. lazy restore stress"
 LAZY_SEED_LOG="$WORK_DIR/lazy-seed.log"
-NATIVEBROWSER_DATA_DIR="$LAZY_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$LAZY_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 600 "$EXECUTABLE" \
   --use-mock-keychain \
   --milestone8-self-test=lazy-seed \
@@ -143,9 +143,9 @@ check_contains "lazy seed persisted 50 domain tabs" "m8-self-test: pass lazy-see
 check_no_process "lazy seed left no residual process"
 
 LAZY_VERIFY_LOG="$WORK_DIR/lazy-verify.log"
-NATIVEBROWSER_DATA_DIR="$LAZY_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$LAZY_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 600 "$EXECUTABLE" \
   --use-mock-keychain \
   --milestone8-self-test=lazy-verify \
@@ -161,10 +161,10 @@ echo
 echo "5. deterministic beforeunload integration"
 for response in cancel accept; do
   beforeunload_log="$WORK_DIR/beforeunload-$response.log"
-  NATIVEBROWSER_BEFOREUNLOAD_AUTORESPONSE="$response" \
-  NATIVEBROWSER_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-beforeunload-$response" \
-  NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-  NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+  CIO_BEFOREUNLOAD_AUTORESPONSE="$response" \
+  CIO_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-beforeunload-$response" \
+  CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+  CIO_DISABLE_SESSION_PERSISTENCE=1 \
   run_with_timeout 180 "$EXECUTABLE" \
     --use-mock-keychain \
     --beforeunload-self-test="$response" \
@@ -214,9 +214,9 @@ echo
 echo "7. bounded quit soak"
 for iteration in 1 2; do
   soak_log="$WORK_DIR/soak-$iteration.log"
-  NATIVEBROWSER_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-soak-$iteration" \
-  NATIVEBROWSER_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
-  NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1 \
+  CIO_DATA_DIR="$REPO_ROOT/build/verification-data/milestone8-soak-$iteration" \
+  CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
+  CIO_DISABLE_SESSION_PERSISTENCE=1 \
   run_with_timeout 240 "$EXECUTABLE" \
     -ApplePersistenceIgnoreState YES \
     --use-mock-keychain \
@@ -241,11 +241,11 @@ fi
 
 echo
 echo "9. static hardening gates"
-check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm"
-check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/NativeBrowser/Bridge/BrowserBridge.mm"
-check_contains "CEF shutdown has a live-browser guard" "guard !workspaceStore.hasLiveSessions" "$REPO_ROOT/NativeBrowser/App/ApplicationRuntime.swift"
+check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/Cio/Bridge/BrowserBridge.mm"
+check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/Cio/Bridge/BrowserBridge.mm"
+check_contains "CEF shutdown has a live-browser guard" "guard !workspaceStore.hasLiveSessions" "$REPO_ROOT/Cio/App/ApplicationRuntime.swift"
 
-check_contains "renderer termination has a recoverable UI" "renderer-crash-reload" "$REPO_ROOT/NativeBrowser/UI/Main/BrowserMainViewController.swift"
+check_contains "renderer termination has a recoverable UI" "renderer-crash-reload" "$REPO_ROOT/Cio/UI/Main/BrowserMainViewController.swift"
 if git diff --check; then pass "git diff --check"; else fail "git diff --check"; fi
 
 echo

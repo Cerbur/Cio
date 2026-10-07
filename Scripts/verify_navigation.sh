@@ -24,8 +24,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 # Verification runs use their own browser data directory. Chromium encrypts
 # stored cookies and passwords with a "Chromium Safe Storage" item in the login
 # keychain; reusing a profile written by an earlier build therefore makes macOS
@@ -43,7 +43,7 @@ NAVIGATE_QUIT_DATA_DIR="$DATA_DIR/navigate-quit"
 GUI_DATA_DIR="$DATA_DIR/gui"
 REDACTION_DATA_DIR="$DATA_DIR/redaction"
 # M2 verification must not inherit a persisted M6 workspace.
-export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
+export CIO_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -147,7 +147,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "1. address / search parser"
 TEST_LOG="$WORK_DIR/m2-tests.log"
-TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowserTests.xctest"
+TEST_BUNDLE="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/CioTests.xctest"
 TEST_RUN_LOG="$WORK_DIR/m2-tests-run.log"
 if "$REPO_ROOT/Scripts/verify_unit_tests.sh" "$TEST_RUN_LOG" > "$TEST_LOG" 2>&1; then
   pass "current unit tests passed (native bundle and local packages)"
@@ -203,7 +203,7 @@ echo
 echo "5. runtime navigation stack (--navigation-self-test)"
 SELF_LOG="$WORK_DIR/m2-navigation-self-test.log"
 rm -rf "$NAVIGATION_DATA_DIR"
-NATIVEBROWSER_DATA_DIR="$NAVIGATION_DATA_DIR" run_with_timeout 120 "$EXECUTABLE" \
+CIO_DATA_DIR="$NAVIGATION_DATA_DIR" run_with_timeout 120 "$EXECUTABLE" \
   --navigation-self-test --home-url="$HOME_URL" --m2-fixture-base-url="$BASE_URL" \
   > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
@@ -256,7 +256,7 @@ rm -rf "$NAVIGATE_QUIT_DATA_DIR"
 start=$(date +%s)
 # Both steps wait for the previous one to have happened, so the navigation is
 # guaranteed to be in the running application before it is asked to quit.
-NATIVEBROWSER_DATA_DIR="$NAVIGATE_QUIT_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+CIO_DATA_DIR="$NAVIGATE_QUIT_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
   --home-url="$HOME_URL" --navigate-url="$NAV_QUIT_URL" --wait-for-window \
   --navigate-after=3 --navigate-wait --quit-after=20 \
   > "$NAV_QUIT_LOG" 2>&1
@@ -292,7 +292,7 @@ GUI_START=$(date +%s)
 rm -rf "$GUI_DATA_DIR"
 # --wait-for-window keeps this about the quit path rather than about how long
 # the machine took to put the window on screen.
-NATIVEBROWSER_DATA_DIR="$GUI_DATA_DIR" run_with_timeout $((QUIT_AFTER + 45)) "$EXECUTABLE" \
+CIO_DATA_DIR="$GUI_DATA_DIR" run_with_timeout $((QUIT_AFTER + 45)) "$EXECUTABLE" \
   --home-url="$HOME_URL" --wait-for-window --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))
@@ -321,7 +321,7 @@ echo "7. programmatic termination ordering"
 # Real Cmd+Q must also be tested and its timing log checked separately.
 PUMP_LOG="$WORK_DIR/m2-terminate-in-pump.log"
 rm -rf "$DATA_DIR/terminate-in-pump"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/terminate-in-pump" run_with_timeout 90 "$EXECUTABLE" \
+CIO_DATA_DIR="$DATA_DIR/terminate-in-pump" run_with_timeout 90 "$EXECUTABLE" \
   --log-shutdown-timing --wait-for-window --terminate-in-pump-after=8 --quit-after=120 > "$PUMP_LOG" 2>&1
 PUMP_STATUS=$?
 # A shutdown crash shows up as a signal exit (139 = SIGSEGV, 133 = SIGTRAP), so
@@ -362,10 +362,10 @@ case "$ORDER_LINE" in
   *)
     fail "unexpected termination ordering: $ORDER_LINE" ;;
 esac
-if [ -z "$(find ~/Library/Logs/DiagnosticReports -name 'NativeBrowser*' -newermt '-3 minutes' 2>/dev/null)" ]; then
-  pass "no new NativeBrowser crash report"
+if [ -z "$(find ~/Library/Logs/DiagnosticReports -name 'Cio*' -newermt '-3 minutes' 2>/dev/null)" ]; then
+  pass "no new Cio crash report"
 else
-  fail "a NativeBrowser crash report was written during this run"
+  fail "a Cio crash report was written during this run"
 fi
 
 # ---------------------------------------------------------------------------
@@ -378,7 +378,7 @@ REDACT_LOG="$WORK_DIR/m2-redaction.log"
 REDACT_TOKEN="test-token_123-abc"
 REDACT_URL="$BASE_URL/page-a?token=$REDACT_TOKEN"
 rm -rf "$REDACTION_DATA_DIR"
-NATIVEBROWSER_DATA_DIR="$REDACTION_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+CIO_DATA_DIR="$REDACTION_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
   --home-url="$REDACT_URL" --wait-for-window --quit-after=12 > "$REDACT_LOG" 2>&1
 REDACT_STATUS=$?
 if [ "$REDACT_STATUS" -eq 0 ]; then

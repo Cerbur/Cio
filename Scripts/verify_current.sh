@@ -7,8 +7,8 @@ CONFIGURATION="${CONFIGURATION:-Debug}"
 export CONFIGURATION
 Scripts/build.sh
 Scripts/verify_unit_tests.sh
-for responsibility in runtime rendering navigation tabs workspace session_restore history_downloads stability; do
-  "Scripts/verify_$responsibility.sh"
+for verifier in Scripts/verify_milestone*.sh; do
+  "$verifier"
 done
 # Release's clean action removes Debug products too. Leave a fresh Debug app.
 Scripts/build.sh

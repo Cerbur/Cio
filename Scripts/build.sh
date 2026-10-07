@@ -25,23 +25,23 @@ xcodegen generate
 "$REPO_ROOT/Scripts/sync_scheme.sh"
 
 xcodebuild \
-  -project "$REPO_ROOT/NativeBrowser.xcodeproj" \
-  -scheme NativeBrowser \
+  -project "$REPO_ROOT/Cio.xcodeproj" \
+  -scheme Cio \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$DERIVED_DATA" \
   "$@" \
   build
 
-APP_EXECUTABLE="$DERIVED_DATA/Build/Products/$CONFIGURATION/NativeBrowser.app/Contents/MacOS/NativeBrowser"
+APP_EXECUTABLE="$DERIVED_DATA/Build/Products/$CONFIGURATION/Cio.app/Contents/MacOS/Cio"
 if command -v pgrep >/dev/null 2>&1; then
   while IFS= read -r pid; do
     running_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
     case "$running_command" in
       "$APP_EXECUTABLE"|"$APP_EXECUTABLE "*)
-        printf '\nBuilt %s, but NativeBrowser is already running (PID %s). Quit and reopen it to use this build.\n' \
+        printf '\nBuilt %s, but Cio is already running (PID %s). Quit and reopen it to use this build.\n' \
           "$APP_EXECUTABLE" "$pid"
         break
         ;;
     esac
-  done < <(pgrep -x NativeBrowser 2>/dev/null || true)
+  done < <(pgrep -x Cio 2>/dev/null || true)
 fi

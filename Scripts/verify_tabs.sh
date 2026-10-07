@@ -22,8 +22,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 # Verification runs use their own browser data directory. Chromium encrypts
 # stored cookies and passwords with a "Chromium Safe Storage" item in the login
 # keychain; reusing a profile written by an earlier build therefore makes macOS
@@ -34,7 +34,7 @@ EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
 # M3 is an in-memory tabs regression; isolate it from M6 session restore.
-export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
+export CIO_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -100,7 +100,7 @@ mkdir -p "$DATA_DIR" "$WORK_DIR"
 DIAGNOSTIC_REPORT_DIR="$HOME/Library/Logs/DiagnosticReports"
 CRASH_REPORTS_BEFORE="$WORK_DIR/m3-crash-reports.before"
 CRASH_REPORTS_AFTER="$WORK_DIR/m3-crash-reports.after"
-find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'NativeBrowser*' -print 2>/dev/null \
+find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'Cio*' -print 2>/dev/null \
   | sort > "$CRASH_REPORTS_BEFORE"
 
 if [ ! -x "$EXECUTABLE" ]; then
@@ -124,7 +124,7 @@ REDACT_TOKEN="test-token_123-abc"
 REDACT_URL="https://example.com/?token=$REDACT_TOKEN"
 rm -rf "$DATA_DIR/multi-tab"
 MULTI_START=$(date +%s)
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/multi-tab" run_with_timeout $((QUIT_AFTER + 60)) "$EXECUTABLE" \
+CIO_DATA_DIR="$DATA_DIR/multi-tab" run_with_timeout $((QUIT_AFTER + 60)) "$EXECUTABLE" \
   --dump-main-menu --home-url="$REDACT_URL" --wait-for-window \
   --open-tabs=$MULTI_TABS --quit-after=$QUIT_AFTER > "$MULTI_LOG" 2>&1
 MULTI_STATUS=$?
@@ -191,13 +191,13 @@ if [ "$MULTI_TOTAL" -le $((QUIT_AFTER + 30)) ]; then
 else
   fail "the multi-tab quit took ${MULTI_TOTAL}s"
 fi
-find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'NativeBrowser*' -print 2>/dev/null \
+find "$DIAGNOSTIC_REPORT_DIR" -maxdepth 1 -type f -name 'Cio*' -print 2>/dev/null \
   | sort > "$CRASH_REPORTS_AFTER"
 NEW_CRASH_REPORTS="$(comm -13 "$CRASH_REPORTS_BEFORE" "$CRASH_REPORTS_AFTER")"
 if [ -z "$NEW_CRASH_REPORTS" ]; then
-  pass "no new NativeBrowser crash report"
+  pass "no new Cio crash report"
 else
-  fail "a NativeBrowser crash report was written during this run: $NEW_CRASH_REPORTS"
+  fail "a Cio crash report was written during this run: $NEW_CRASH_REPORTS"
 fi
 # Security: the same redaction rules apply to a multi-tab run.
 check_contains "the lifecycle trace reports the URL with its query value redacted" \

@@ -2,18 +2,18 @@
 #
 # Assembles the CEF runtime inside the built application bundle:
 #
-#   NativeBrowser.app/Contents/Frameworks/
+#   Cio.app/Contents/Frameworks/
 #   |- Chromium Embedded Framework.framework
-#   |- NativeBrowser Helper.app
-#   |- NativeBrowser Helper (Alerts).app
-#   |- NativeBrowser Helper (GPU).app
-#   |- NativeBrowser Helper (Plugin).app
-#   - NativeBrowser Helper (Renderer).app
+#   |- Cio Helper.app
+#   |- Cio Helper (Alerts).app
+#   |- Cio Helper (GPU).app
+#   |- Cio Helper (Plugin).app
+#   - Cio Helper (Renderer).app
 #
 # The layout follows CEF's own cmake helpers (cmake/cef_macros.cmake
 # COPY_MAC_FRAMEWORK and tests/cefsimple/CMakeLists.txt): the framework is
 # stored in the versioned framework layout, and the helper applications are
-# thin bundles around the NativeBrowserHelper executable.
+# thin bundles around the CioHelper executable.
 #
 # Runs as the app target's last build phase, so that the assembled bundle is
 # what Xcode signs afterwards.
@@ -28,7 +28,7 @@ CEF_RELEASE="$CEF_ROOT/Release"
 FRAMEWORK_NAME="Chromium Embedded Framework.framework"
 APP_NAME="$WRAPPER_NAME"
 APP_NAME="${APP_NAME%.app}"
-HELPER_PRODUCT="$BUILT_PRODUCTS_DIR/NativeBrowserHelper"
+HELPER_PRODUCT="$BUILT_PRODUCTS_DIR/CioHelper"
 BUNDLE_ID="$PRODUCT_BUNDLE_IDENTIFIER"
 MINIMUM_SYSTEM_VERSION="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
@@ -150,7 +150,7 @@ if [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ] && [ -n "$SIGN_IDENTITY" ]; then
   if [ "${ENABLE_HARDENED_RUNTIME:-NO}" = "YES" ]; then
     SIGN_ARGS+=(--options runtime)
     HELPER_SIGN_ARGS+=(--options runtime)
-    ENTITLEMENTS_FILE="$SRCROOT/NativeBrowser/Resources/NativeBrowser.entitlements"
+    ENTITLEMENTS_FILE="$SRCROOT/Cio/Resources/Cio.entitlements"
     if [ -f "$ENTITLEMENTS_FILE" ]; then
       HELPER_SIGN_ARGS+=(--entitlements "$ENTITLEMENTS_FILE")
     fi

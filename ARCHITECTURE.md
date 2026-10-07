@@ -1,4 +1,4 @@
-# NativeBrowser architecture
+# Cio architecture
 
 This document describes the checked-in implementation. Layout and native-control contracts in AGENTS.md remain authoritative. There is no staged feature specification or alternate historical design.
 
@@ -9,7 +9,7 @@ The macOS 26+ application uses Swift 6, SwiftUI, AppKit, Objective-C++ and CEF. 
 ```text
 BrowserMain
   -> CEFProcessHost                 framework loader, CefInitialize, external pump
-  -> NativeBrowserApp              single SwiftUI Window scene and native menu
+  -> CioApp              single SwiftUI Window scene and native menu
        -> ApplicationRuntime       application-scoped services and termination
             -> BrowserWorkspaceStore
                  -> WorkspaceCollection
@@ -31,13 +31,13 @@ The app, Helper tool and standalone unit-test bundle are Xcode targets. Selected
 
 BrowserMain executes any CEF subprocess handoff before initialization, initializes CEF before SwiftUI, and starts the native application run loop. CEFProcessHost uses CefScopedLibraryLoader: the framework is loaded at runtime, never linked directly. Only libcef_dll_wrapper.a is linked into the App and Helper.
 
-Scripts/package_cef_runtime.sh assembles one versioned Chromium Embedded Framework.framework and five bundles in NativeBrowser.app/Contents/Frameworks:
+Scripts/package_cef_runtime.sh assembles one versioned Chromium Embedded Framework.framework and five bundles in Cio.app/Contents/Frameworks:
 
-- NativeBrowser Helper.app
-- NativeBrowser Helper (Alerts).app
-- NativeBrowser Helper (GPU).app
-- NativeBrowser Helper (Plugin).app
-- NativeBrowser Helper (Renderer).app
+- Cio Helper.app
+- Cio Helper (Alerts).app
+- Cio Helper (GPU).app
+- Cio Helper (Plugin).app
+- Cio Helper (Renderer).app
 
 Helper names are derived from the main product name. Their bundle IDs derive from the main bundle ID with .helper and process suffixes. Each Helper uses LoadInHelper() to load the same framework through `../../..` relative to its executable. The packager signs nested code from the inside out; Xcode signs the outer application.
 
@@ -53,13 +53,13 @@ Top pins remain visible across Spaces. Space pins belong to their Space; tempora
 
 BrowserWorkspaceStore is the mutable domain owner and owns selection transitions. BrowserSessionManager retains only instantiated sessions, their containers and typed callbacks. A closing runtime remains registered until OnBeforeClose. The application has no second liveness registry.
 
-SessionStore writes session-v1.json under ~/Library/Application Support/NativeBrowser/, or the explicit NATIVEBROWSER_DATA_DIR override. The versioned Codable snapshot preserves exact URLs, titles, identities, ordering, selections, tiers and split state. Restore validates the graph before accepting it; malformed input falls back to the normal fresh workspace. Runtime loading state, focus, field edit buffers, CEF history and recently-closed state are not restored. Only the selected tab's runtime is created at launch; activating a lazy tab creates it once, and closing a lazy tab never creates a browser just to close it.
+SessionStore writes session-v1.json under ~/Library/Application Support/Cio/, or the explicit CIO_DATA_DIR override. The versioned Codable snapshot preserves exact URLs, titles, identities, ordering, selections, tiers and split state. Restore validates the graph before accepting it; malformed input falls back to the normal fresh workspace. Runtime loading state, focus, field edit buffers, CEF history and recently-closed state are not restored. Only the selected tab's runtime is created at launch; activating a lazy tab creates it once, and closing a lazy tab never creates a browser just to close it.
 
 Session/history files use private permissions and atomic session writes. Persistence failures are local and nonfatal. Existing data is not silently migrated between product namespaces.
 
 ## Surface and UI lifetime
 
-MainWindowView hosts the AppKit shell through NativeBrowserShellRepresentable. The application uses one Window scene because the workspace owns one set of native Chromium surfaces.
+MainWindowView hosts the AppKit shell through CioShellRepresentable. The application uses one Window scene because the workspace owns one set of native Chromium surfaces.
 
 BrowserSurfaceHostView retains one BrowserPagePresentation per live session. A page retains its stable outer viewport, ChromiumContainerView and tab-bound BrowserToolbarController. Selecting tabs, changing sections or changing splits does not rebuild a Chromium view, create another browser or rebind a shared address editor. Containers are released only after their typed close callback. Presentation clipping and rounded corners belong to native outer viewports; Chromium receives rectangular rendering bounds.
 

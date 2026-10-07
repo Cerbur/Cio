@@ -1,6 +1,6 @@
-# XcodeGen specification for NativeBrowser.
+# XcodeGen specification for Cio.
 #
-#   xcodegen generate          # (re)create NativeBrowser.xcodeproj
+#   xcodegen generate          # (re)create Cio.xcodeproj
 #   Scripts/fetch_cef.sh       # download the CEF distribution (once)
 #   CONFIGURATION=Debug Scripts/build.sh
 #
@@ -12,10 +12,10 @@
 #     CefScopedLibraryLoader, which is required by the Chromium sandbox and is
 #     how the CEF binary distribution expects clients to start up.
 #   * Only libcef_dll_wrapper.a (built by Scripts/build_cef_wrapper.sh) is linked.
-#   * The bundle layout (framework + "NativeBrowser Helper*.app") is assembled by
+#   * The bundle layout (framework + "Cio Helper*.app") is assembled by
 #     Scripts/package_cef_runtime.sh after the app is linked and before Xcode
 #     signs it.
-name: NativeBrowser
+name: Cio
 
 options:
   bundleIdPrefix: com.example
@@ -75,11 +75,11 @@ settings:
       VALIDATE_PRODUCT: YES
 
 targets:
-  NativeBrowser:
+  Cio:
     type: application
     platform: macOS
     sources:
-      - path: NativeBrowser
+      - path: Cio
         excludes:
           - "Resources/Info.plist"
           - "Helper/**"
@@ -90,12 +90,12 @@ targets:
           - "Tests/**"
     settings:
       base:
-        PRODUCT_NAME: NativeBrowser
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowser
+        PRODUCT_NAME: Cio
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.Cio
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        INFOPLIST_FILE: NativeBrowser/Resources/Info.plist
-        SWIFT_OBJC_BRIDGING_HEADER: NativeBrowser/Bridge/NativeBrowser-Bridging-Header.h
+        INFOPLIST_FILE: Cio/Resources/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Cio/Bridge/Cio-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/ThirdParty/CEF"
         LIBRARY_SEARCH_PATHS:
@@ -109,7 +109,7 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
       configs:
         Release:
-          CODE_SIGN_ENTITLEMENTS: NativeBrowser/Resources/NativeBrowser.entitlements
+          CODE_SIGN_ENTITLEMENTS: Cio/Resources/Cio.entitlements
     scheme:
       configVariants: []
       # The scheme is committed as a template (SchemeTemplates/) because the
@@ -117,9 +117,9 @@ targets:
       # has none, and a build phase refreshes the copy after every generate.
     dependencies:
       # Build ordering only: the helper executable is copied into the
-      # "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh,
+      # "Cio Helper*.app" bundles by Scripts/package_cef_runtime.sh,
       # so it must not be embedded into the app's Resources.
-      - target: NativeBrowserHelper
+      - target: CioHelper
         embed: false
     preBuildScripts:
       - name: "Build libcef_dll_wrapper"
@@ -135,64 +135,64 @@ targets:
   # free" notes), so the tests do not need the application, do not link CEF and
   # never start Chromium. The target deliberately has no TEST_HOST: it is a
   # standalone logic test bundle.
-  NativeBrowserTests:
+  CioTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: NativeBrowser/Tests
-      - path: NativeBrowser/Browser/NavigationInput.swift
-      - path: NativeBrowser/Browser/SpotlightMode.swift
-      - path: NativeBrowser/Browser/SpotlightAutocompleteService.swift
-      - path: NativeBrowser/Browser/Autocomplete
-      - path: NativeBrowser/UI/Spotlight/SpotlightHoverGate.swift
-      - path: NativeBrowser/UI/Spotlight/SpotlightInputState.swift
-      - path: NativeBrowser/UI/Main/BrowserShellLayout.swift
-      - path: NativeBrowser/Animation/AnimationValues.swift
-      - path: NativeBrowser/Animation/BrowserAnimationPreferences.swift
-      - path: NativeBrowser/Animation/GlassComponentAnimationValues.swift
-      - path: NativeBrowser/Animation/GlassComponentLayoutMotion.swift
-      - path: NativeBrowser/UI/Sidebar/SpaceTabPanelRow.swift
-      - path: NativeBrowser/UI/Sidebar/SidebarTabPanelLayout.swift
-      - path: NativeBrowser/Browser/BrowserSplitLayout.swift
+      - path: Cio/Tests
+      - path: Cio/Browser/NavigationInput.swift
+      - path: Cio/Browser/SpotlightMode.swift
+      - path: Cio/Browser/SpotlightAutocompleteService.swift
+      - path: Cio/Browser/Autocomplete
+      - path: Cio/UI/Spotlight/SpotlightHoverGate.swift
+      - path: Cio/UI/Spotlight/SpotlightInputState.swift
+      - path: Cio/UI/Main/BrowserShellLayout.swift
+      - path: Cio/Animation/AnimationValues.swift
+      - path: Cio/Animation/BrowserAnimationPreferences.swift
+      - path: Cio/Animation/GlassComponentAnimationValues.swift
+      - path: Cio/Animation/GlassComponentLayoutMotion.swift
+      - path: Cio/UI/Sidebar/SpaceTabPanelRow.swift
+      - path: Cio/UI/Sidebar/SidebarTabPanelLayout.swift
+      - path: Cio/Browser/BrowserSplitLayout.swift
       # The workspace model is pure Foundation: it is compiled
       # into this target so Space/tab membership, ordering, selection and
       # recently-closed rules are tested with no application, no window and no
       # CEF.
-      - path: NativeBrowser/Browser/BrowserTab.swift
-      - path: NativeBrowser/Browser/BrowserSpace.swift
-      - path: NativeBrowser/Browser/WorkspaceCollection.swift
-      - path: NativeBrowser/Browser/WorkspaceSessionSnapshot.swift
-      - path: NativeBrowser/Persistence/SessionStore.swift
-      - path: NativeBrowser/History/HistoryModels.swift
-      - path: NativeBrowser/Persistence/HistoryStore.swift
-      - path: NativeBrowser/Downloads/DownloadManager.swift
+      - path: Cio/Browser/BrowserTab.swift
+      - path: Cio/Browser/BrowserSpace.swift
+      - path: Cio/Browser/WorkspaceCollection.swift
+      - path: Cio/Browser/WorkspaceSessionSnapshot.swift
+      - path: Cio/Persistence/SessionStore.swift
+      - path: Cio/History/HistoryModels.swift
+      - path: Cio/Persistence/HistoryStore.swift
+      - path: Cio/Downloads/DownloadManager.swift
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.
-      - path: NativeBrowser/UI/CommandBar/AddressAutocompleteModel.swift
-      - path: NativeBrowser/UI/CommandBar/AddressCapsuleInteraction.swift
-      - path: NativeBrowser/UI/CommandBar/AddressFieldModel.swift
-      - path: NativeBrowser/App/Logging.swift
-      - path: NativeBrowser/App/URLLogSanitizer.swift
+      - path: Cio/UI/CommandBar/AddressAutocompleteModel.swift
+      - path: Cio/UI/CommandBar/AddressCapsuleInteraction.swift
+      - path: Cio/UI/CommandBar/AddressFieldModel.swift
+      - path: Cio/App/Logging.swift
+      - path: Cio/App/URLLogSanitizer.swift
     settings:
       base:
-        PRODUCT_NAME: NativeBrowserTests
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.NativeBrowserTests
+        PRODUCT_NAME: CioTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.CioTests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         OTHER_LDFLAGS:
           - "-lsqlite3"
 
   # Chromium sub-process entry point. The binary produced here is copied into
-  # the "NativeBrowser Helper*.app" bundles by Scripts/package_cef_runtime.sh.
-  NativeBrowserHelper:
+  # the "Cio Helper*.app" bundles by Scripts/package_cef_runtime.sh.
+  CioHelper:
     type: tool
     platform: macOS
     sources:
-      - path: NativeBrowser/Helper
+      - path: Cio/Helper
     settings:
       base:
-        PRODUCT_NAME: NativeBrowserHelper
+        PRODUCT_NAME: CioHelper
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/ThirdParty/CEF"
         LIBRARY_SEARCH_PATHS:
@@ -201,4 +201,4 @@ targets:
           - "-lcef_dll_wrapper"
       configs:
         Release:
-          CODE_SIGN_ENTITLEMENTS: NativeBrowser/Resources/NativeBrowser.entitlements
+          CODE_SIGN_ENTITLEMENTS: Cio/Resources/Cio.entitlements

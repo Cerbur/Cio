@@ -7,9 +7,9 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/Release/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
-DEBUG_EXECUTABLE="$REPO_ROOT/build/DerivedData/Build/Products/Debug/NativeBrowser.app/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/Release/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
+DEBUG_EXECUTABLE="$REPO_ROOT/build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data/release-candidate}"
 DOWNLOADS_DIR="${DOWNLOADS_DIR:-$REPO_ROOT/build/verification-downloads/release-candidate}"
 WORK_DIR="$REPO_ROOT/build/verification/release-candidate"
@@ -50,9 +50,9 @@ check_absent() {
   if grep -qF -e "$2" "$3" 2>/dev/null; then fail "$1 (sensitive value found)"; else pass "$1"; fi
 }
 
-check_no_native_browser_process() {
+check_no_cio_process() {
   if pgrep -f "$EXECUTABLE" >/dev/null 2>&1; then
-    fail "$1 (NativeBrowser process remains)"
+    fail "$1 (Cio process remains)"
   else
     pass "$1"
   fi
@@ -70,7 +70,7 @@ report_preexisting_processes() {
   fi
 }
 
-report_preexisting_processes "Debug NativeBrowser" "$DEBUG_EXECUTABLE"
+report_preexisting_processes "Debug Cio" "$DEBUG_EXECUTABLE"
 PREEXISTING_RELEASE_PIDS="$(pgrep -f "$EXECUTABLE" 2>/dev/null || true)"
 if [ -n "$PREEXISTING_RELEASE_PIDS" ]; then
   fail "Release preflight has no stale exact Release process (pids: $PREEXISTING_RELEASE_PIDS)"
@@ -117,11 +117,11 @@ FRAMEWORK="$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
 if [ -d "$FRAMEWORK" ]; then pass "CEF framework is packaged"; else fail "CEF framework is packaged"; fi
 
 EXPECTED_HELPERS=(
-  "NativeBrowser Helper.app"
-  "NativeBrowser Helper (Alerts).app"
-  "NativeBrowser Helper (GPU).app"
-  "NativeBrowser Helper (Plugin).app"
-  "NativeBrowser Helper (Renderer).app"
+  "Cio Helper.app"
+  "Cio Helper (Alerts).app"
+  "Cio Helper (GPU).app"
+  "Cio Helper (Plugin).app"
+  "Cio Helper (Renderer).app"
 )
 for helper in "${EXPECTED_HELPERS[@]}"; do
   helper_path="$APP/Contents/Frameworks/$helper"
@@ -186,10 +186,11 @@ done
 if [ "$FIXTURE_READY" -eq 1 ]; then pass "loopback fixture server started"; else fail "loopback fixture server started"; fi
 
 SMOKE_LOG="$WORK_DIR/smoke.log"
-NATIVEBROWSER_DATA_DIR="$SMOKE_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$SMOKE_DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$SMOKE_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$SMOKE_DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 120 "$EXECUTABLE" \
+    "${RESTORE_APPKIT_ARGS[@]}" \
     --use-mock-keychain \
     --wait-for-window \
     --quit-after=12 \
@@ -203,14 +204,14 @@ check_contains "Release CEF shut down cleanly" "cef:shutdown(clean: true)" "$SMO
 check_contains "Release has no implicit mock keychain" "mock-keychain: implicit=no explicit=yes" "$SMOKE_LOG"
 check_absent "Release smoke log omits query secret" "$FAKE_SECRET" "$SMOKE_LOG"
 check_absent "Release smoke log omits fragment secret" "$FAKE_FRAGMENT" "$SMOKE_LOG"
-check_no_native_browser_process "Release smoke left no residual process"
+check_no_cio_process "Release smoke left no residual process"
 
 echo
 echo "4. Release History and Downloads"
 HISTORY_SEED_LOG="$WORK_DIR/history-seed.log"
-NATIVEBROWSER_DATA_DIR="$HISTORY_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$HISTORY_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 240 "$EXECUTABLE" \
   --use-mock-keychain \
   --milestone7-self-test=seed \
@@ -244,7 +245,7 @@ check_contains "Release History/Downloads seed had zero failures" \
   "m7-self-test: checks=seed failures=0" "$HISTORY_SEED_LOG"
 check_absent "Release History log omits query secret" "$FAKE_SECRET" "$HISTORY_SEED_LOG"
 check_absent "Release History log omits fragment secret" "$FAKE_FRAGMENT" "$HISTORY_SEED_LOG"
-check_no_native_browser_process "Release History/Downloads seed left no residual process"
+check_no_cio_process "Release History/Downloads seed left no residual process"
 
 HISTORY_DB="$HISTORY_DATA_DIR/history.sqlite3"
 if [ -f "$HISTORY_DB" ]; then pass "Release History database exists"; else fail "Release History database exists"; fi
@@ -272,7 +273,7 @@ if [ "$?" -eq 0 ]; then pass "Release SQLite rows, title, counts, redirect and e
 
 PAYLOAD_HASH="$(python3 - <<'PY'
 import hashlib
-payload = b"NativeBrowser Milestone 7 fixture payload\n" * 1024
+payload = b"Cio Milestone 7 fixture payload\n" * 1024
 print(hashlib.sha256(payload).hexdigest())
 PY
 )"
@@ -294,9 +295,9 @@ PY
 if [ "$?" -eq 0 ]; then pass "Release download bytes/hash, names and containment verified"; else fail "Release download file verification"; fi
 
 HISTORY_VERIFY_LOG="$WORK_DIR/history-verify.log"
-NATIVEBROWSER_DATA_DIR="$HISTORY_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$HISTORY_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 180 "$EXECUTABLE" \
   --use-mock-keychain \
   --milestone7-self-test=verify \
@@ -320,14 +321,14 @@ check_contains "Release History/Downloads verify had zero failures" \
   "m7-self-test: checks=verify failures=0" "$HISTORY_VERIFY_LOG"
 check_absent "Release History verify log omits query secret" "$FAKE_SECRET" "$HISTORY_VERIFY_LOG"
 check_absent "Release History verify log omits fragment secret" "$FAKE_FRAGMENT" "$HISTORY_VERIFY_LOG"
-check_no_native_browser_process "Release History/Downloads verify left no residual process"
+check_no_cio_process "Release History/Downloads verify left no residual process"
 
 echo
 echo "5. Release session restore and lazy activation"
 RESTORE_SEED_LOG="$WORK_DIR/session-restore-seed.log"
-NATIVEBROWSER_DATA_DIR="$RESTORE_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$RESTORE_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
   "${RESTORE_APPKIT_ARGS[@]}" \
   --use-mock-keychain \
@@ -348,13 +349,13 @@ else
 fi
 check_absent "Release restore seed log omits query secret" "$FAKE_SECRET" "$RESTORE_SEED_LOG"
 check_absent "Release restore seed log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_SEED_LOG"
-check_no_native_browser_process "Release session-restore seed left no residual process"
+check_no_cio_process "Release session-restore seed left no residual process"
 
 cp "$RESTORE_DATA_DIR/session-v1.json" "$WORK_DIR/restore-seed-session.json"
 RESTORE_VERIFY_LOG="$WORK_DIR/session-restore-verify.log"
-NATIVEBROWSER_DATA_DIR="$RESTORE_DATA_DIR" \
-NATIVEBROWSER_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
-NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=0 \
+CIO_DATA_DIR="$RESTORE_DATA_DIR" \
+CIO_DOWNLOADS_DIR="$RESTORE_DOWNLOADS_DIR" \
+CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
   "${RESTORE_APPKIT_ARGS[@]}" \
   --use-mock-keychain \
@@ -384,7 +385,7 @@ check_contains "Release restore shuts CEF down cleanly" \
   "lifecycle: cef:shutdown(clean: true)" "$RESTORE_VERIFY_LOG"
 check_absent "Release restore verify log omits query secret" "$FAKE_SECRET" "$RESTORE_VERIFY_LOG"
 check_absent "Release restore verify log omits fragment secret" "$FAKE_FRAGMENT" "$RESTORE_VERIFY_LOG"
-check_no_native_browser_process "Release session-restore verify left no residual process"
+check_no_cio_process "Release session-restore verify left no residual process"
 if python3 "$REPO_ROOT/Scripts/check_restore_report.py" "$RESTORE_SEED_LOG" "$RESTORE_VERIFY_LOG" "$WORK_DIR/restore-seed-session.json"; then
   pass "Release persisted UUID graph and current restore invariants"
 else

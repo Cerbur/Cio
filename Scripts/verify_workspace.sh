@@ -21,12 +21,12 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/NativeBrowser.app"
-EXECUTABLE="$APP/Contents/MacOS/NativeBrowser"
+APP="$REPO_ROOT/build/DerivedData/Build/Products/$CONFIGURATION/Cio.app"
+EXECUTABLE="$APP/Contents/MacOS/Cio"
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/build/verification-data}"
 WORK_DIR="$REPO_ROOT/build/verification"
 # M4 verifies in-memory Spaces and CEF lifecycle; do not load/save M6 state.
-export NATIVEBROWSER_DISABLE_SESSION_PERSISTENCE=1
+export CIO_DISABLE_SESSION_PERSISTENCE=1
 
 FAILURES=0
 pass() { printf '  [pass] %s\n' "$1"; }
@@ -95,7 +95,7 @@ SELF_LOG="$WORK_DIR/m4-spaces-self-test.log"
 rm -rf "$DATA_DIR/spaces-self-test"
 REDACT_TOKEN="m4-test-token_123-abc"
 HOME_URL="https://example.com/?token=$REDACT_TOKEN"
-NATIVEBROWSER_DATA_DIR="$DATA_DIR/spaces-self-test" run_with_timeout 600 "$EXECUTABLE" \
+CIO_DATA_DIR="$DATA_DIR/spaces-self-test" run_with_timeout 600 "$EXECUTABLE" \
   --spaces-self-test --home-url="$HOME_URL" > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
 if python3 "$REPO_ROOT/Scripts/check_workspace_report.py" "$SELF_LOG" "$SELF_STATUS"; then
