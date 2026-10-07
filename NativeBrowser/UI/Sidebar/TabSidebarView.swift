@@ -442,7 +442,7 @@ struct TabSidebarView: View {
       let isTopPin = row.tier == .global
       Color.clear
         .modifier(SidebarTabSurface(isStable: selected,
-          isHovered: isTopPin && row.tabIDs.contains { hoveredTabIDs.contains($0) } && tabDrag.tabID == nil,
+          isHovered: row.tabIDs.contains { hoveredTabIDs.contains($0) } && tabDrag.tabID == nil,
           idleFill: isTopPin ? 0.04 : 0, usesScrollEdge: !isTopPin))
         .scaleEffect(isTopPin && selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     }
@@ -827,18 +827,27 @@ private struct SidebarTabRow: View {
   let onUngroup: () -> Void
   let onSwap: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
+  @State private var isCloseHovered = false
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var isTopPin: Bool { tier == .global }
   private var showsCloseButton: Bool {
-    !isTopPin && !isTabDragActive && (interaction.isHovered || (selected && !isCompact))
+    !isTopPin && !isTabDragActive && interaction.isHovered
   }
+  private var closeButtonWidth: CGFloat {
+    isTopPin ? 0 : BrowserLayout.sidebarTabCloseButtonWidth
+  }
+  private var highlightsCloseButton: Bool { showsCloseButton && isCloseHovered }
 
   var body: some View {
-    HStack(spacing: 0) {
+    ZStack(alignment: .trailing) {
       Button(action: onSelect) {
         SidebarRetainedTabLabel(pageURL: tab.url, session: session, title: tab.displayTitle,
-          fallbackLetter: isTopPin ? tab.pinFallbackLetter : nil, selected: selected,
+          fallbackLetter: isTopPin ? tab.pinFallbackLetter : nil,
           compactAmount: isCompact ? 1 : 0, topPinAmount: isTopPin ? 1 : 0)
+          // Only reserve title space while the retained close control is visible.
+          .padding(.trailing, showsCloseButton ? closeButtonWidth : 0)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .contentShape(Rectangle())
       }
@@ -846,19 +855,25 @@ private struct SidebarTabRow: View {
       .accessibilityLabel(tab.displayTitle)
       Button(action: onClose) {
         Image(systemName: "xmark")
-          .font(.system(size: isCompact ? 8 : 10, weight: .semibold))
-          .frame(width: isTopPin ? 0 : (isCompact ? BrowserLayout.sidebarSplitCloseButtonWidth
-            : BrowserLayout.sidebarTabCloseButtonWidth))
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(highlightsCloseButton
+            ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
+          .scaleEffect(highlightsCloseButton ? AnimationValues.Sidebar.closeButtonHoverScale : 1)
+          .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.Sidebar.closeButtonHoverDuration),
+            value: highlightsCloseButton)
+          .frame(width: closeButtonWidth)
           .frame(maxHeight: .infinity)
+          .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .opacity(showsCloseButton ? 0.7 : 0)
+      .opacity(showsCloseButton ? 1 : 0)
       .allowsHitTesting(showsCloseButton)
       .accessibilityHidden(!showsCloseButton)
+      .onHover { isCloseHovered = $0 }
       .help("Close Tab")
       .accessibilityLabel("Close \(tab.displayTitle)")
     }
-    .padding(.trailing, isCompact || isTopPin ? 0 : BrowserLayout.sidebarTabTrailingInset)
+    .padding(.trailing, isTopPin ? 0 : BrowserLayout.sidebarTabTrailingInset)
     .modifier(SidebarScrollEdge(isEnabled: !isTopPin))
     .modifier(SidebarTabSurface(isStable: selected && group == nil,
       isHovered: group == nil && interaction.isHovered && !isTabDragActive,
@@ -867,6 +882,9 @@ private struct SidebarTabRow: View {
       hoverBorderOpacity: isTopPin ? 0.25 : 0))
     .scaleEffect(isTopPin && selected && group == nil ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     .onHover { interaction.isHovered = $0 }
+    .onChange(of: showsCloseButton) { _, shows in
+      if !shows { isCloseHovered = false }
+    }
     .contextMenu {
       if group != nil {
         Button("Ungroup Tabs", action: onUngroup)

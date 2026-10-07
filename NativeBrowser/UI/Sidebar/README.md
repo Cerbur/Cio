@@ -14,6 +14,14 @@ motion; ordered member IDs are part of the destination so pane swaps animate.
 Moving between Space Pin and Temporary also retains the same controls.
 Dimensions come from `BrowserShellLayout.swift`.
 
+Tab titles keep regular weight, including the stable selection. Idle titles use
+the full row width; only hovering a row reserves room for its retained close
+button. The close icon uses the address reload control's scale, color and timing
+feedback without resizing its hit area. Space rows and Top Pins share the 5pt
+outer content inset, matching the Space row gap.
+Split members use the same close button width and trailing inset as ordinary
+tabs, aligning the rightmost close icons across single and grouped rows.
+
 Space rows have the same 36pt height and 5pt gap, including divider/New Tab rows
 and empty drop targets. Top Pins use the same flat panel with their grid columns,
 40.5pt height and 9pt spacing. An empty Space Pin tier reuses the divider's upper
@@ -23,7 +31,8 @@ Stable tabs retain their native glass, and Top Pins retain their idle fill,
 hover border and selected scale. A selected split has one shared native glass
 surface behind its retained member controls; Top Pin groups retain their outer
 idle fill. Combined members have no nested fills or glass. Non-Top-Pin groups
-have no idle fill; native vertical `Divider`s separate members. The group
+have no idle fill; hovering either member highlights the entire group with the
+same surface as an ordinary tab. Native vertical `Divider`s separate members. The group
 surface is a separate background layer so glass never overlays the native tab
 labels or intercepts their controls. The foreground decoration adds the existing
 hover ungroup control. Lifting a stable tab/group preserves its glass continuity;

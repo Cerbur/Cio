@@ -482,7 +482,7 @@ private struct BrowserTabDragPresentation: View {
     }
   }
 
-  /// Land with the row's real typography and close-button reservation. Drag
+  /// Land with the idle row's real typography and title width. Drag
   /// labels have different weight/truncation and visibly jump at the handoff.
   @ViewBuilder
   fileprivate func collapseLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
@@ -492,7 +492,7 @@ private struct BrowserTabDragPresentation: View {
           TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
             size: SidebarTabAppearance.faviconSize)
         }
-        .padding(.trailing, BrowserLayout.sidebarTabTrailingControlWidth)
+        .padding(.trailing, BrowserLayout.sidebarTabTrailingInset)
       } else {
         dragLabel(id, style: style)
       }

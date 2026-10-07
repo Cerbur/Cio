@@ -116,7 +116,6 @@ struct SidebarRetainedTabLabel: View, Animatable {
   let session: BrowserSession?
   let title: String
   let fallbackLetter: String?
-  let selected: Bool
   nonisolated var compactAmount: CGFloat
   nonisolated var topPinAmount: CGFloat
 
@@ -148,7 +147,7 @@ struct SidebarRetainedTabLabel: View, Animatable {
         Text(title)
           .font(.system(size: BrowserLayout.sidebarTabLabelFontSize
             + (BrowserLayout.sidebarSplitLabelFontSize - BrowserLayout.sidebarTabLabelFontSize) * compact,
-            weight: selected ? .semibold : .regular))
+            weight: .regular))
           .lineLimit(1)
           .frame(width: titleWidth, alignment: .leading)
           .position(x: titleLeading + titleWidth / 2, y: geometry.size.height / 2)

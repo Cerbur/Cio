@@ -11,6 +11,9 @@ extension AnimationValues {
     @MainActor static var clearTiltDuration: TimeInterval { AnimationValues.duration(0.14) }
     @MainActor static var clearReturnDuration: TimeInterval { AnimationValues.duration(0.16) }
     @MainActor static var hoverDuration: TimeInterval { AnimationValues.duration(0.16) }
+    // Match the address reload icon while keeping the close hit area fixed.
+    @MainActor static var closeButtonHoverDuration: TimeInterval { AnimationValues.AddressField.hoverDuration }
+    static let closeButtonHoverScale = AnimationValues.AddressField.hoverScale
     static let clearTiltAngle: Double = 18
     static let clearLidAngle: Double = -18
     static let selectedTopPinScale: CGFloat = 1.02
