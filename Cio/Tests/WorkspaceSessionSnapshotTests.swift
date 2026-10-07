@@ -5,6 +5,7 @@
 //  CEF-free Milestone 6 persistence and restore tests.
 //
 
+import CioModel
 import XCTest
 
 final class WorkspaceSessionSnapshotTests: XCTestCase {

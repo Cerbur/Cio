@@ -23,25 +23,25 @@ import Foundation
 /// session manager keys by `id`. No CEF type is named in this file at all - the
 /// verification script checks that - which is what keeps the tab model testable
 /// without Chromium.
-struct BrowserTab: Identifiable, Equatable, Sendable {
+public struct BrowserTab: Identifiable, Equatable, Sendable {
   /// Stable identity, independent of every Chromium identifier. This is what the
   /// sidebar, the session registry and the recently-closed stack agree on.
-  let id: UUID
+  public let id: UUID
 
   /// Page title Chromium last reported; empty until it reports one.
-  var title: String
+  public var title: String
   /// Main-frame URL Chromium last reported.
-  var url: URL?
+  public var url: URL?
   /// Whether Chromium is currently loading in this tab.
-  var isLoading: Bool
+  public var isLoading: Bool
 
-  let createdAt: Date
-  var lastActivatedAt: Date
+  public let createdAt: Date
+  public var lastActivatedAt: Date
 
   /// Shown when the tab has neither a title nor a URL.
-  static let untitled = "New Tab"
+  public static let untitled = "New Tab"
 
-  init(
+  public init(
     id: UUID = UUID(),
     title: String = "",
     url: URL? = nil,
@@ -59,7 +59,7 @@ struct BrowserTab: Identifiable, Equatable, Sendable {
 
   /// The label the sidebar shows, in fallback order: the page title, the host of
   /// the committed URL, then "New Tab" (Milestone 3 section 18).
-  var displayTitle: String {
+  public var displayTitle: String {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmed.isEmpty { return trimmed }
     if let host = url?.host, !host.isEmpty { return host }
@@ -75,17 +75,17 @@ struct BrowserTab: Identifiable, Equatable, Sendable {
 /// new Chromium browser. Chromium back/forward history, form state, scroll
 /// position, cookies and renderer state are not captured - restoring those is
 /// later session/persistence work, not Milestone 3.
-struct ClosedTabSnapshot: Equatable, Sendable {
-  let url: URL?
-  let title: String
+public struct ClosedTabSnapshot: Equatable, Sendable {
+  public let url: URL?
+  public let title: String
   /// The Space that owned the tab when it closed.
-  let spaceID: UUID
+  public let spaceID: UUID
   /// Index the tab occupied when it closed, so ⌘⇧T can put it back near where
   /// it was when that is still possible.
-  let originalIndex: Int
-  let closedAt: Date
+  public let originalIndex: Int
+  public let closedAt: Date
 
-  init(
+  public init(
     url: URL?,
     title: String,
     spaceID: UUID,

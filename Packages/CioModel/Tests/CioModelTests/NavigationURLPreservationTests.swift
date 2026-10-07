@@ -15,6 +15,7 @@
 //  Only throwaway values appear here - never a real credential.
 //
 
+@testable import CioModel
 import XCTest
 
 final class NavigationURLPreservationTests: XCTestCase {

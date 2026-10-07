@@ -1,3 +1,4 @@
+import CioModel
 import Foundation
 
 /// A navigation candidate, independent of any completion UI or tab action.

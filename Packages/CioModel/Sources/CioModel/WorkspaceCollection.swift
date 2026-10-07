@@ -10,13 +10,13 @@
 import Foundation
 
 /// Why a tab is being removed from the workspace.
-enum WorkspaceTabCloseReason: Equatable, Sendable {
+public enum WorkspaceTabCloseReason: Equatable, Sendable {
   case userClosed
   case applicationTerminating
 }
 
 /// What happened to a tab's selection when it was removed.
-enum WorkspaceTabRemovalOutcome: Equatable, Sendable {
+public enum WorkspaceTabRemovalOutcome: Equatable, Sendable {
   case unknownTab
   case removedSelectionUnchanged
   case removedSelectionMoved(to: UUID)
@@ -24,11 +24,11 @@ enum WorkspaceTabRemovalOutcome: Equatable, Sendable {
 }
 
 /// The result the runtime owner needs after a domain close.
-struct WorkspaceTabCloseResult: Equatable, Sendable {
-  var outcome: WorkspaceTabRemovalOutcome
-  var spaceID: UUID?
-  var snapshot: ClosedTabSnapshot?
-  var needsReplacementTab: Bool
+public struct WorkspaceTabCloseResult: Equatable, Sendable {
+  public var outcome: WorkspaceTabRemovalOutcome
+  public var spaceID: UUID?
+  public var snapshot: ClosedTabSnapshot?
+  public var needsReplacementTab: Bool
 }
 
 /// All in-memory workspace relationships.
@@ -36,20 +36,20 @@ struct WorkspaceTabCloseResult: Equatable, Sendable {
 /// The collection owns one tab dictionary and one ordered list per Space. The
 /// dictionary is an identity index only; every ordered traversal goes through a
 /// Space's `tabIDs`, so Space and tab order are deterministic.
-struct WorkspaceCollection: Equatable, Sendable {
-  static let recentlyClosedLimit = 10
-  static let globalPinnedTabLimit = 16
+public struct WorkspaceCollection: Equatable, Sendable {
+  public static let recentlyClosedLimit = 10
+  public static let globalPinnedTabLimit = 16
 
-  private(set) var spaces: [BrowserSpace]
-  private(set) var selectedSpaceID: UUID
-  private(set) var tabsByID: [UUID: BrowserTab]
-  private(set) var recentlyClosed: [ClosedTabSnapshot]
-  private(set) var globalPinnedTabIDs: [UUID]
-  private(set) var selectedGlobalTabID: UUID?
+  public private(set) var spaces: [BrowserSpace]
+  public private(set) var selectedSpaceID: UUID
+  public private(set) var tabsByID: [UUID: BrowserTab]
+  public private(set) var recentlyClosed: [ClosedTabSnapshot]
+  public private(set) var globalPinnedTabIDs: [UUID]
+  public private(set) var selectedGlobalTabID: UUID?
 
   /// Creates the normal application starting state: one Main Space, one tab,
   /// and both levels of selection pointing at that tab.
-  init(initialTab: BrowserTab, spaceName: String = "Main") {
+  public init(initialTab: BrowserTab, spaceName: String = "Main") {
     let space = BrowserSpace(
       name: Self.normalizedInitialSpaceName(spaceName),
       tabIDs: [initialTab.id],
@@ -70,7 +70,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// an all-or-fresh restore decision rather than a partially repaired graph.
   /// Runtime-only fields are intentionally reset: a relaunch starts with no
   /// loading state, CEF history or recently-closed stack.
-  init(restoring snapshot: WorkspaceSessionSnapshot) throws {
+  public init(restoring snapshot: WorkspaceSessionSnapshot) throws {
     guard snapshot.schemaVersion == WorkspaceSessionSnapshot.currentSchemaVersion else {
       throw WorkspaceSessionSnapshotError.unsupportedSchema
     }
@@ -196,63 +196,63 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   // MARK: - Derived selection and ordering
 
-  var selectedSpace: BrowserSpace? {
+  public var selectedSpace: BrowserSpace? {
     spaces.first { $0.id == selectedSpaceID }
   }
 
   /// The one authoritative effective selected tab for the whole application.
-  var selectedTabID: UUID? {
+  public var selectedTabID: UUID? {
     selectedGlobalTabID ?? selectedSpace?.selectedTabID
   }
 
-  var selectedTab: BrowserTab? {
+  public var selectedTab: BrowserTab? {
     selectedTabID.flatMap { tabsByID[$0] }
   }
 
-  var spaceIDs: [UUID] { spaces.map(\.id) }
+  public var spaceIDs: [UUID] { spaces.map(\.id) }
 
   /// All visible tabs in deterministic Space order, then per-Space tab order.
-  var allTabs: [BrowserTab] {
+  public var allTabs: [BrowserTab] {
     spaces.flatMap { tabs(in: $0.id) }
   }
 
-  var allTabIDs: [UUID] {
+  public var allTabIDs: [UUID] {
     spaces.flatMap(\.tabIDs)
   }
 
-  var currentTabs: [BrowserTab] {
+  public var currentTabs: [BrowserTab] {
     tabs(in: selectedSpaceID)
   }
 
-  var globalPinnedTabs: [BrowserTab] {
+  public var globalPinnedTabs: [BrowserTab] {
     globalPinnedTabIDs.compactMap { tabsByID[$0] }
   }
 
-  var currentSpacePinnedTabs: [BrowserTab] {
+  public var currentSpacePinnedTabs: [BrowserTab] {
     guard let space = selectedSpace else { return [] }
     return space.pinnedTabIDs.compactMap { tabsByID[$0] }
   }
 
-  var currentTemporaryTabs: [BrowserTab] {
+  public var currentTemporaryTabs: [BrowserTab] {
     guard let space = selectedSpace else { return [] }
     return space.tabIDs.filter { !space.pinnedTabIDs.contains($0) && !globalPinnedTabIDs.contains($0) }
       .compactMap { tabsByID[$0] }
   }
 
-  var currentTabIDs: [UUID] {
+  public var currentTabIDs: [UUID] {
     selectedSpace?.tabIDs ?? []
   }
 
-  var activeSplit: BrowserSplitLayout? {
+  public var activeSplit: BrowserSplitLayout? {
     selectedTabID.flatMap { splitGroup(containing: $0) }
   }
 
-  func splitGroup(containing tabID: UUID) -> BrowserSplitLayout? {
+  public func splitGroup(containing tabID: UUID) -> BrowserSplitLayout? {
     guard let spaceID = spaceID(containing: tabID) else { return nil }
     return space(withID: spaceID)?.splitGroups.first { $0.contains(tabID) }
   }
 
-  func canSplit(with tabID: UUID) -> Bool {
+  public func canSplit(with tabID: UUID) -> Bool {
     guard let selectedTabID, selectedTabID != tabID,
           tabsByID[tabID] != nil,
           globalPinnedTabIDs.contains(tabID) || selectedSpace?.tabIDs.contains(tabID) == true,
@@ -264,12 +264,12 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
+  public mutating func createSplit(with tabID: UUID, on side: BrowserSplitLayout.Side) -> Bool {
     createSplit(with: tabID, at: BrowserSplitLayout.DropTarget(side: side))
   }
 
   @discardableResult
-  mutating func createSplit(with tabID: UUID, at target: BrowserSplitLayout.DropTarget) -> Bool {
+  public mutating func createSplit(with tabID: UUID, at target: BrowserSplitLayout.DropTarget) -> Bool {
     guard canSplit(with: tabID), let selectedTabID,
           let spaceIndex = index(of: selectedSpaceID) else { return false }
     let prior = activeSplit
@@ -336,7 +336,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func setSplitFraction(_ fraction: CGFloat, divider: Int = 0) -> Bool {
+  public mutating func setSplitFraction(_ fraction: CGFloat, divider: Int = 0) -> Bool {
     guard fraction.isFinite, let selectedTabID,
           let owner = spaceID(containing: selectedTabID), let spaceIndex = index(of: owner),
           let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(selectedTabID) }) else { return false }
@@ -352,7 +352,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func endSplit(keeping tabID: UUID) -> Bool {
+  public mutating func endSplit(keeping tabID: UUID) -> Bool {
     guard let owner = spaceID(containing: tabID), let spaceIndex = index(of: owner),
           spaces[spaceIndex].splitGroups.contains(where: { $0.contains(tabID) }) else { return false }
     spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) }
@@ -362,7 +362,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// The sidebar's ungroup action makes the left pane the stable selection,
   /// even when the right pane (or another Space) was active before the click.
   @discardableResult
-  mutating func ungroupSplit(containing tabID: UUID) -> Bool {
+  public mutating func ungroupSplit(containing tabID: UUID) -> Bool {
     guard let group = splitGroup(containing: tabID),
           let owner = spaceID(containing: group.leftTabID) else { return false }
     _ = endSplit(keeping: group.leftTabID)
@@ -377,7 +377,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Extract just this page. Keep the remaining group at its sidebar position
   /// and insert the independent page immediately after that group in its tier.
   @discardableResult
-  mutating func detachSplitPane(_ tabID: UUID, selectDetached: Bool = false) -> Bool {
+  public mutating func detachSplitPane(_ tabID: UUID, selectDetached: Bool = false) -> Bool {
     guard let group = splitGroup(containing: tabID),
           let owner = spaceID(containing: tabID), let ownerIndex = index(of: owner),
           let groupIndex = spaces[ownerIndex].splitGroups.firstIndex(where: { $0.id == group.id }) else { return false }
@@ -402,7 +402,7 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   /// A failed sidebar drop leaves membership and selection untouched.
   @discardableResult
-  mutating func moveSplitPane(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+  public mutating func moveSplitPane(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
     guard let group = splitGroup(containing: tabID), !group.contains(targetID) else { return false }
     var candidate = self
     guard candidate.detachSplitPane(tabID), candidate.moveTab(tabID, to: tier, before: targetID) else { return false }
@@ -411,7 +411,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func reorderSplitPane(_ tabID: UUID, to index: Int) -> Bool {
+  public mutating func reorderSplitPane(_ tabID: UUID, to index: Int) -> Bool {
     guard let group = splitGroup(containing: tabID),
           let owner = spaceID(containing: tabID), let ownerIndex = self.index(of: owner),
           let groupIndex = spaces[ownerIndex].splitGroups.firstIndex(where: { $0.id == group.id }) else { return false }
@@ -438,7 +438,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func swapSplitSides(containing tabID: UUID) -> Bool {
+  public mutating func swapSplitSides(containing tabID: UUID) -> Bool {
     guard let owner = spaceID(containing: tabID), let spaceIndex = index(of: owner),
           let groupIndex = spaces[spaceIndex].splitGroups.firstIndex(where: { $0.contains(tabID) }) else { return false }
     var group = spaces[spaceIndex].splitGroups[groupIndex]
@@ -457,7 +457,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func moveSplitGroup(containing tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+  public mutating func moveSplitGroup(containing tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
     guard let group = splitGroup(containing: tabID), !group.contains(targetID) else { return false }
     let destination: UUID
     switch tier {
@@ -477,30 +477,30 @@ struct WorkspaceCollection: Equatable, Sendable {
     return true
   }
 
-  var canReopenClosedTab: Bool { !recentlyClosed.isEmpty }
+  public var canReopenClosedTab: Bool { !recentlyClosed.isEmpty }
 
-  func space(withID id: UUID) -> BrowserSpace? {
+  public func space(withID id: UUID) -> BrowserSpace? {
     spaces.first { $0.id == id }
   }
 
-  func tab(withID id: UUID) -> BrowserTab? {
+  public func tab(withID id: UUID) -> BrowserTab? {
     tabsByID[id]
   }
 
-  func tabs(in spaceID: UUID) -> [BrowserTab] {
+  public func tabs(in spaceID: UUID) -> [BrowserTab] {
     guard let space = space(withID: spaceID) else { return [] }
     return space.tabIDs.compactMap { tabsByID[$0] }
   }
 
-  func index(of tabID: UUID, in spaceID: UUID) -> Int? {
+  public func index(of tabID: UUID, in spaceID: UUID) -> Int? {
     space(withID: spaceID)?.tabIDs.firstIndex(of: tabID)
   }
 
-  func spaceID(containing tabID: UUID) -> UUID? {
+  public func spaceID(containing tabID: UUID) -> UUID? {
     spaces.first { $0.tabIDs.contains(tabID) }?.id
   }
 
-  func index(of spaceID: UUID) -> Int? {
+  public func index(of spaceID: UUID) -> Int? {
     spaces.firstIndex { $0.id == spaceID }
   }
 
@@ -508,7 +508,7 @@ struct WorkspaceCollection: Equatable, Sendable {
 
   /// Appends a new Space with exactly one selected tab.
   @discardableResult
-  mutating func createSpace(
+  public mutating func createSpace(
     initialTab: BrowserTab,
     name: String? = nil,
     select: Bool = true
@@ -538,7 +538,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Trims surrounding whitespace. An empty name is rejected, leaving the
   /// existing name unchanged; this keeps the UI's current name a safe default.
   @discardableResult
-  mutating func renameSpace(id: UUID, name: String) -> Bool {
+  public mutating func renameSpace(id: UUID, name: String) -> Bool {
     guard let index = index(of: id) else { return false }
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return false }
@@ -549,7 +549,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func setSpaceIcon(id: UUID, icon: BrowserSpaceIcon) -> Bool {
+  public mutating func setSpaceIcon(id: UUID, icon: BrowserSpaceIcon) -> Bool {
     guard let index = index(of: id), spaces[index].icon != icon else { return false }
     spaces[index].icon = icon
     return true
@@ -559,7 +559,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Spaces; otherwise the destination Space's selected tab becomes effective.
   /// The caller handles runtime focus and surface transition.
   @discardableResult
-  mutating func selectSpace(id: UUID) -> Bool {
+  public mutating func selectSpace(id: UUID) -> Bool {
     guard spaces.contains(where: { $0.id == id }) else { return false }
     guard selectedSpaceID != id else { return false }
     selectedSpaceID = id
@@ -574,7 +574,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   // MARK: - Tab lifecycle
 
   /// New tabs go at the front unless a popup supplies a source tab.
-  func newTabInsertionIndex(in spaceID: UUID, after sourceTabID: UUID? = nil) -> Int {
+  public func newTabInsertionIndex(in spaceID: UUID, after sourceTabID: UUID? = nil) -> Int {
     sourceTabID
       .flatMap { index(of: $0, in: spaceID) }
       .map { $0 + 1 } ?? 0
@@ -584,7 +584,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// currently selected Space; callers that need a cross-Space selection must
   /// explicitly select the Space first.
   @discardableResult
-  mutating func insertTab(
+  public mutating func insertTab(
     _ tab: BrowserTab,
     in spaceID: UUID,
     at index: Int,
@@ -608,13 +608,13 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func appendTab(_ tab: BrowserTab, in spaceID: UUID, select: Bool) -> Bool {
+  public mutating func appendTab(_ tab: BrowserTab, in spaceID: UUID, select: Bool) -> Bool {
     insertTab(tab, in: spaceID, at: space(withID: spaceID)?.tabIDs.count ?? 0, select: select)
   }
 
   /// Selects a tab only when it belongs to the currently selected Space.
   @discardableResult
-  mutating func selectTab(id: UUID) -> Bool {
+  public mutating func selectTab(id: UUID) -> Bool {
     if globalPinnedTabIDs.contains(id) {
       guard selectedTabID != id else { return false }
       selectedGlobalTabID = id
@@ -640,7 +640,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Explicitly selects a Space and a tab in one domain operation. This is the
   /// only pure-model escape hatch for a foreign-Space tab.
   @discardableResult
-  mutating func select(spaceID: UUID, tabID: UUID) -> Bool {
+  public mutating func select(spaceID: UUID, tabID: UUID) -> Bool {
     guard let spaceIndex = index(of: spaceID),
       spaces[spaceIndex].tabIDs.contains(tabID)
     else { return false }
@@ -656,20 +656,20 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func selectCurrentTab(at index: Int) -> Bool {
+  public mutating func selectCurrentTab(at index: Int) -> Bool {
     guard currentTabIDs.indices.contains(index) else { return false }
     return selectTab(id: currentTabIDs[index])
   }
 
   @discardableResult
-  mutating func selectLastCurrentTab() -> Bool {
+  public mutating func selectLastCurrentTab() -> Bool {
     guard let id = currentTabIDs.last else { return false }
     return selectTab(id: id)
   }
 
   /// Applies metadata from the runtime to exactly one domain tab.
   @discardableResult
-  mutating func refresh(_ tab: BrowserTab) -> Bool {
+  public mutating func refresh(_ tab: BrowserTab) -> Bool {
     guard tabsByID[tab.id] != nil, tabsByID[tab.id] != tab else { return false }
     tabsByID[tab.id] = tab
     validateInvariants()
@@ -679,7 +679,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Removes one tab from its owning Space and applies the selection policy
   /// within that Space only.
   @discardableResult
-  mutating func close(
+  public mutating func close(
     _ tabID: UUID,
     reason: WorkspaceTabCloseReason
   ) -> WorkspaceTabCloseResult {
@@ -776,7 +776,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// that Space, and selects the new tab. The runtime owner creates the new
   /// session separately.
   @discardableResult
-  mutating func restoreTab(
+  public mutating func restoreTab(
     _ tab: BrowserTab,
     from snapshot: ClosedTabSnapshot
   ) -> Bool {
@@ -797,14 +797,14 @@ struct WorkspaceCollection: Equatable, Sendable {
   }
 
   @discardableResult
-  mutating func popRecentlyClosed() -> ClosedTabSnapshot? {
+  public mutating func popRecentlyClosed() -> ClosedTabSnapshot? {
     recentlyClosed.popLast()
   }
 
   /// Moves a tab into a pin tier and places it before the indicated tab, or at
   /// the end when `before` is nil. All three visible orders are durable.
   @discardableResult
-  mutating func moveTab(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
+  public mutating func moveTab(_ tabID: UUID, to tier: TabTier, before targetID: UUID? = nil) -> Bool {
     guard let ownerID = spaceID(containing: tabID),
       let ownerIndex = index(of: ownerID),
       tabsByID[tabID] != nil
@@ -898,13 +898,13 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Canonical sidebar names: top pin (`global`) stays across Spaces;
   /// space pin (`space`) belongs to one Space; temporary (`temporary`) is the
   /// default tier for new tabs and will later support idle expiration.
-  enum TabTier: Hashable {
+  public enum TabTier: Hashable, Sendable {
     case global
     case space(UUID)
     case temporary(UUID)
   }
 
-  func tabIDs(in tier: TabTier) -> [UUID] {
+  public func tabIDs(in tier: TabTier) -> [UUID] {
     switch tier {
     case .global: return globalPinnedTabIDs
     case .space(let id): return space(withID: id)?.pinnedTabIDs ?? []
@@ -919,7 +919,7 @@ struct WorkspaceCollection: Equatable, Sendable {
   /// Public for deterministic unit tests and diagnostics. It never consults a
   /// runtime object and therefore cannot be made false by a CEF callback.
   @discardableResult
-  func validateInvariants() -> Bool {
+  public func validateInvariants() -> Bool {
     guard !spaces.isEmpty,
       spaces.contains(where: { $0.id == selectedSpaceID })
     else { return false }

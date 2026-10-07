@@ -6,16 +6,16 @@ Rollback point: local tag pre-cio-refactor at f052f5334e91bc20bba9ffbcf15f7e0a45
 
 | Check | Original result | After structure changes |
 | --- | --- | --- |
-| Required Debug build | PASS after granting compiler-plugin execution permission | PASS after Stage 0 |
-| Unit tests | 244 PASS, zero failures | PASS after Stage 0 |
-| Original runtime verifier | PASS | PASS after Stage 0 |
+| Required Debug build | PASS after granting compiler-plugin execution permission | PASS after Stage 1 |
+| Unit tests | 244 PASS, zero failures | PASS after Stage 1 |
+| Original runtime verifier | PASS | PASS after Stage 1 |
 | Original rendering verifier | FAIL: 4 legacy close-harness checks | Not counted as passing |
 | Original navigation verifier | FAIL: 8 obsolete source assertions | Retired assertions, not fixed behavior |
 | Original tab verifier | FAIL: 13 checks including old source/test names and 3 shared-editor assertions | Retired assertions, not fixed behavior |
 | Original workspace verifier | FAIL: 12 checks including old source/test names and the same 3 shared-editor assertions | Retired assertions, not fixed behavior |
-| Secret scan | CLEAN | PASS after Stage 0 |
-| App/framework/five Helpers signatures | All PASS | PASS after Stage 0 |
-| Main/Helper direct CEF linkage | None | PASS after Stage 0 |
+| Secret scan | CLEAN | PASS after Stage 1 |
+| App/framework/five Helpers signatures | All PASS | PASS after Stage 1 |
+| Main/Helper direct CEF linkage | None | PASS after Stage 1 |
 
 Raw original evidence is in /private/tmp/cio-refactor-baseline. The new responsibility-based verification does not claim those historical failures were repaired. Numbered scripts remain compatibility forwarding entry points; the binary's command-line switches and diagnostic behavior are unchanged.
 
@@ -24,8 +24,8 @@ Raw original evidence is in /private/tmp/cio-refactor-baseline. The new responsi
 | Stage | Commit | Status |
 | --- | --- | --- |
 | C — Current-design documentation and verification cleanup | 4838518 | Complete; all current automated checks passed |
-| 0 — Full Cio rename | Pending | Complete; current checks, Debug/Release, 244 tests and bundle checks passed |
-| 1 — CioModel | Pending | Not started |
+| 0 — Full Cio rename | 984ed4f | Complete; current checks, Debug/Release, 244 tests and bundle checks passed |
+| 1 — CioModel | Pending | Complete; 86 package + 158 native tests and all current checks passed |
 | 2 — CioEngine | Pending | Actual-call protocol review; autonomous implementation authorized |
 | 3 — CioUI | Pending | Not started |
 | 4 — Diagnostic placement | Pending | Not started |
@@ -61,3 +61,13 @@ The main bundle identifier is now com.example.Cio; Helpers are com.example.Cio.h
 The renamed clean Debug build and 244 tests passed, as did runtime/rendering/navigation/tabs/workspace/restore/history/downloads, stress/lazy/beforeunload and both quit-soak runs. The first Release smoke timed out (124), with neither the SwiftUI window nor page load: private diagnostic-window saved state suppressed its normal window. CEF had initialized; the external watchdog triggered ordered teardown. This attempt is not counted as passing. The smoke now uses the Release script's existing ApplePersistenceIgnoreState launch arguments, as the isolated quit-soak already does. This is a verification-only repair; CEF packaging and product behavior remain unchanged. Evidence: /private/tmp/cio-refactor-stage0/first-attempt and validation.log.
 
 The Stage 0 retry passed all stability and Release checks; its smoke recorded both swiftui:main-window-appeared and browser:first-load-finished. Final Debug rebuild and all 244 tests passed. App/framework/five Helpers passed codesign --verify --deep --strict individually; otool reports no direct CEF dependency for the main or Helper executables. Tracked old-name variants and old-name filenames have zero matches. Final evidence is in /private/tmp/cio-refactor-stage0/final-evidence. The full current verifier now invokes all numbered compatibility entry points, which exec the same responsibility checks.
+
+## Stage 1 extraction verification
+
+The first standalone package and App builds failed because the CGRect convenience overlay previously came through AppKit; BrowserSplitLayout now explicitly imports system CoreGraphics. The same CGRect/CGFloat values and geometry statements are retained. CioModel has no package dependency and imports no AppKit/SwiftUI/CEF; its other files use Foundation. No unchecked Sendable was added. Original attempt logs: /private/tmp/cio-refactor-stage1-swift-test.log and cio-refactor-stage1-validation.log.
+
+The next Stage 1 current-verifier attempt passed Model 86 tests, App build and remaining 158 native tests, then its ordinary Debug window smoke timed out with only CEF initialization (8 missing-window/lifecycle assertions). The same verified isolation launch option is now supplied by the runtime/rendering/navigation/tabs GUI harness calls, preventing diagnostic-window saved state from contaminating later GUI launches. Product code is unchanged by this repair. This failed attempt remains in the Stage 1 initial-current-verifier evidence.
+
+The Stage 1 retry then passed the repaired GUI gates but the workspace diagnostic remained at CEF initialization for almost two minutes, before any self-test. The agent sent SIGTERM only to its exact repository Debug --spaces-self-test process rather than waiting for the 600-second watchdog. This interrupted run is not passing coverage. All remaining GUI self-test timeout invocations now use the same ApplePersistenceIgnoreState isolation policy (including private diagnostic windows); existing instances of that option are retained without duplication. Raw evidence: validation-retry.log and interrupted-workspace.log under /private/tmp/cio-refactor-stage1.
+
+Stage 1 final verification passed the required Debug build, package-local swift test (86), native XCTest (158), all numbered compatibility verifiers/current responsibility checks, Release, individual bundle signatures/linkage and secret scans. Total distinct existing cases remain 244. Seven-file model audit found no ordinary statement changes; only access/initializers/checked Sendable/imports and updated parsing documentation. Bridge and CEF packaging have no Stage 1 diff. Final evidence: /private/tmp/cio-refactor-stage1/validation-final.log, swift-test.log and final-evidence.

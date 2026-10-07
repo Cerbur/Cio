@@ -113,6 +113,7 @@ CIO_DATA_DIR="$DATA_DIR" \
 CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 600 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --use-mock-keychain \
   --milestone8-self-test=stress \
   --home-url="$BASE_URL/page-a" \
@@ -133,6 +134,7 @@ CIO_DATA_DIR="$LAZY_DATA_DIR" \
 CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 600 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --use-mock-keychain \
   --milestone8-self-test=lazy-seed \
   --home-url="$BASE_URL/page-a" \
@@ -147,6 +149,7 @@ CIO_DATA_DIR="$LAZY_DATA_DIR" \
 CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 600 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --use-mock-keychain \
   --milestone8-self-test=lazy-verify \
   --home-url="$BASE_URL/page-a" \
@@ -166,6 +169,7 @@ for response in cancel accept; do
   CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
   CIO_DISABLE_SESSION_PERSISTENCE=1 \
   run_with_timeout 180 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
     --use-mock-keychain \
     --beforeunload-self-test="$response" \
     --home-url="$BASE_URL/beforeunload" > "$beforeunload_log" 2>&1

@@ -24,6 +24,7 @@
 //  cannot reach the address field of the selected tab at all.
 //
 
+import CioModel
 import AppKit
 import Foundation
 

@@ -9,6 +9,7 @@
 //  would land, and the block settles into that gap when it is dropped.
 //
 
+import CioModel
 import SwiftUI
 
 /// The sidebar-wide coordinate space shared by drag geometry and the overlay.

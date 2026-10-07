@@ -6,6 +6,7 @@
 //  BrowserSessionManager; they exercise the one workspace source of truth.
 //
 
+@testable import CioModel
 import XCTest
 
 final class WorkspaceCollectionTests: XCTestCase {

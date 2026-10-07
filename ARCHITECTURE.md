@@ -25,7 +25,7 @@ BrowserMain
             -> DownloadManager
 ```
 
-The app, Helper tool and standalone unit-test bundle are Xcode targets. Selected pure and native UI sources are currently compiled directly into the standalone test target. No test host starts Chromium for those unit tests.
+The app, Helper tool and standalone unit-test bundle are Xcode targets. CioModel is a local Swift 6 package under Packages/CioModel with no package dependencies; App and tests import the same library. It contains workspace/tab/split/snapshot values, navigation parsing and URL redaction. Split geometry uses system CoreGraphics value types, with no AppKit, SwiftUI or CEF. Four suites run with swift test; remaining native/model tests use the standalone XCTest target. No test host starts Chromium for unit tests.
 
 ## CEF boundary and bundle
 

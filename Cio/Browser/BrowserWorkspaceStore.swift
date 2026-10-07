@@ -11,6 +11,7 @@
 //  browser surface host.
 //
 
+import CioModel
 import AppKit
 import Combine
 import Foundation

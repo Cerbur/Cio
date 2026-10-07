@@ -125,6 +125,7 @@ REDACT_URL="https://example.com/?token=$REDACT_TOKEN"
 rm -rf "$DATA_DIR/multi-tab"
 MULTI_START=$(date +%s)
 CIO_DATA_DIR="$DATA_DIR/multi-tab" run_with_timeout $((QUIT_AFTER + 60)) "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --dump-main-menu --home-url="$REDACT_URL" --wait-for-window \
   --open-tabs=$MULTI_TABS --quit-after=$QUIT_AFTER > "$MULTI_LOG" 2>&1
 MULTI_STATUS=$?

@@ -12,16 +12,16 @@
 import Foundation
 
 /// The only supported on-disk workspace snapshot version.
-struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
-  static let currentSchemaVersion = 1
+public struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
+  public static let currentSchemaVersion = 1
 
-  let schemaVersion: Int
-  let selectedSpaceID: UUID
-  let spaces: [PersistedSpace]
-  var globalPinnedTabIDs: [UUID] = []
-  var selectedGlobalTabID: UUID? = nil
+  public let schemaVersion: Int
+  public let selectedSpaceID: UUID
+  public let spaces: [PersistedSpace]
+  public var globalPinnedTabIDs: [UUID] = []
+  public var selectedGlobalTabID: UUID? = nil
 
-  init(
+  public init(
     schemaVersion: Int = Self.currentSchemaVersion,
     selectedSpaceID: UUID,
     spaces: [PersistedSpace]
@@ -34,7 +34,7 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
   /// Builds the durable projection of the live domain graph. Runtime-only
   /// state such as loading, navigation capabilities and recently-closed tabs
   /// cannot enter this value by construction.
-  init(workspace: WorkspaceCollection) {
+  public init(workspace: WorkspaceCollection) {
     schemaVersion = Self.currentSchemaVersion
     selectedSpaceID = workspace.selectedSpaceID
     globalPinnedTabIDs = workspace.globalPinnedTabIDs
@@ -57,7 +57,7 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
     case schemaVersion, selectedSpaceID, spaces, globalPinnedTabIDs, selectedGlobalTabID
   }
 
-  init(from decoder: Decoder) throws {
+  public init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
     selectedSpaceID = try values.decode(UUID.self, forKey: .selectedSpaceID)
@@ -69,17 +69,17 @@ struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
 
 /// One persisted Space, in the order in which it appears in the `spaces`
 /// array.
-struct PersistedSpace: Codable, Equatable, Sendable {
-  let id: UUID
-  let name: String
-  let selectedTabID: UUID?
-  let tabs: [PersistedTab]
-  var pinnedTabIDs: [UUID] = []
-  var stableTabStack: [UUID] = []
-  var splitGroups: [BrowserSplitLayout] = []
-  var icon: BrowserSpaceIcon = .placeholder
+public struct PersistedSpace: Codable, Equatable, Sendable {
+  public let id: UUID
+  public let name: String
+  public let selectedTabID: UUID?
+  public let tabs: [PersistedTab]
+  public var pinnedTabIDs: [UUID] = []
+  public var stableTabStack: [UUID] = []
+  public var splitGroups: [BrowserSplitLayout] = []
+  public var icon: BrowserSpaceIcon = .placeholder
 
-  init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = [], splitGroups: [BrowserSplitLayout] = [], icon: BrowserSpaceIcon = .placeholder) {
+  public init(id: UUID, name: String, selectedTabID: UUID?, tabs: [PersistedTab], pinnedTabIDs: [UUID] = [], stableTabStack: [UUID] = [], splitGroups: [BrowserSplitLayout] = [], icon: BrowserSpaceIcon = .placeholder) {
     self.id = id
     self.name = name
     self.selectedTabID = selectedTabID
@@ -94,7 +94,7 @@ struct PersistedSpace: Codable, Equatable, Sendable {
     case id, name, selectedTabID, tabs, pinnedTabIDs, stableTabStack, splitGroups, icon
   }
 
-  init(from decoder: Decoder) throws {
+  public init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(UUID.self, forKey: .id)
     name = try values.decode(String.self, forKey: .name)
@@ -113,14 +113,14 @@ struct PersistedSpace: Codable, Equatable, Sendable {
 /// array. URLs are strings in the stable file format so the exact committed
 /// URL, including query and fragment, is retained without serializing any
 /// runtime navigation object.
-struct PersistedTab: Codable, Equatable, Sendable {
-  let id: UUID
-  let title: String
-  let url: String?
-  let createdAt: Date
-  let lastActivatedAt: Date
+public struct PersistedTab: Codable, Equatable, Sendable {
+  public let id: UUID
+  public let title: String
+  public let url: String?
+  public let createdAt: Date
+  public let lastActivatedAt: Date
 
-  init(
+  public init(
     id: UUID,
     title: String,
     url: String?,
@@ -134,7 +134,7 @@ struct PersistedTab: Codable, Equatable, Sendable {
     self.lastActivatedAt = lastActivatedAt
   }
 
-  init(tab: BrowserTab) {
+  public init(tab: BrowserTab) {
     self.init(
       id: tab.id,
       title: tab.title,
@@ -147,7 +147,7 @@ struct PersistedTab: Codable, Equatable, Sendable {
 /// A deliberately non-sensitive validation error. Its description is safe to
 /// put in diagnostics because it never includes the snapshot JSON or a URL
 /// value supplied by the file.
-enum WorkspaceSessionSnapshotError: Error, Equatable, Sendable, CustomStringConvertible {
+public enum WorkspaceSessionSnapshotError: Error, Equatable, Sendable, CustomStringConvertible {
   case unsupportedSchema
   case noSpaces
   case duplicateSpaceID
@@ -160,7 +160,7 @@ enum WorkspaceSessionSnapshotError: Error, Equatable, Sendable, CustomStringConv
   case selectedTabNotInSpace
   case invalidPinnedTabs
 
-  var description: String {
+  public var description: String {
     switch self {
     case .unsupportedSchema: return "unsupported schema version"
     case .noSpaces: return "snapshot contains no Spaces"

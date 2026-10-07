@@ -16,6 +16,7 @@
 //  the Milestone 2 code.
 //
 
+import CioModel
 import AppKit
 import Foundation
 

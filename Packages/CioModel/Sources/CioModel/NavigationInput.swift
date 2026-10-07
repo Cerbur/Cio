@@ -2,19 +2,17 @@
 //  NavigationInput.swift
 //  Cio
 //
-//  Parsing of what the user typed into the address field (ARCHITECTURE.md
-//  section 20 and the Milestone 2 acceptance criteria).
+//  Parsing of what the user typed into the address field.
 //
 //  This file is deliberately dependency free: Foundation only, no AppKit, no
-//  SwiftUI and no CEF. It is compiled into both the application target and the
-//  unit test target so the behaviour is testable without starting Chromium
-//  (ARCHITECTURE.md section 37).
+//  SwiftUI and no CEF. App and tests import the same CioModel package, so the
+//  behaviour is testable without starting Chromium.
 //
 
 import Foundation
 
 /// What the user's address-field text means.
-enum NavigationInput: Equatable {
+public enum NavigationInput: Equatable, Sendable {
   /// Load this URL directly.
   case url(URL)
   /// Run this text through the search engine.
@@ -22,16 +20,15 @@ enum NavigationInput: Equatable {
 }
 
 /// How non-URL input is turned into a search URL.
-protocol SearchEngine {
+public protocol SearchEngine {
   func searchURL(for query: String) -> URL
 }
 
-/// The search engine used by the browser. Google is enough for this milestone
-/// (ARCHITECTURE.md section 20).
-struct GoogleSearchEngine: SearchEngine {
-  static let endpoint = URL(string: "https://www.google.com/search")!
+/// The search engine used by the browser.
+public struct GoogleSearchEngine: SearchEngine, Sendable {
+  public static let endpoint = URL(string: "https://www.google.com/search")!
 
-  func searchURL(for query: String) -> URL {
+  public func searchURL(for query: String) -> URL {
     var components = URLComponents(url: Self.endpoint, resolvingAgainstBaseURL: false)!
     // -percentEncodedQuery is assigned (never string-interpolated) so the query
     // is encoded exactly once, whatever the user typed. URLComponents is
@@ -47,11 +44,13 @@ struct GoogleSearchEngine: SearchEngine {
   /// a search URL is unambiguous only when the value is fully encoded, so every
   /// character outside the unreserved set (ALPHA / DIGIT / "-" / "." / "_" /
   /// "~") plus the space-to-"+" convention is encoded here.
-  static func percentEncodeQueryValue(_ value: String) -> String {
+  public static func percentEncodeQueryValue(_ value: String) -> String {
     var allowed = CharacterSet.alphanumerics
     allowed.insert(charactersIn: "-._~")
     return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
   }
+
+  public init() {}
 }
 
 /// Characters that may appear in a host name: ASCII letters and digits, the
@@ -69,13 +68,13 @@ private let hostCharacterSet: CharacterSet = {
 /// Turns address-field text into a navigation decision.
 ///
 /// The rules are intentionally pragmatic rather than a complete omnibox
-/// implementation (see the Milestone 2 specification):
+/// implementation:
 ///
 /// * empty / whitespace-only input never navigates,
 /// * text with an explicit scheme is a URL,
 /// * `localhost`, `127.0.0.1` and names with a dot are http(s) URLs,
 /// * anything with a space, or a host that does not look like one, is a search.
-func parseNavigationInput(
+public func parseNavigationInput(
   _ input: String,
   searchEngine: SearchEngine = GoogleSearchEngine()
 ) -> NavigationInput? {

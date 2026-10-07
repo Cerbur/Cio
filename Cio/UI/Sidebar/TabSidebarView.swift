@@ -6,6 +6,7 @@
 //  Space tab contains space pin (.space) and temporary (.temporary) tabs.
 //
 
+import CioModel
 import AppKit
 import SwiftUI
 

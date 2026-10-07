@@ -1,3 +1,4 @@
+import CioModel
 import Foundation
 
 /// One ordered container in a Space panel. Tier is membership, not identity:

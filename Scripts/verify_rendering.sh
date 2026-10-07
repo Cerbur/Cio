@@ -117,6 +117,7 @@ GUI_LOG="$WORK_DIR/launch.log"
 QUIT_AFTER=10
 GUI_START=$(date +%s)
 CIO_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --home-url="$HOME_URL" --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))

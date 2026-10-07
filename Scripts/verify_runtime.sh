@@ -109,6 +109,7 @@ echo "     (waits for the window, then --quit-after=${LAUNCH_TIMEOUT})"
 GUI_LOG="$WORK_DIR/launch.log"
 rm -rf "$DATA_DIR/launch"
 CIO_DATA_DIR="$DATA_DIR/launch" run_with_timeout 60 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --wait-for-window --quit-after=$LAUNCH_TIMEOUT > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 if [ "$GUI_STATUS" -eq 0 ]; then

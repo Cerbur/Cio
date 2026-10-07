@@ -6,6 +6,7 @@
 //  The Space sidebar and browser are rectangular; this view owns their edge.
 //
 
+import CioModel
 import AppKit
 import Combine
 import SwiftUI

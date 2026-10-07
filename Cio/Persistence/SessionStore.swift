@@ -7,6 +7,7 @@
 //  and keeps file IO out of the workspace and UI layers.
 //
 
+import CioModel
 import Foundation
 
 final class SessionStore {

@@ -19,6 +19,7 @@
 //  never echoed (see URLLogSanitizer).
 //
 
+import CioModel
 import Foundation
 
 enum NavigationInputProbe {

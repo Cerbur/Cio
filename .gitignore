@@ -19,3 +19,7 @@ ThirdParty/.cef-install-*/
 # CEF wrapper build products
 ThirdParty/libcef_dll_wrapper.a
 ThirdParty/wrapper-build/
+
+# Local Swift Package build state
+**/.build/
+**/.swiftpm/

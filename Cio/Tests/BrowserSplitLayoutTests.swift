@@ -1,3 +1,4 @@
+import CioModel
 import XCTest
 
 final class BrowserSplitLayoutTests: XCTestCase {

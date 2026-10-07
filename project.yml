@@ -74,6 +74,10 @@ settings:
       COPY_PHASE_STRIP: YES
       VALIDATE_PRODUCT: YES
 
+packages:
+  CioModel:
+    path: Packages/CioModel
+
 targets:
   Cio:
     type: application
@@ -85,8 +89,7 @@ targets:
           - "Helper/**"
           # Developer documentation is not an application resource.
           - "Animation/*.md"
-          # The unit tests are their own target (NavigationInput.swift is
-          # compiled into both).
+          # Unit tests are their own standalone target.
           - "Tests/**"
     settings:
       base:
@@ -121,6 +124,7 @@ targets:
       # so it must not be embedded into the app's Resources.
       - target: CioHelper
         embed: false
+      - package: CioModel
     preBuildScripts:
       - name: "Build libcef_dll_wrapper"
         path: Scripts/build_cef_wrapper.sh
@@ -130,17 +134,13 @@ targets:
         path: Scripts/package_cef_runtime.sh
         basedOnDependencyAnalysis: false
 
-  # Standalone unit tests. NavigationInput.swift and URLLogSanitizer.swift are
-  # compiled into this target directly (see their "keep this file dependency
-  # free" notes), so the tests do not need the application, do not link CEF and
-  # never start Chromium. The target deliberately has no TEST_HOST: it is a
-  # standalone logic test bundle.
+  # Standalone logic/native-model tests; no TEST_HOST and no CEF launch.
+  # The model is imported from the same local package used by the App.
   CioTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: Cio/Tests
-      - path: Cio/Browser/NavigationInput.swift
       - path: Cio/Browser/SpotlightMode.swift
       - path: Cio/Browser/SpotlightAutocompleteService.swift
       - path: Cio/Browser/Autocomplete
@@ -153,15 +153,6 @@ targets:
       - path: Cio/Animation/GlassComponentLayoutMotion.swift
       - path: Cio/UI/Sidebar/SpaceTabPanelRow.swift
       - path: Cio/UI/Sidebar/SidebarTabPanelLayout.swift
-      - path: Cio/Browser/BrowserSplitLayout.swift
-      # The workspace model is pure Foundation: it is compiled
-      # into this target so Space/tab membership, ordering, selection and
-      # recently-closed rules are tested with no application, no window and no
-      # CEF.
-      - path: Cio/Browser/BrowserTab.swift
-      - path: Cio/Browser/BrowserSpace.swift
-      - path: Cio/Browser/WorkspaceCollection.swift
-      - path: Cio/Browser/WorkspaceSessionSnapshot.swift
       - path: Cio/Persistence/SessionStore.swift
       - path: Cio/History/HistoryModels.swift
       - path: Cio/Persistence/HistoryStore.swift
@@ -173,7 +164,8 @@ targets:
       - path: Cio/UI/CommandBar/AddressCapsuleInteraction.swift
       - path: Cio/UI/CommandBar/AddressFieldModel.swift
       - path: Cio/App/Logging.swift
-      - path: Cio/App/URLLogSanitizer.swift
+    dependencies:
+      - package: CioModel
     settings:
       base:
         PRODUCT_NAME: CioTests

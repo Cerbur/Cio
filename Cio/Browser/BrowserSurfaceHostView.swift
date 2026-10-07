@@ -1,3 +1,4 @@
+import CioModel
 import AppKit
 
 /// Stable page registry and outer layout container. Each tab keeps one page UI

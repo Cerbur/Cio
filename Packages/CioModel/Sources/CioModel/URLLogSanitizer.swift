@@ -44,19 +44,19 @@ import Foundation
 ///     https://user:password@example.com/path
 ///         -> https://<redacted>@example.com/<path>
 ///
-enum URLLogSanitizer {
+public enum URLLogSanitizer {
   /// Written where a value was removed.
-  static let redacted = "<redacted>"
+  public static let redacted = "<redacted>"
 
   /// The log form of `url`.
-  static func sanitized(_ url: URL) -> String {
+  public static func sanitized(_ url: URL) -> String {
     sanitized(url.absoluteString)
   }
 
   /// The log form of an optional URL, which is how the navigation state reports
   /// its main-frame URL. `nil` is reported as "nil" rather than as an empty
   /// field so the log stays unambiguous.
-  static func sanitized(_ url: URL?) -> String {
+  public static func sanitized(_ url: URL?) -> String {
     guard let url else { return "nil" }
     return sanitized(url)
   }
@@ -66,7 +66,7 @@ enum URLLogSanitizer {
   /// The string is split from the right - fragment, then query, then the
   /// hierarchical part - so the remaining scheme, authority and query names
   /// keep their original percent-encoding while sensitive pieces are replaced.
-  static func sanitized(_ rawURL: String) -> String {
+  public static func sanitized(_ rawURL: String) -> String {
     guard !rawURL.isEmpty else { return "" }
 
     var head = rawURL[...]

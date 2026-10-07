@@ -7,6 +7,7 @@
 //  selects them.
 //
 
+import CioModel
 import Foundation
 
 enum SpotlightAction: Equatable {

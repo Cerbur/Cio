@@ -8,6 +8,7 @@
 //  never start CEF, never touch AppKit and never need the application to run.
 //
 
+@testable import CioModel
 import XCTest
 
 final class NavigationInputTests: XCTestCase {

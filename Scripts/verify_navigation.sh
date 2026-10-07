@@ -204,6 +204,7 @@ echo "5. runtime navigation stack (--navigation-self-test)"
 SELF_LOG="$WORK_DIR/m2-navigation-self-test.log"
 rm -rf "$NAVIGATION_DATA_DIR"
 CIO_DATA_DIR="$NAVIGATION_DATA_DIR" run_with_timeout 120 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --navigation-self-test --home-url="$HOME_URL" --m2-fixture-base-url="$BASE_URL" \
   > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
@@ -257,6 +258,7 @@ start=$(date +%s)
 # Both steps wait for the previous one to have happened, so the navigation is
 # guaranteed to be in the running application before it is asked to quit.
 CIO_DATA_DIR="$NAVIGATE_QUIT_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --home-url="$HOME_URL" --navigate-url="$NAV_QUIT_URL" --wait-for-window \
   --navigate-after=3 --navigate-wait --quit-after=20 \
   > "$NAV_QUIT_LOG" 2>&1
@@ -293,6 +295,7 @@ rm -rf "$GUI_DATA_DIR"
 # --wait-for-window keeps this about the quit path rather than about how long
 # the machine took to put the window on screen.
 CIO_DATA_DIR="$GUI_DATA_DIR" run_with_timeout $((QUIT_AFTER + 45)) "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --home-url="$HOME_URL" --wait-for-window --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))
@@ -322,6 +325,7 @@ echo "7. programmatic termination ordering"
 PUMP_LOG="$WORK_DIR/m2-terminate-in-pump.log"
 rm -rf "$DATA_DIR/terminate-in-pump"
 CIO_DATA_DIR="$DATA_DIR/terminate-in-pump" run_with_timeout 90 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --log-shutdown-timing --wait-for-window --terminate-in-pump-after=8 --quit-after=120 > "$PUMP_LOG" 2>&1
 PUMP_STATUS=$?
 # A shutdown crash shows up as a signal exit (139 = SIGSEGV, 133 = SIGTRAP), so
@@ -379,6 +383,7 @@ REDACT_TOKEN="test-token_123-abc"
 REDACT_URL="$BASE_URL/page-a?token=$REDACT_TOKEN"
 rm -rf "$REDACTION_DATA_DIR"
 CIO_DATA_DIR="$REDACTION_DATA_DIR" run_with_timeout 90 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --home-url="$REDACT_URL" --wait-for-window --quit-after=12 > "$REDACT_LOG" 2>&1
 REDACT_STATUS=$?
 if [ "$REDACT_STATUS" -eq 0 ]; then

@@ -213,6 +213,7 @@ CIO_DATA_DIR="$HISTORY_DATA_DIR" \
 CIO_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 240 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --use-mock-keychain \
   --milestone7-self-test=seed \
   --home-url="$HOME_URL" \
@@ -299,6 +300,7 @@ CIO_DATA_DIR="$HISTORY_DATA_DIR" \
 CIO_DOWNLOADS_DIR="$HISTORY_DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 180 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --use-mock-keychain \
   --milestone7-self-test=verify \
   --home-url="$HOME_URL" \

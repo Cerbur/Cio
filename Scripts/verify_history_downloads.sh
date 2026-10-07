@@ -105,6 +105,7 @@ CIO_DATA_DIR="$DATA_DIR" \
 CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 180 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --milestone7-self-test=seed \
   --home-url="$HOME_URL" \
   --m7-fixture-base-url="$BASE_URL" \
@@ -194,6 +195,7 @@ CIO_DATA_DIR="$DATA_DIR" \
 CIO_DOWNLOADS_DIR="$DOWNLOADS_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=1 \
 run_with_timeout 180 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --milestone7-self-test=verify \
   --home-url="$HOME_URL" \
   --m7-fixture-base-url="$BASE_URL" \

@@ -96,6 +96,7 @@ rm -rf "$DATA_DIR/spaces-self-test"
 REDACT_TOKEN="m4-test-token_123-abc"
 HOME_URL="https://example.com/?token=$REDACT_TOKEN"
 CIO_DATA_DIR="$DATA_DIR/spaces-self-test" run_with_timeout 600 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --spaces-self-test --home-url="$HOME_URL" > "$SELF_LOG" 2>&1
 SELF_STATUS=$?
 if python3 "$REPO_ROOT/Scripts/check_workspace_report.py" "$SELF_LOG" "$SELF_STATUS"; then

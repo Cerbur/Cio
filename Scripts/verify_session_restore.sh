@@ -111,6 +111,7 @@ HOME_URL="https://example.com/?code=$FAKE_SECRET#$FAKE_FRAGMENT"
 CIO_DATA_DIR="$DATA_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --session-restore-self-test=seed \
   --home-url="$HOME_URL" > "$SEED_LOG" 2>&1
 SEED_CODE=$?
@@ -145,6 +146,7 @@ VERIFY_LOG="$WORK_DIR/verify.log"
 CIO_DATA_DIR="$DATA_DIR" \
 CIO_DISABLE_SESSION_PERSISTENCE=0 \
 run_with_timeout 300 "$EXECUTABLE" \
+  -ApplePersistenceIgnoreState YES \
   --session-restore-self-test=verify > "$VERIFY_LOG" 2>&1
 VERIFY_CODE=$?
 if [ "$VERIFY_CODE" -eq 0 ]; then pass "verify process exited 0"; else fail "verify process exited $VERIFY_CODE"; fi
