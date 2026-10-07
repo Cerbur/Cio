@@ -60,12 +60,12 @@ enum BrowserMain {
       _ = runtime.shutdownCEF()
       return
     }
-    _ = Milestone7SelfTest.installIfRequested(runtime: runtime)
+    _ = HistoryDownloadsSelfTest.installIfRequested(runtime: runtime)
     _ = BeforeUnloadSelfTest.installIfRequested(runtime: runtime)
     // M8's driver is a run-loop resident state machine, like SpacesSelfTest.
     // Install it and continue into the real NSApplication run loop; the driver
     // exits only after its typed lifecycle checks finish.
-    _ = Milestone8SelfTest.installIfRequested(runtime: runtime)
+    _ = StabilitySelfTest.installIfRequested(runtime: runtime)
     if CommandLine.arguments.contains("--navigation-self-test") {
       // Milestone 2 integration check. The production application's
       // navigated termination path is exercised separately below by the

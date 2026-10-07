@@ -1,5 +1,5 @@
 //
-//  Milestone7SelfTest.swift
+//  HistoryDownloadsSelfTest.swift
 //  Cio
 //
 //  Real-CEF history/download integration driver used by
@@ -12,7 +12,7 @@ import AppKit
 import Foundation
 
 @MainActor
-enum Milestone7SelfTest {
+enum HistoryDownloadsSelfTest {
   private static let phasePrefix = "--milestone7-self-test="
   private static let basePrefix = "--m7-fixture-base-url="
   private static let failedPrefix = "--m7-failed-url="

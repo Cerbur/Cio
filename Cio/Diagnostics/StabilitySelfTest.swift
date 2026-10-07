@@ -1,5 +1,5 @@
 //
-//  Milestone8SelfTest.swift
+//  StabilitySelfTest.swift
 //  Cio
 //
 //  Bounded lifecycle and lazy-restore stress driver. It uses the production
@@ -11,8 +11,8 @@ import AppKit
 import Foundation
 
 @MainActor
-final class Milestone8SelfTest {
-  private static var active: Milestone8SelfTest?
+final class StabilitySelfTest {
+  private static var active: StabilitySelfTest?
 
   private enum Phase {
     case stress
@@ -44,7 +44,7 @@ final class Milestone8SelfTest {
       exit(2)
     }
 
-    let test = Milestone8SelfTest(runtime: runtime, phase: phase)
+    let test = StabilitySelfTest(runtime: runtime, phase: phase)
     active = test
     test.start()
     return true
@@ -103,7 +103,7 @@ final class Milestone8SelfTest {
 
     let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
       MainActor.assumeIsolated {
-        Milestone8SelfTest.active?.tick()
+        StabilitySelfTest.active?.tick()
       }
     }
     RunLoop.main.add(timer, forMode: .common)

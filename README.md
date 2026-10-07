@@ -48,7 +48,8 @@ The pre-refactor baseline had passing build, 244 passing unit tests, runtime/bun
 
 ```text
 Cio/
-  App/                    entry point, scene, menus, runtime and diagnostics
+  App/                    entry point, scene, native menus and runtime
+  Diagnostics/            existing self-tests and navigation/sidebar probes
   Bridge/                 Objective-C++ boundary, event support, bridging header
   Browser/                workspace policy, sessions and CEF containers
   Helper/                 separate CEF process entry point
@@ -97,6 +98,14 @@ ARCHITECTURE.md            current ownership, lifetime and interaction design
 - Native materials, system controls and animation APIs retain their normal interactions. Animation tuning and speed scaling live in Packages/CioUI/Sources/CioUI/Animation/; AGENTS.md records the required geometry and motion contract.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design and lifetime details.
+
+## Diagnostic compatibility
+
+Self-tests and probes live in Cio/Diagnostics. Historical numbered script entry points and trace labels remain tooling compatibility names; current implementation contracts are responsibility-based. CLI switches remain unchanged, including --navigation-self-test, --tabs-self-test, --spaces-self-test, --parse-navigation-input=, --session-restore-self-test=, --m7-self-test= and --m8-self-test=.
+
+```bash
+build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio --parse-navigation-input="https://example.com/"
+```
 
 ## Data and development signing
 

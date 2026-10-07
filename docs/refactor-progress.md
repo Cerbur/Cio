@@ -6,16 +6,16 @@ Rollback point: local tag pre-cio-refactor at f052f5334e91bc20bba9ffbcf15f7e0a45
 
 | Check | Original result | After structure changes |
 | --- | --- | --- |
-| Required Debug build | PASS after granting compiler-plugin execution permission | PASS after Stage 1 |
-| Unit tests | 244 PASS, zero failures | PASS after Stage 1 |
-| Original runtime verifier | PASS | PASS after Stage 1 |
+| Required Debug build | PASS after granting compiler-plugin execution permission | PASS at final delivery |
+| Unit tests | 244 PASS, zero failures | PASS at final delivery |
+| Original runtime verifier | PASS | PASS at final delivery |
 | Original rendering verifier | FAIL: 4 legacy close-harness checks | Not counted as passing |
 | Original navigation verifier | FAIL: 8 obsolete source assertions | Retired assertions, not fixed behavior |
 | Original tab verifier | FAIL: 13 checks including old source/test names and 3 shared-editor assertions | Retired assertions, not fixed behavior |
 | Original workspace verifier | FAIL: 12 checks including old source/test names and the same 3 shared-editor assertions | Retired assertions, not fixed behavior |
-| Secret scan | CLEAN | PASS after Stage 1 |
-| App/framework/five Helpers signatures | All PASS | PASS after Stage 1 |
-| Main/Helper direct CEF linkage | None | PASS after Stage 1 |
+| Secret scan | CLEAN | PASS at final delivery |
+| App/framework/five Helpers signatures | All PASS | PASS at final delivery |
+| Main/Helper direct CEF linkage | None | PASS at final delivery |
 
 Raw original evidence is in /private/tmp/cio-refactor-baseline. The new responsibility-based verification does not claim those historical failures were repaired. Numbered scripts remain compatibility forwarding entry points; the binary's command-line switches and diagnostic behavior are unchanged.
 
@@ -27,8 +27,8 @@ Raw original evidence is in /private/tmp/cio-refactor-baseline. The new responsi
 | 0 — Full Cio rename | 984ed4f | Complete; current checks, Debug/Release, 244 tests and bundle checks passed |
 | 1 — CioModel | df144a2 | Complete; 86 package + 158 native tests and all current checks passed |
 | 2 — CioEngine | 9fd0785 | Complete; standalone Engine/App builds, 244 tests and all current Debug/Release gates passed |
-| 3 — CioUI | Pending | Complete; independent CioUI/App builds, 244 tests and final full Debug/Release chain passed |
-| 4 — Diagnostic placement | Pending | Not started |
+| 3 — CioUI | 3562c74 | Complete; independent CioUI/App builds, 244 tests and final full Debug/Release chain passed |
+| 4 — Diagnostic placement | This commit | Complete; eight driver/probe moves audited; final full Debug/Release verification passed |
 
 Model extraction also requires the existing pure BrowserTab, BrowserSplitLayout and WorkspaceSessionSnapshot dependencies of BrowserSpace/WorkspaceCollection. No runtime policy is moved into the pure model package.
 
@@ -89,3 +89,33 @@ The next full retry measured another eight-second CefShutdown with an isolated p
 The serial full attempt then passed rendering at 452.8 ms but failed the navigation pump-termination timing gate at 1,475.2 ms (one-second budget); ordering/close/exit checks all passed. The failed timing remains in validation-sequential.log and navigation-slow-shutdown.log. Three consecutive focused trials of the same unchanged binary, each with a fresh profile, passed at 67.6/284.5/70.7 ms without a delayed thread sample. No App Nap override, foreground automation, production change or relaxed budget was used. The intermittent CefShutdown latency remains an unresolved observation even if the final full chain passes.
 
 Stage 3 final complete chain (validation-complete.log) passed App builds, 86 Model + 158 native tests, every compatibility verifier, stress/lazy/beforeunload/two quit soaks, Release, final Debug rebuild, individual signatures/linkage and secret scan. The final rendering/pump termination timings were 620.8/103.4 ms. Prior slow CefShutdown attempts remain failed and unresolved, not erased or relabeled. Final evidence is in /private/tmp/cio-refactor-stage3/final-evidence. The independent final CioUI build and source/host boundary audits are also preserved in this directory’s parent.
+
+## Final delivery
+
+All stages were committed separately on main. pre-cio-refactor still resolves to f052f5334e91bc20bba9ffbcf15f7e0a45ebc549. No branch, amend, rebase, reset or push was used. File/directory moves used git mv. project.yml remains the sole Xcode source of truth.
+
+Stage 4 validation.log passed the required Debug build, 86 package + 158 native tests, every verify_milestone compatibility entry point, current runtime/rendering/navigation/tabs/workspace/restore/history/downloads/stability checks, beforeunload, two quit soaks, Release, final Debug rebuild, App/framework/five-Helper strict signatures, runtime CEF linkage and secret scan. Rendering/pump termination measured 56.3/529.8 ms. Eight diagnostic files retained their ordinary statements and CLI flags; two historical diagnostic type/file names were normalized. Evidence: /private/tmp/cio-refactor-stage4/validation.log, move-audit.txt and final-evidence.
+
+| Current acceptance | Final result |
+| --- | --- |
+| Debug/Release App builds | PASS |
+| CioModel package-local tests | 86 PASS |
+| Standalone native/Engine/UI tests | 158 PASS |
+| Runtime/rendering/navigation/tabs/workspace | PASS under current-design scripts |
+| Restore/history/downloads/stability/beforeunload/soak | PASS |
+| App/framework/five Helper signatures and no direct CEF linkage | PASS |
+| Tracked old-name variants, including paths | Zero matches |
+| Secret scan | CLEAN; optional literal harness-token comparison skipped because no token was exposed |
+| Native/visual manual checks | NOT PERFORMED; original lists in manual-verification.md |
+
+Original baseline failures remain failures in the baseline table, not post-refactor passes. Three shared-editor focus expectations and three legacy restoration expectations remain explicitly retired coverage. No runtime driver was changed to manufacture those passes.
+
+### Observed but not fixed
+
+- Intermittent CefShutdown latency during Stage 3 (up to 14.1 seconds inside the existing shutdown call); failed attempts retained. Three focused probes and the final Stage 3/4 chains passed the unchanged budgets. Profile/host-load explanations remain hypotheses. No production shutdown policy was changed.
+- The retained --browser-self-test synthetic/nested-run-loop close limitation. Normal-app typed termination is the rendering acceptance path.
+- The six retired diagnostic assumptions above. Current UUID graph/selection/lazy-runtime gates and model tests remain required; retired assumptions are not successful coverage.
+- Existing Swift actor/capture warnings and NSBox deprecation warnings, also present before UI extraction. No warning suppression or unchecked conformance was added.
+- Actual native key events/IME/material outlines/split and drag motion were not checked; all REQUIRES MANUAL VERIFICATION items remain unverified.
+
+See README Layout and ARCHITECTURE's package graph, engine-interface.md for every Engine member/caller mapping, and ui-injection.md for original native-object/publisher/factory ownership.
