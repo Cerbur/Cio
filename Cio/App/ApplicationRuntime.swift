@@ -15,6 +15,8 @@
 //
 
 import CioEngine
+import Combine
+import CioUI
 import Foundation
 
 /// Owns the CEF runtime for the whole application.
@@ -72,16 +74,28 @@ final class ApplicationRuntime: ObservableObject {
   let historyService: HistoryService
   let downloadManager: DownloadManager
 
-  enum InternalBrowserPanel: String, Identifiable {
-    case history
-    case downloads
-
-    var id: String { rawValue }
-  }
+  typealias InternalBrowserPanel = BrowserInternalPanel
 
   /// The selected internal library is presented in the main window while the
   /// stable Chromium host remains mounted behind it.
   @Published var presentedInternalPanel: InternalBrowserPanel?
+
+
+  // Stable composition projection; all state and publishers remain Runtime-owned.
+  lazy var uiContext = BrowserUIContext(
+    objectWillChange: objectWillChange,
+    workspaceStore: workspaceStore,
+    historyService: historyService,
+    downloadManager: downloadManager,
+    surfaceDriver: sessionManager,
+    presentedInternalPanelPublisher: $presentedInternalPanel.eraseToAnyPublisher(),
+    getPresentedInternalPanel: { [weak self] in self?.presentedInternalPanel },
+    setPresentedInternalPanel: { [weak self] in self?.presentedInternalPanel = $0 },
+    showHistory: { [weak self] in self?.showHistory() },
+    showDownloads: { [weak self] in self?.showDownloads() },
+    dismissSpotlight: { [weak self] in self?.dismissSpotlight() },
+    performSpotlightAction: { [weak self] in self?.performSpotlightAction($0) },
+    noteMainWindowAppeared: { [weak self] in self?.noteMainWindowAppeared() })
 
   @Published private(set) var cefStatus: CEFStatus = .notInitialized
 

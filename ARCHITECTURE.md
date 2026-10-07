@@ -33,6 +33,24 @@ Packages/CioEngine depends only on CioModel. BrowserSessionProtocol and BrowserW
 
 BrowserSession and BrowserWorkspaceStore remain App implementations. Workspace focus/navigation/metadata/popup policy uses the session protocol. App-only concrete session lookup, runtime creation, registry and typed close acceptance/cancellation/OnBeforeClose callbacks remain with the original manager and termination coordinator. Publisher projections only erase the original @Published streams; downstream ordering and native controls are retained. Engine never imports UI, Bridge or CEF.
 
+## Local UI boundary
+
+Packages/CioUI depends on CioEngine and CioModel. It owns the native shell, address editor, page/toolbar presentation, sidebar/Spotlight/internal/settings views and shared Animation directory. It has no App, Bridge or CEF import. The scroll-edge Metal shader is processed into the package resource bundle and the same shader function is looked up through Bundle.module.
+
+```mermaid
+graph TD
+  App --> CioUI
+  App --> CioEngine
+  App --> CioModel
+  CioUI --> CioEngine
+  CioUI --> CioModel
+  CioEngine --> CioModel
+```
+
+App creates one BrowserUIContext using the original Runtime publisher, workspace, services and manager. Panel access/action closures forward synchronously to Runtime. ObservedEngine returns the original protocol object and subscribes directly to its original publisher; it owns no copied state or relay. BrowserSurfaceDriverProtocol is a UI-owned native presentation/factory seam implemented by the App manager. The factory retains configure → covered-state → attach order; representable updates re-adopt the same host.
+
+ChromiumView, ChromiumContainerView, BrowserSession and BrowserSessionManager remain App code. BrowserNativeSurface.nativeView is the same original container. Its session accessor resolves the original weak delegate, so moving the page into UI does not add a strong session reference. Global process appearance is injected into the host and still runs before the original per-session appearance callback. See docs/ui-injection.md for the boundary audit.
+
 ## CEF boundary and bundle
 
 BrowserMain executes any CEF subprocess handoff before initialization, initializes CEF before SwiftUI, and starts the native application run loop. CEFProcessHost uses CefScopedLibraryLoader: the framework is loaded at runtime, never linked directly. Only libcef_dll_wrapper.a is linked into the App and Helper.
@@ -71,7 +89,7 @@ BrowserSurfaceHostView retains one BrowserPagePresentation per live session. A p
 
 BrowserWindowChromeView owns the native traffic lights and window gestures. BrowserMainViewController owns sidebar/section presentation and SpaceToolbarController. Toolbar controls mount above the shell backdrop, outside the Main View clip. Only Space displays the sidebar control and browser navigation/address controls. History, Downloads and Settings use native UI; switching sections retains the browser surface behind them.
 
-The shell has one backgroundGlass backdrop. BrowserLayout in UI/Main/BrowserShellLayout.swift centralizes the 56 pt toolbar/rail, 4 pt equal right/bottom Main View insets and 14 pt content corners. Native traffic lights remain centered using their actual dimensions. The sidebar visible glass is 36 x 36 pt; Back and Forward occupy one continuous 72 x 36 pt interactive glass capsule in a 74 x 36 pt host. Stable native buttons and glass identities remain mounted across state changes. AGENTS.md and Animation/GLASS_COMPONENT_MOTION.md specify the full geometry and interaction contract.
+The shell has one backgroundGlass backdrop. BrowserLayout in Packages/CioUI/Sources/CioUI/UI/Main/BrowserShellLayout.swift centralizes the 56 pt toolbar/rail, 4 pt equal right/bottom Main View insets and 14 pt content corners. Native traffic lights remain centered using their actual dimensions. The sidebar visible glass is 36 x 36 pt; Back and Forward occupy one continuous 72 x 36 pt interactive glass capsule in a 74 x 36 pt host. Stable native buttons and glass identities remain mounted across state changes. AGENTS.md and Packages/CioUI/Sources/CioUI/Animation/GLASS_COMPONENT_MOTION.md specify the full geometry and interaction contract.
 
 ## Focus and commands
 
@@ -129,7 +147,7 @@ Repeated quit requests are idempotent. Production diagnostic waits do not turn a
 
 ## Animation
 
-Animation/ contains shared motion, tuning and persisted speed preferences. UI components reference named AnimationValues. Standard-pace timings are resolved once through AnimationValues.duration; curves and geometry do not scale with speed. Handoff, retention and cleanup waits share the captured flight clock. Reduce Motion and system-owned animation remain intact. CEF scheduling, input debounce and polling are operational timing.
+Packages/CioUI/Sources/CioUI/Animation/ contains shared motion, tuning and persisted speed preferences. UI components reference named AnimationValues. Standard-pace timings are resolved once through AnimationValues.duration; curves and geometry do not scale with speed. Handoff, retention and cleanup waits share the captured flight clock. Reduce Motion and system-owned animation remain intact. CEF scheduling, input debounce and polling are operational timing.
 
 First-level glass motion uses the native materialize transition and shared position/size Spring implementation. Interrupted flights continue from their current geometry/velocity; equal destinations do not restart them. Page and toolbar reveal share the handoff transaction. Native controls/editors stay mounted and first-level motion is not recursively applied to their symbols or text.
 

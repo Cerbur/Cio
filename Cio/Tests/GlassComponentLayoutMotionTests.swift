@@ -1,3 +1,4 @@
+@testable import CioUI
 import AppKit
 import SwiftUI
 import XCTest

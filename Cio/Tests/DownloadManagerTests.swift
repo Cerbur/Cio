@@ -6,6 +6,7 @@
 //
 
 @testable import CioEngine
+@testable import CioUI
 import XCTest
 
 @MainActor

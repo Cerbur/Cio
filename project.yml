@@ -81,6 +81,9 @@ packages:
   CioEngine:
     path: Packages/CioEngine
 
+  CioUI:
+    path: Packages/CioUI
+
 targets:
   Cio:
     type: application
@@ -90,8 +93,6 @@ targets:
         excludes:
           - "Resources/Info.plist"
           - "Helper/**"
-          # Developer documentation is not an application resource.
-          - "Animation/*.md"
           # Unit tests are their own standalone target.
           - "Tests/**"
     settings:
@@ -129,6 +130,7 @@ targets:
         embed: false
       - package: CioModel
       - package: CioEngine
+      - package: CioUI
     preBuildScripts:
       - name: "Build libcef_dll_wrapper"
         path: Scripts/build_cef_wrapper.sh
@@ -145,24 +147,11 @@ targets:
     platform: macOS
     sources:
       - path: Cio/Tests
-      - path: Cio/UI/Spotlight/SpotlightHoverGate.swift
-      - path: Cio/UI/Spotlight/SpotlightInputState.swift
-      - path: Cio/UI/Main/BrowserShellLayout.swift
-      - path: Cio/Animation/AnimationValues.swift
-      - path: Cio/Animation/BrowserAnimationPreferences.swift
-      - path: Cio/Animation/GlassComponentAnimationValues.swift
-      - path: Cio/Animation/GlassComponentLayoutMotion.swift
-      - path: Cio/UI/Sidebar/SpaceTabPanelRow.swift
-      - path: Cio/UI/Sidebar/SidebarTabPanelLayout.swift
-      # The address-field editing rules and the log categories they use are also
-      # dependency free, so the "one address field per session" guarantee is
-      # tested here too.
-      - path: Cio/UI/CommandBar/AddressAutocompleteModel.swift
-      - path: Cio/UI/CommandBar/AddressCapsuleInteraction.swift
-      - path: Cio/UI/CommandBar/AddressFieldModel.swift
+      # Native editing/layout tests import the same CioUI library as the App.
     dependencies:
       - package: CioModel
       - package: CioEngine
+      - package: CioUI
     settings:
       base:
         PRODUCT_NAME: CioTests

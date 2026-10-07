@@ -1,4 +1,5 @@
 // TEMPORARY verification probe for the sidebar glass drag. Not for commit.
+import CioUI
 import AppKit
 
 @MainActor

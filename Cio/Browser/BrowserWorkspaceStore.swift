@@ -11,6 +11,7 @@
 //  browser surface host.
 //
 
+import CioUI
 import CioEngine
 import CioModel
 import AppKit

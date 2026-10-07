@@ -84,6 +84,9 @@ if [ -n "${RESET_DATA_DIR:-}" ]; then
   rm -rf "$DATA_DIR"
 fi
 mkdir -p "$DATA_DIR" "$WORK_DIR"
+# Rendering is stateless. Keep each launch isolated from profiles left by other
+# acceptance drivers; preserve the profile for inspection under build/.
+PROFILE_DIR="$(mktemp -d "$DATA_DIR/rendering.XXXXXX")"
 
 if [ ! -x "$EXECUTABLE" ]; then
   echo "error: $EXECUTABLE not found; run Scripts/build.sh first" >&2
@@ -116,9 +119,9 @@ echo "Rendering, navigation callbacks and real application termination"
 GUI_LOG="$WORK_DIR/launch.log"
 QUIT_AFTER=10
 GUI_START=$(date +%s)
-CIO_DATA_DIR="$DATA_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
+CIO_DATA_DIR="$PROFILE_DIR" run_with_timeout $((QUIT_AFTER + 25)) "$EXECUTABLE" \
   -ApplePersistenceIgnoreState YES \
-  --home-url="$HOME_URL" --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
+  --log-shutdown-timing --home-url="$HOME_URL" --quit-after=$QUIT_AFTER > "$GUI_LOG" 2>&1
 GUI_STATUS=$?
 GUI_TOTAL=$(( $(date +%s) - GUI_START ))
 if [ "$GUI_STATUS" -eq 0 ]; then
@@ -138,12 +141,13 @@ check_contains "page received keyboard focus" "[browser] focus granted" "$GUI_LO
 check_contains "browser destroyed before CEF shutdown" "browser:closed" "$GUI_LOG"
 check_contains "CEF shut down cleanly" "cef:shutdown(clean: true)" "$GUI_LOG"
 
-# Quitting must not hang: the browser close has to finish well inside the
-# application's shutdown budget.
-if [ "$GUI_TOTAL" -le $((QUIT_AFTER + 6)) ]; then
-  pass "quit completed in ${GUI_TOTAL}s (no shutdown hang)"
+# Measure the existing termination phases, not startup plus the residence timer.
+# Keep the original six-second shutdown budget; the process watchdog still bounds
+# the full launch. App/module initialization time is not a shutdown duration.
+if python3 "$REPO_ROOT/Scripts/check_shutdown_timing.py" "$GUI_LOG" "$GUI_STATUS" 6000; then
+  pass "quit phase timing/order passed (total launch ${GUI_TOTAL}s)"
 else
-  fail "quit took ${GUI_TOTAL}s"
+  fail "shutdown timing/order verification failed"
 fi
 
 # A typed OnBeforeClose callback proves the real application released its browser.
@@ -157,7 +161,7 @@ if codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
 else
   fail "code signature verification failed"
 fi
-if [ -f "$DATA_DIR/Logs/cef.log" ]; then
+if [ -f "$PROFILE_DIR/Logs/cef.log" ]; then
   pass "CEF wrote its log file"
 else
   fail "CEF log file was not created"

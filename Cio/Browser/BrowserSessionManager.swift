@@ -11,6 +11,7 @@
 //  BrowserSurfaceHostView synchronization.
 //
 
+import CioUI
 import CioEngine
 import CioModel
 import AppKit
@@ -332,7 +333,7 @@ final class BrowserSessionManager: ObservableObject {
       containers.removeValue(forKey: tabID)
     }
 
-    host.present(containers: live, selectedTabID: selectedSurfaceTabID, split: splitLayout)
+    host.present(containers: live.mapValues { BrowserSurfaceAttachment(surface: $0) }, selectedTabID: selectedSurfaceTabID, split: splitLayout)
 
     // Attach after the containers are subviews. BrowserSession creates its CEF
     // browser only once the container has a window, and never on a visibility
@@ -397,4 +398,25 @@ final class BrowserSessionManager: ObservableObject {
   private func emit(_ event: String) {
     onLifecycleEvent?(event)
   }
+}
+
+// Factory stays App-owned; makeNSView creates once and updates re-adopt the host.
+extension BrowserSessionManager: BrowserSurfaceDriverProtocol {
+  func makeSurfaceHost(workspace: any BrowserWorkspaceProtocol, history: HistoryService,
+                       isCovered: Bool) -> BrowserSurfaceHostView {
+    let host = makeBrowserSurfaceHost()
+    host.configure(workspace: workspace, history: history)
+    host.setPresentationCovered(isCovered)
+    attachSurfaceHost(host)
+    return host
+  }
+}
+
+@MainActor
+func makeBrowserSurfaceHost(frame: NSRect = .zero) -> BrowserSurfaceHostView {
+  let host = BrowserSurfaceHostView(frame: frame)
+  // Preserve global process appearance before per-session notification,
+  // including bare diagnostic hosts before manager attachment.
+  host.onProcessAppearanceChange = { CEFProcessHost.setDarkAppearance($0) }
+  return host
 }

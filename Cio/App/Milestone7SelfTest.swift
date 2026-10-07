@@ -35,7 +35,7 @@ enum Milestone7SelfTest {
       backing: .buffered,
       defer: false)
     window.title = "Cio Milestone 7 self-test"
-    let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
+    let host = makeBrowserSurfaceHost(frame: window.contentLayoutRect)
     host.autoresizingMask = [.width, .height]
     window.contentView = host
     // Keep the host in a real key window. CEF's Alloy child-view teardown is

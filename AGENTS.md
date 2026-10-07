@@ -15,7 +15,7 @@ These are user-defined constraints from [the layout session](codex://threads/01a
 - Toolbar controls follow the Main View's current section. Space shows the sidebar button, address field and navigation controls; section changes must preserve the shared toolbar geometry and traffic-light alignment.
 - Main View fills the remaining area after the toolbar and Navigation Rail, with rounded clipping. Its top offset equals the shared chrome thickness; its left offset equals that thickness when the Space sidebar is collapsed. An expanded sidebar occupies additional horizontal space. Right and bottom insets must remain equal, using `BrowserLayout.mainViewEdgeInset`, currently **4 pt**.
 - Main View, Tab and Top Pin must share `BrowserLayout.contentCornerRadius`, currently **14 pt**.
-- Keep these dimensions centralized in `Cio/UI/Main/BrowserShellLayout.swift`. Visual balance between the shell's upper-left curve, red button, Main View and Top Pin corners must result from the shared dimensions and insets, not from hard-coded diagonal alignment or separate corrective offsets.
+- Keep these dimensions centralized in `Packages/CioUI/Sources/CioUI/UI/Main/BrowserShellLayout.swift`. Visual balance between the shell's upper-left curve, red button, Main View and Top Pin corners must result from the shared dimensions and insets, not from hard-coded diagonal alignment or separate corrective offsets.
 
 # Native component implementation
 
@@ -25,7 +25,7 @@ These are user-defined constraints from [the layout session](codex://threads/01a
 
 # Toolbar control geometry and interaction contract
 
-These constraints fix the toolbar regressions reported on 2026-10-06. Preserve them unless the user explicitly requests a different design. Implementation and validation notes are in `Cio/Animation/GLASS_COMPONENT_MOTION.md`.
+These constraints fix the toolbar regressions reported on 2026-10-06. Preserve them unless the user explicitly requests a different design. Implementation and validation notes are in `Packages/CioUI/Sources/CioUI/Animation/GLASS_COMPONENT_MOTION.md`.
 
 - The sidebar button's resting visible glass is a **36 × 36 pt circle**. Back and Forward are two independent native buttons inside **one continuous 72 × 36 pt Liquid Glass capsule**, with two **36 × 36 pt** action slots and no internal gap. The navigation host is **74 × 36 pt**, including **1 pt** clearance at each end. Use `BrowserLayout.chromeControlSize`, `navigationCapsuleEndInset` and `navigationCapsuleWidth`; do not derive button size from address-field metrics or platform intrinsic button height.
 - The circle and capsule share the toolbar's vertical center: with the current **56 pt** chrome their resting top inset is **10 pt**. Check the visible material outline, not only the NSHostingView frame. Apply explicit dimensions before the glass effect; `.controlSize(.large)`, `.buttonSizing(.flexible)` or an outer frame alone does not establish the material's actual height.
@@ -36,16 +36,16 @@ These constraints fix the toolbar regressions reported on 2026-10-06. Preserve t
 
 # Animation parameters
 
-- `Cio/Animation/` is the dedicated animation package, compiled into the existing app target. Keep shared motion implementations and preferences here; split tuning files by effect / component, extending the single `AnimationValues` namespace (for example `AnimationValues.SplitPages` or `AnimationValues.Toolbar`).
+- `Packages/CioUI/Sources/CioUI/Animation/` is the dedicated animation package, compiled into the local CioUI package. Keep shared motion implementations and preferences here; split tuning files by effect / component, extending the single `AnimationValues` namespace (for example `AnimationValues.SplitPages` or `AnimationValues.Toolbar`).
 - All new or modified custom window / UI animation effects must declare their tuning in this package. Do not write animation durations, delays, spring responses, damping, easing control points, speed multipliers or animation-specific scale / progress values directly in component files. Components must reference named `AnimationValues` properties.
 - Declare base timings at the Standard pace in the corresponding `*AnimationValues.swift` file. Resolve time values through `AnimationValues.duration(_:)`, which multiplies them by the persisted Settings speed ratio. Returned timings are already scaled: do not multiply again or cache them in a `static let`. Curves, damping and geometry stay independent of speed.
 - Animation-related handoff, retention and cleanup waits must also use named timing values and the same speed ratio. Capture the timing when a flight starts if later stages must stay on its clock; prefer completion callbacks over unrelated timers.
 - Preserve Reduce Motion behavior and system-owned native animation. Input debounce, Chromium scheduling, frame polling and pointer-driven scrolling are operational timing, not visual animation speed; do not scale them with the animation preference.
-- See `Cio/Animation/README.md` for the package layout and usage examples.
+- See `Packages/CioUI/Sources/CioUI/Animation/README.md` for the package layout and usage examples.
 
 # Liquid Glass component motion contract
 
-- Apply the shared template in `Cio/Animation/GlassComponentVisibility.swift` and `GlassComponentLayoutMotion.swift` to first-level glass components (for example the sidebar button, shared Back/Forward capsule and address capsule). See `Cio/Animation/GLASS_COMPONENT_MOTION.md` for the reference and Apple documentation.
+- Apply the shared template in `Packages/CioUI/Sources/CioUI/Animation/GlassComponentVisibility.swift` and `GlassComponentLayoutMotion.swift` to first-level glass components (for example the sidebar button, shared Back/Forward capsule and address capsule). See `Packages/CioUI/Sources/CioUI/Animation/GLASS_COMPONENT_MOTION.md` for the reference and Apple documentation.
 - Appearance must converge inward from a dispersed, blurred state into a solid, sharp component. Disappearance must disperse outward from the solid component into a blurred state. Use the system's native Liquid Glass `materialize` transition for the material; opacity/scale alone does not satisfy this requirement. Keep the glass container mounted for both directions and animate content blur/opacity separately, without fading the glass's parent to zero or adding imitation glass.
 - Any component position change must move continuously to its target. Size increases must overshoot outward and settle back; size decreases must undershoot inward and spring back. Use the system Spring with named parameters from `AnimationValues.GlassComponent`, following Spotlight's spring-based expansion. Position must not bounce merely because size bounces.
 - Retarget an interrupted movement from the current presentation geometry and velocity. Repeated layout notifications and page-flight completion must not restart or truncate a component flight whose destination is unchanged.

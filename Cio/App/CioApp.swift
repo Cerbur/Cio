@@ -17,6 +17,7 @@
 //  Chromium view owns the keyboard.
 //
 
+import CioUI
 import SwiftUI
 
 struct CioApp: App {
@@ -26,7 +27,7 @@ struct CioApp: App {
   var body: some Scene {
     Window("Cio", id: "main") {
       MainWindowView()
-        .environmentObject(runtime)
+        .environmentObject(runtime.uiContext)
     }
     .defaultSize(width: 1280, height: 800)
     // Hide SwiftUI's visual titlebar while keeping the titled NSWindow and its

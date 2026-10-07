@@ -118,7 +118,7 @@ enum NavigationSelfTest {
         backing: .buffered,
         defer: false)
       harnessWindow.title = "Cio navigation self-test"
-      let host = BrowserSurfaceHostView(frame: harnessWindow.contentLayoutRect)
+      let host = makeBrowserSurfaceHost(frame: harnessWindow.contentLayoutRect)
       host.autoresizingMask = [.width, .height]
       harnessWindow.contentView = host
       // The window has to be a real, key window: Chromium destroys the browser

@@ -12,6 +12,7 @@
 //  address state" cannot return unnoticed.
 //
 
+@testable import CioUI
 import XCTest
 
 @MainActor

@@ -16,6 +16,7 @@
 //  menu item can never act on a tab that is no longer selected.
 //
 
+import CioUI
 import SwiftUI
 
 struct BrowserCommands: Commands {

@@ -1,4 +1,5 @@
 @testable import CioEngine
+@testable import CioUI
 import CioModel
 import XCTest
 

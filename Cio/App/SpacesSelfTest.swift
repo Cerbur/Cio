@@ -7,6 +7,7 @@
 //  production workspace, session and surface ownership.
 //
 
+import CioUI
 import CioEngine
 import AppKit
 import Foundation

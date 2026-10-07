@@ -51,15 +51,6 @@ Cio/
   App/                    entry point, scene, menus, runtime and diagnostics
   Bridge/                 Objective-C++ boundary, event support, bridging header
   Browser/                workspace policy, sessions and CEF containers
-  Animation/              shared motion and AnimationValues (see its README)
-  UI/
-    Main/                 native shell, stable page toolbar, viewports and traffic lights
-    CommandBar/           NSTextField address editor, model and native focus notifications
-    Sidebar/              tab tiers, retained rows, dragging and drop projection
-    Spotlight/            new-tab input, completion and presentation
-    Internal/             History and Downloads presentation
-    Settings/             settings UI
-    Visual/               native glass, navigation buttons and shared favicon views
   Helper/                 separate CEF process entry point
   Resources/              Info.plist and signing entitlements
   Tests/                  standalone logic/native-model tests
@@ -75,6 +66,17 @@ Packages/
       History/            history values
       Downloads/          original destination policy and download state
       App/                shared logging categories
+  CioUI/
+    Sources/CioUI/
+      UI/
+        Main/             native shell, stable pages/toolbars and viewports
+        CommandBar/       NSTextField editor/model and menu notifications
+        Sidebar/          retained rows, dragging and Metal scroll-edge resource
+        Spotlight/        input/completion presentation
+        Internal/         History and Downloads views
+        Settings/         native settings
+        Visual/           native glass, controls and favicon views
+      Animation/          shared motion, tuning and preferences
 SchemeTemplates/Cio.xcscheme
 Scripts/                  reproducible build and verification tools
 ThirdParty/               untracked CEF distribution and wrapper products
@@ -92,7 +94,7 @@ ARCHITECTURE.md            current ownership, lifetime and interaction design
 - Cmd-L/R/[/] and tab commands are native menu equivalents. Cmd-T opens Spotlight. Current selection is resolved at action time.
 - Popups route to managed tabs using the source runtime identity. CEF C++ objects and download callbacks stay behind the bridge.
 - Navigation and persistence retain complete URLs. Every URL log/probe uses the single URLLogSanitizer policy.
-- Native materials, system controls and animation APIs retain their normal interactions. Animation tuning and speed scaling live in Animation/; AGENTS.md records the required geometry and motion contract.
+- Native materials, system controls and animation APIs retain their normal interactions. Animation tuning and speed scaling live in Packages/CioUI/Sources/CioUI/Animation/; AGENTS.md records the required geometry and motion contract.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design and lifetime details.
 

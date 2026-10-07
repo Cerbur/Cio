@@ -13,6 +13,7 @@
 //  and therefore destroy the CefBrowser (Milestone 3 section 11).
 //
 
+import CioUI
 import CioEngine
 import AppKit
 
@@ -143,4 +144,10 @@ final class ChromiumContainerView: NSView {
   deinit {
     AppLog.browser.debug("ChromiumContainerView released")
   }
+}
+
+// Native UI consumes the original view and weak session delegate.
+extension ChromiumContainerView: BrowserNativeSurface {
+  var nativeView: NSView { self }
+  var browserSession: (any BrowserSessionProtocol)? { delegate as? any BrowserSessionProtocol }
 }

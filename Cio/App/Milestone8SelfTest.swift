@@ -84,7 +84,7 @@ final class Milestone8SelfTest {
       backing: .buffered,
       defer: false)
     window.title = "Cio Milestone 8 self-test"
-    let host = BrowserSurfaceHostView(frame: window.contentLayoutRect)
+    let host = makeBrowserSurfaceHost(frame: window.contentLayoutRect)
     host.autoresizingMask = [.width, .height]
     window.contentView = host
     window.orderBack(nil)
