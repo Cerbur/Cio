@@ -6,6 +6,7 @@
 //  Space tab contains space pin (.space) and temporary (.temporary) tabs.
 //
 
+import CioEngine
 import CioModel
 import AppKit
 import SwiftUI
@@ -452,7 +453,7 @@ struct TabSidebarView: View {
   private func tabElement(_ tab: BrowserTab, tier: WorkspaceCollection.TabTier,
                           group: BrowserSplitLayout?, compact: Bool) -> some View {
     let anchor = group?.focusedTabID ?? group?.leftTabID ?? tab.id
-    return SidebarTabRow(tab: tab, session: workspace.session(for: tab.id),
+    return SidebarTabRow(tab: tab, session: workspace.browserSession(for: tab.id),
       selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
       tier: tier, group: group, isCompact: compact,
       isTabDragActive: tabDrag.tabID != nil,
@@ -814,7 +815,7 @@ private struct SidebarSpaceRow: View {
 /// A tab owns the same native select/close buttons in every row configuration.
 private struct SidebarTabRow: View {
   let tab: BrowserTab
-  let session: BrowserSession?
+  let session: (any BrowserSessionProtocol)?
   let selected: Bool
   let tier: WorkspaceCollection.TabTier
   let group: BrowserSplitLayout?

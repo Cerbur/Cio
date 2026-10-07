@@ -12,27 +12,39 @@ import Foundation
 
 /// Filename and response metadata translated from CEF into Swift value types.
 /// CEF objects never cross into the application model.
-struct DownloadMetadata: Equatable, Sendable {
-  let cefSuggestedFileName: String
-  let contentDisposition: String
-  let mimeType: String
-  let originalURL: URL?
+public struct DownloadMetadata: Equatable, Sendable {
+  public let cefSuggestedFileName: String
+  public let contentDisposition: String
+  public let mimeType: String
+  public let originalURL: URL?
 
-  static let empty = DownloadMetadata(
+  public static let empty = DownloadMetadata(
     cefSuggestedFileName: "",
     contentDisposition: "",
     mimeType: "",
     originalURL: nil)
+
+  public init(
+    cefSuggestedFileName: String,
+    contentDisposition: String,
+    mimeType: String,
+    originalURL: URL?
+  ) {
+    self.cefSuggestedFileName = cefSuggestedFileName
+    self.contentDisposition = contentDisposition
+    self.mimeType = mimeType
+    self.originalURL = originalURL
+  }
 }
 
-enum DownloadState: Equatable, Sendable {
+public enum DownloadState: Equatable, Sendable {
   case pending
   case downloading
   case completed
   case failed
   case cancelled
 
-  var displayName: String {
+  public var displayName: String {
     switch self {
     case .pending: return "Pending"
     case .downloading: return "Downloading"
@@ -50,34 +62,34 @@ enum DownloadState: Equatable, Sendable {
   }
 }
 
-struct DownloadItem: Identifiable, Equatable, Sendable {
-  let id: UUID
-  let cefDownloadID: UInt32
-  var fileName: String
-  var sourceURL: URL
-  var destinationURL: URL?
-  var receivedBytes: Int64
-  var totalBytes: Int64?
-  var state: DownloadState
-  var startedAt: Date
-  var finishedAt: Date?
+public struct DownloadItem: Identifiable, Equatable, Sendable {
+  public let id: UUID
+  public let cefDownloadID: UInt32
+  public var fileName: String
+  public var sourceURL: URL
+  public var destinationURL: URL?
+  public var receivedBytes: Int64
+  public var totalBytes: Int64?
+  public var state: DownloadState
+  public var startedAt: Date
+  public var finishedAt: Date?
 
-  var progress: Double? {
+  public var progress: Double? {
     guard let totalBytes, totalBytes > 0 else { return nil }
     return min(max(Double(receivedBytes) / Double(totalBytes), 0), 1)
   }
 }
 
 @MainActor
-final class DownloadManager: ObservableObject {
-  @Published private(set) var items: [DownloadItem] = []
+public final class DownloadManager: ObservableObject {
+  @Published public private(set) var items: [DownloadItem] = []
 
-  let downloadsDirectoryURL: URL
+  public let downloadsDirectoryURL: URL
 
   private let fileManager: FileManager
   private var itemIDsByCEFDownloadID: [UInt32: UUID] = [:]
 
-  init(
+  public init(
     downloadsDirectory: URL? = nil,
     fileManager: FileManager = .default,
     environment: [String: String] = ProcessInfo.processInfo.environment
@@ -100,14 +112,14 @@ final class DownloadManager: ObservableObject {
       attributes: [.posixPermissions: NSNumber(value: Int16(0o700))])
   }
 
-  var activeDownloadCount: Int {
+  public var activeDownloadCount: Int {
     items.filter { !$0.state.isTerminal }.count
   }
 
   /// Called by the bridge's OnBeforeDownload path. The same CEF identifier
   /// always receives the same destination, even if CEF repeats the callback.
   @discardableResult
-  func prepareDownload(
+  public func prepareDownload(
     downloadID: UInt32,
     sourceURL: URL,
     suggestedFileName: String,
@@ -157,7 +169,7 @@ final class DownloadManager: ObservableObject {
   /// configured download directory cannot be created or safely resolved. A
   /// visible failed row is preferable to silently losing the download event.
   @discardableResult
-  func recordFailedDownload(
+  public func recordFailedDownload(
     downloadID: UInt32,
     sourceURL: URL,
     suggestedFileName: String,
@@ -199,7 +211,7 @@ final class DownloadManager: ObservableObject {
 
   /// Applies one real CEF progress callback. Repeated callbacks update the
   /// existing item by CEF identifier instead of appending another row.
-  func update(
+  public func update(
     downloadID: UInt32,
     sourceURL: URL,
     suggestedFileName: String,
@@ -273,17 +285,17 @@ final class DownloadManager: ObservableObject {
     items[index] = item
   }
 
-  func open(_ item: DownloadItem) {
+  public func open(_ item: DownloadItem) {
     guard let destination = item.destinationURL, containedURL(destination) else { return }
     NSWorkspace.shared.open(destination)
   }
 
-  func showInFinder(_ item: DownloadItem) {
+  public func showInFinder(_ item: DownloadItem) {
     guard let destination = item.destinationURL, containedURL(destination) else { return }
     NSWorkspace.shared.activateFileViewerSelecting([destination])
   }
 
-  static func sanitizedFileName(_ suggestion: String) -> String {
+  public static func sanitizedFileName(_ suggestion: String) -> String {
     var result = suggestion
       .replacingOccurrences(of: "/", with: "_")
       .replacingOccurrences(of: "\\", with: "_")
@@ -303,7 +315,7 @@ final class DownloadManager: ObservableObject {
   /// provides. Content-Disposition is parsed here because the installed CEF
   /// build exposes the raw header even when its callback suggestion is the
   /// generic name "download".
-  static func resolvedFileName(
+  public static func resolvedFileName(
     sourceURL: URL,
     suggestedFileName: String,
     metadata: DownloadMetadata = .empty

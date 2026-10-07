@@ -1,3 +1,4 @@
+import CioEngine
 import AppKit
 import SwiftUI
 
@@ -6,11 +7,11 @@ import SwiftUI
 /// its origin's favicon without creating a browser session.
 struct TabFaviconView: View {
   let pageURL: URL?
-  let session: BrowserSession?
+  let session: (any BrowserSessionProtocol)?
   let size: CGFloat
   let fallbackLetter: String?
 
-  init(pageURL: URL?, session: BrowserSession?, size: CGFloat, fallbackLetter: String? = nil) {
+  init(pageURL: URL?, session: (any BrowserSessionProtocol)?, size: CGFloat, fallbackLetter: String? = nil) {
     self.pageURL = pageURL
     self.session = session
     self.size = size
@@ -29,7 +30,7 @@ struct TabFaviconView: View {
 }
 
 private struct LiveTabFaviconView: View {
-  @ObservedObject var session: BrowserSession
+  @ObservedEngine var session: any BrowserSessionProtocol
   let pageURL: URL?
   let size: CGFloat
   let fallbackLetter: String?

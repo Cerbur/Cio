@@ -10,15 +10,15 @@
 import CioModel
 import Foundation
 
-final class SessionStore {
+public final class SessionStore {
   static let fileName = "session-v1.json"
 
-  let sessionFileURL: URL
-  let isEnabled: Bool
+  public let sessionFileURL: URL
+  public let isEnabled: Bool
 
   private let fileManager: FileManager
 
-  init(
+  public init(
     dataDirectory: URL? = nil,
     fileManager: FileManager = .default,
     environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -45,7 +45,7 @@ final class SessionStore {
 
   /// Loads and validates a complete snapshot. Any malformed or unsupported
   /// file is ignored as a unit; callers start a fresh workspace instead.
-  func loadSnapshot() -> WorkspaceSessionSnapshot? {
+  public func loadSnapshot() -> WorkspaceSessionSnapshot? {
     guard isEnabled else { return nil }
     guard fileManager.fileExists(atPath: sessionFileURL.path) else { return nil }
 
@@ -70,7 +70,7 @@ final class SessionStore {
   /// Writes a complete snapshot using Foundation's atomic data-write path.
   /// The canonical file is never replaced by a partially-written JSON value.
   @discardableResult
-  func saveSnapshot(_ snapshot: WorkspaceSessionSnapshot) -> Bool {
+  public func saveSnapshot(_ snapshot: WorkspaceSessionSnapshot) -> Bool {
     guard isEnabled else { return true }
 
     do {

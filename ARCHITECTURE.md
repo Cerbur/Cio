@@ -27,6 +27,12 @@ BrowserMain
 
 The app, Helper tool and standalone unit-test bundle are Xcode targets. CioModel is a local Swift 6 package under Packages/CioModel with no package dependencies; App and tests import the same library. It contains workspace/tab/split/snapshot values, navigation parsing and URL redaction. Split geometry uses system CoreGraphics value types, with no AppKit, SwiftUI or CEF. Four suites run with swift test; remaining native/model tests use the standalone XCTest target. No test host starts Chromium for unit tests.
 
+## Local Engine boundary
+
+Packages/CioEngine depends only on CioModel. BrowserSessionProtocol and BrowserWorkspaceProtocol expose the existing navigation/editing/selection operations and original publishers; BrowserAddressEditing is implemented by the existing UI model. Each member's current caller is listed in docs/engine-interface.md. NavigationState, translated download values, site information and the original history/session/download/autocomplete services are CEF-free Engine code. Their algorithms and Runtime-owned instances are retained.
+
+BrowserSession and BrowserWorkspaceStore remain App implementations. Workspace focus/navigation/metadata/popup policy uses the session protocol. App-only concrete session lookup, runtime creation, registry and typed close acceptance/cancellation/OnBeforeClose callbacks remain with the original manager and termination coordinator. Publisher projections only erase the original @Published streams; downstream ordering and native controls are retained. Engine never imports UI, Bridge or CEF.
+
 ## CEF boundary and bundle
 
 BrowserMain executes any CEF subprocess handoff before initialization, initializes CEF before SwiftUI, and starts the native application run loop. CEFProcessHost uses CefScopedLibraryLoader: the framework is loaded at runtime, never linked directly. Only libcef_dll_wrapper.a is linked into the App and Helper.

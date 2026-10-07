@@ -6,6 +6,7 @@
 //  and stable Chromium surface.
 //
 
+import CioEngine
 import AppKit
 import Combine
 import SwiftUI
@@ -207,7 +208,7 @@ final class CioShellController: NSViewController {
     updateSidebarChromeLayout()
     updateSpotlightPresentation(runtime.workspaceStore.isSpotlightPresented)
     if !runtime.workspaceStore.isSpotlightPresented {
-      runtime.workspaceStore.selectedSession?.focusPage()
+      runtime.workspaceStore.engineSelectedSession?.focusPage()
     }
   }
 

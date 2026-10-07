@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-struct HistorySuggestionProvider {
+public struct HistorySuggestionProvider {
   let history: HistoryService
 
   func domainSuggestion(for input: String, now: Date = Date()) -> NavigationSuggestion? {
@@ -31,7 +31,7 @@ struct HistorySuggestionProvider {
       title: host, navigation: .url(origin), kind: .domainMatch, score: score)
   }
 
-  func suggestions(for input: String, now: Date = Date()) -> [NavigationSuggestion] {
+  public func suggestions(for input: String, now: Date = Date()) -> [NavigationSuggestion] {
     let query = input.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     guard !query.isEmpty else { return [] }
 
@@ -61,6 +61,10 @@ struct HistorySuggestionProvider {
         kind: .historyAddress,
         score: matchScore + min(visits, 10) * 2 + recency)
     }.sorted { $0.score > $1.score }.prefix(10).map { $0 }
+  }
+
+  public init(history: HistoryService) {
+    self.history = history
   }
 }
 

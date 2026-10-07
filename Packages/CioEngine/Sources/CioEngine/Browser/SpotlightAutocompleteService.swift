@@ -4,29 +4,29 @@
 import Combine
 import Foundation
 
-struct SpotlightSuggestion: Identifiable, Equatable {
-  typealias Kind = NavigationSuggestion.Kind
+public struct SpotlightSuggestion: Identifiable, Equatable, Sendable {
+  public typealias Kind = NavigationSuggestion.Kind
 
-  let title: String
-  let subtitle: String
-  let mode: SpotlightMode
-  let kind: Kind
+  public let title: String
+  public let subtitle: String
+  public let mode: SpotlightMode
+  public let kind: Kind
   let score: Int
 
   var action: SpotlightAction { mode.action }
 
-  var id: String {
+  public var id: String {
     switch mode {
     case .website(let url): "website:\(Self.urlKey(url))"
     case .googleSearch(let query): "search:\(query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current))"
     }
   }
 
-  var symbolName: String { mode.symbolName }
+  public var symbolName: String { mode.symbolName }
 
   static func urlKey(_ url: URL) -> String { NavigationSuggestion.urlKey(url) }
 
-  init(title: String, subtitle: String, mode: SpotlightMode, kind: Kind, score: Int) {
+  public init(title: String, subtitle: String, mode: SpotlightMode, kind: Kind, score: Int) {
     self.title = title
     self.subtitle = subtitle
     self.mode = mode
@@ -34,7 +34,7 @@ struct SpotlightSuggestion: Identifiable, Equatable {
     self.score = score
   }
 
-  init(_ suggestion: NavigationSuggestion) {
+  public init(_ suggestion: NavigationSuggestion) {
     let mode: SpotlightMode
     switch suggestion.navigation {
     case .url(let url): mode = .website(url)
@@ -55,15 +55,15 @@ struct SpotlightSuggestion: Identifiable, Equatable {
 }
 
 @MainActor
-final class SpotlightAutocompleteService: ObservableObject {
-  @Published private(set) var suggestions: [SpotlightSuggestion] = []
-  private(set) var displayedInput = ""
+public final class SpotlightAutocompleteService: ObservableObject {
+  @Published public private(set) var suggestions: [SpotlightSuggestion] = []
+  public private(set) var displayedInput = ""
   var requestedInput: String { autocomplete.requestedInput }
 
   private let autocomplete: NavigationAutocompleteService
   private var observation: AnyCancellable?
 
-  init(history: HistoryService, searchProvider: SearchSuggestionProvider = .init()) {
+  public init(history: HistoryService, searchProvider: SearchSuggestionProvider = .init()) {
     autocomplete = NavigationAutocompleteService(history: history, searchProvider: searchProvider)
     observation = autocomplete.$snapshot.sink { [weak self] snapshot in
       guard let self else { return }
@@ -77,11 +77,11 @@ final class SpotlightAutocompleteService: ObservableObject {
     }
   }
 
-  func update(_ text: String) { autocomplete.update(text) }
+  public func update(_ text: String) { autocomplete.update(text) }
 
-  func cancel() { autocomplete.cancel() }
+  public func cancel() { autocomplete.cancel() }
 
-  static func merge(
+  public static func merge(
     domain: SpotlightSuggestion?, input: SpotlightSuggestion?,
     history: [SpotlightSuggestion], online: [SpotlightSuggestion]
   ) -> [SpotlightSuggestion] {

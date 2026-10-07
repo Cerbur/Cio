@@ -16,12 +16,13 @@
 //  window in which the edit buffer can be clobbered.
 //
 
+import CioEngine
 import AppKit
 import Foundation
 import OSLog
 
 @MainActor
-final class AddressFieldModel: ObservableObject {
+final class AddressFieldModel: BrowserAddressEditing {
   /// Address bar text shown when Chromium has no page yet.
   static let placeholder = "Search or enter website name"
 

@@ -1,3 +1,4 @@
+@testable import CioEngine
 import XCTest
 
 private actor AddressRequestLog {

@@ -5,6 +5,7 @@
 //  CEF-free tests for SQLite history semantics and isolation.
 //
 
+@testable import CioEngine
 import XCTest
 
 final class HistoryStoreTests: XCTestCase {

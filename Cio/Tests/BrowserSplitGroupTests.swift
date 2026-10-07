@@ -1,3 +1,4 @@
+@testable import CioEngine
 import CioModel
 import XCTest
 

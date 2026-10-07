@@ -1,3 +1,4 @@
+@testable import CioEngine
 import XCTest
 
 final class SpotlightModeTests: XCTestCase {

@@ -14,6 +14,7 @@
 //  than by parsing a lifecycle string.
 //
 
+import CioEngine
 import Foundation
 
 /// Owns the CEF runtime for the whole application.

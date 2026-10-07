@@ -7,6 +7,7 @@
 //  aggregate facts; the exact URLs stay in the isolated private database.
 //
 
+import CioEngine
 import AppKit
 import Foundation
 

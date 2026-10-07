@@ -9,21 +9,21 @@
 import Foundation
 import OSLog
 
-enum AppLog {
+public enum AppLog {
   private static let subsystem = Bundle.main.bundleIdentifier ?? "com.example.Cio"
 
   /// Application lifecycle: launch, activation, termination.
-  static let app = Logger(subsystem: subsystem, category: "app")
+  public static let app = Logger(subsystem: subsystem, category: "app")
 
   /// CEF initialization, shutdown, message pump and bridge failures.
-  static let cef = Logger(subsystem: subsystem, category: "cef")
+  public static let cef = Logger(subsystem: subsystem, category: "cef")
 
   /// Browser creation and destruction.
-  static let browser = Logger(subsystem: subsystem, category: "browser")
+  public static let browser = Logger(subsystem: subsystem, category: "browser")
 
   /// Navigation events.
-  static let navigation = Logger(subsystem: subsystem, category: "navigation")
+  public static let navigation = Logger(subsystem: subsystem, category: "navigation")
 
   /// Session / workspace state.
-  static let session = Logger(subsystem: subsystem, category: "session")
+  public static let session = Logger(subsystem: subsystem, category: "session")
 }

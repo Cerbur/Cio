@@ -48,7 +48,7 @@ The pre-refactor baseline had passing build, 244 passing unit tests, runtime/bun
 
 ```text
 Cio/
-  App/                    entry point, scene, menus, runtime, diagnostics, logging
+  App/                    entry point, scene, menus, runtime and diagnostics
   Bridge/                 Objective-C++ boundary, event support, bridging header
   Browser/                workspace policy, sessions and CEF containers
   Animation/              shared motion and AnimationValues (see its README)
@@ -60,9 +60,6 @@ Cio/
     Internal/             History and Downloads presentation
     Settings/             settings UI
     Visual/               native glass, navigation buttons and shared favicon views
-  Persistence/            session JSON and SQLite history
-  History/                history domain/service
-  Downloads/              safe destination policy and process-memory download state
   Helper/                 separate CEF process entry point
   Resources/              Info.plist and signing entitlements
   Tests/                  standalone logic/native-model tests
@@ -70,6 +67,14 @@ Packages/
   CioModel/
     Sources/CioModel/     workspace/tab/split/snapshot values, parsing, URL redaction
     Tests/CioModelTests/  workspace, parsing, exact-URL and log-redaction tests
+  CioEngine/
+    Sources/CioEngine/
+      Interfaces/         original-object protocols and navigation/download values
+      Browser/            site information, navigation and Spotlight completion
+      Persistence/        session JSON and SQLite history
+      History/            history values
+      Downloads/          original destination policy and download state
+      App/                shared logging categories
 SchemeTemplates/Cio.xcscheme
 Scripts/                  reproducible build and verification tools
 ThirdParty/               untracked CEF distribution and wrapper products

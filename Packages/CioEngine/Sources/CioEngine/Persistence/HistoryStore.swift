@@ -10,22 +10,22 @@ import Combine
 import Foundation
 import SQLite3
 
-enum HistoryStoreError: Error, Equatable {
+public enum HistoryStoreError: Error, Equatable, Sendable {
   case sqlite(Int32)
   case unsupportedSchema(Int32)
   case invalidRow
 }
 
-final class HistoryStore {
+public final class HistoryStore {
   static let fileName = "history.sqlite3"
   static let schemaVersion: Int32 = 1
 
-  let databaseURL: URL
+  public let databaseURL: URL
 
   private var database: OpaquePointer?
   private let fileManager: FileManager
 
-  init(
+  public init(
     dataDirectory: URL? = nil,
     fileManager: FileManager = .default,
     environment: [String: String] = ProcessInfo.processInfo.environment
@@ -65,11 +65,11 @@ final class HistoryStore {
     sqlite3_close(database)
   }
 
-  var userVersion: Int32 {
+  public var userVersion: Int32 {
     (try? scalarInt32("PRAGMA user_version;")) ?? 0
   }
 
-  func loadRecent(limit: Int = 500) throws -> [HistoryEntry] {
+  public func loadRecent(limit: Int = 500) throws -> [HistoryEntry] {
     let statement = try prepare(
       """
       SELECT id, url, title, visit_count, first_visited_at, last_visited_at
@@ -93,7 +93,7 @@ final class HistoryStore {
   }
 
   @discardableResult
-  func recordVisit(url: URL, title: String, at date: Date = Date()) throws -> HistoryEntry {
+  public func recordVisit(url: URL, title: String, at date: Date = Date()) throws -> HistoryEntry {
     guard HistoryURLPolicy.isRecordable(url) else {
       throw HistoryStoreError.invalidRow
     }
@@ -129,7 +129,7 @@ final class HistoryStore {
     return entry
   }
 
-  func updateTitle(for url: URL, title: String) throws {
+  public func updateTitle(for url: URL, title: String) throws {
     guard let usefulTitle = HistoryURLPolicy.usefulTitle(title) else { return }
 
     let statement = try prepare(
@@ -140,7 +140,7 @@ final class HistoryStore {
     try stepDone(statement)
   }
 
-  func clear() throws {
+  public func clear() throws {
     try execute("DELETE FROM history_entries;")
   }
 
@@ -286,17 +286,17 @@ final class HistoryStore {
 }
 
 @MainActor
-final class HistoryService: ObservableObject {
-  @Published private(set) var entries: [HistoryEntry] = []
+public final class HistoryService: ObservableObject {
+  @Published public private(set) var entries: [HistoryEntry] = []
 
   let store: HistoryStore
 
-  init(store: HistoryStore) {
+  public init(store: HistoryStore) {
     self.store = store
     reload()
   }
 
-  convenience init(
+  public convenience init(
     environment: [String: String] = ProcessInfo.processInfo.environment,
     fileManager: FileManager = .default
   ) {
@@ -310,7 +310,7 @@ final class HistoryService: ObservableObject {
   }
 
   @discardableResult
-  func recordVisit(url: URL, title: String, at date: Date = Date()) -> HistoryEntry? {
+  public func recordVisit(url: URL, title: String, at date: Date = Date()) -> HistoryEntry? {
     guard HistoryURLPolicy.isRecordable(url), let entry = try? store.recordVisit(url: url, title: title, at: date) else {
       return nil
     }
@@ -318,13 +318,13 @@ final class HistoryService: ObservableObject {
     return entry
   }
 
-  func updateTitle(for url: URL, title: String) {
+  public func updateTitle(for url: URL, title: String) {
     guard HistoryURLPolicy.isRecordable(url) else { return }
     try? store.updateTitle(for: url, title: title)
     reload()
   }
 
-  func clear() {
+  public func clear() {
     try? store.clear()
     entries.removeAll()
   }

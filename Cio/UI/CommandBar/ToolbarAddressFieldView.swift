@@ -9,6 +9,7 @@
 //  the capsule's appearance lives here, while toolbar events own its focus state.
 //
 
+import CioEngine
 import AppKit
 import SwiftUI
 
@@ -55,15 +56,15 @@ struct ToolbarAddressFieldView: View {
   @ObservedObject var presentation: ToolbarPresentationState
   @ObservedObject var siteInformation: AddressSiteInformationState
   @State private var hoverGate = SpotlightHoverGate()
-  var onFocusChange: (BrowserSession, Bool) -> Void
-  var onReloadOrStop: (BrowserSession) -> Void
-  var onSiteInformationToggle: (BrowserSession) -> Void
+  var onFocusChange: (any BrowserSessionProtocol, Bool) -> Void
+  var onReloadOrStop: (any BrowserSessionProtocol) -> Void
+  var onSiteInformationToggle: (any BrowserSessionProtocol) -> Void
   var onCertificate: (SiteInformation) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  private var session: BrowserSession? {
-    if let tabID { return workspace.session(for: tabID) }
-    return workspace.selectedSession
+  private var session: (any BrowserSessionProtocol)? {
+    if let tabID { return workspace.browserSession(for: tabID) }
+    return workspace.engineSelectedSession
   }
 
   private var rowCount: Int { interaction.isFocused ? autocomplete.suggestions.count : 0 }
@@ -139,25 +140,25 @@ struct ToolbarAddressFieldView: View {
     .animation(reduceMotion ? nil : .spring(response: AnimationValues.AddressField.siteInformationResponse, dampingFraction: AnimationValues.AddressField.siteInformationDamping),
                value: siteInformation.isPresented)
     .onChange(of: interaction.isFocused) { _, focused in
-      if focused, let session { autocomplete.begin(session.addressField.editText) }
+      if focused, let session { autocomplete.begin(session.engineAddressField.editText) }
       else { autocomplete.end() }
       hoverGate.reset(to: NSEvent.mouseLocation)
     }
     .onChange(of: session?.id) { _, _ in autocomplete.end() }
   }
 
-  private func addressField(for session: BrowserSession, width: CGFloat) -> some View {
+  private func addressField(for session: any BrowserSessionProtocol, width: CGFloat) -> some View {
     let isExpanded = rowCount > 0
     let textInset = isExpanded ? AddressCapsuleLayout.suggestionTextInset : AddressCapsuleLayout.endControlWidth
     return ZStack(alignment: .leading) {
       AddressField(
-        model: session.addressField,
+        model: session.engineAddressField,
         isFocused: interaction.isFocused,
         acceptsInteraction: { presentation.isVisible },
         completion: autocomplete.isActive && autocomplete.hasUserEdited ? autocomplete.input : nil,
         dropdownHeight: AddressCapsuleLayout.panelHeight(rowCount: rowCount) - AddressCapsuleLayout.height,
         onChange: { text, isComposing, allowsCompletion in
-          session.addressField.userChangedText(text)
+          session.engineAddressField.userChangedText(text)
           autocomplete.edit(text, isComposing: isComposing, allowsCompletion: allowsCompletion)
           hoverGate.reset(to: NSEvent.mouseLocation)
         },
@@ -177,7 +178,7 @@ struct ToolbarAddressFieldView: View {
         content.opacity(interaction.isFocused ? 1 : 0)
       }
       .overlay {
-        AddressCompactText(model: session.addressField, isFocused: interaction.isFocused)
+        AddressCompactText(model: session.engineAddressField, isFocused: interaction.isFocused)
       }
       .padding(.leading, textInset)
       .accessibilityIdentifier("address-input")
@@ -218,7 +219,7 @@ struct ToolbarAddressFieldView: View {
   }
 
   private func suggestionRow(_ suggestion: SpotlightSuggestion, index: Int,
-                             session: BrowserSession) -> some View {
+                             session: any BrowserSessionProtocol) -> some View {
     Button { submit(session: session, mode: suggestion.mode) } label: {
       HStack(spacing: AddressCapsuleLayout.suggestionIconSpacing) {
         suggestionIcon(suggestion, size: 18)
@@ -260,13 +261,13 @@ struct ToolbarAddressFieldView: View {
     }
   }
 
-  private func submit(session: BrowserSession, mode: SpotlightMode? = nil) {
+  private func submit(session: any BrowserSessionProtocol, mode: SpotlightMode? = nil) {
     guard let mode = mode ?? autocomplete.selectedMode else {
       session.submitAddressField()
       autocomplete.end()
       return
     }
-    session.addressField.endEditing()
+    session.engineAddressField.endEditing()
     if case .openTab(let url) = mode.action { session.load(url) }
     autocomplete.end()
     session.focusPage()
@@ -277,7 +278,7 @@ struct ToolbarAddressFieldView: View {
 /// The idle domain leaves to the left and returns moving right from that same
 /// offset, while the native field retains ownership of editing and selection.
 private struct AddressCompactText: View {
-  @ObservedObject var model: AddressFieldModel
+  @ObservedEngine var model: any BrowserAddressEditing
   var isFocused: Bool
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -306,7 +307,7 @@ private struct AddressCompactText: View {
 /// Matches the reload control's hover timing and scale, keeping the circular
 /// hit area fixed while only the favicon gently grows and settles back.
 private struct AddressFaviconButton: View {
-  @ObservedObject var session: BrowserSession
+  @ObservedEngine var session: any BrowserSessionProtocol
   var onSiteInformationToggle: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isHovered = false
@@ -330,7 +331,7 @@ private struct AddressFaviconButton: View {
 
 /// Loading state comes from the selected session; the idle symbol rests upright.
 private struct AddressReloadButton: View {
-  @ObservedObject var session: BrowserSession
+  @ObservedEngine var session: any BrowserSessionProtocol
   var onReloadOrStop: () -> Void
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion

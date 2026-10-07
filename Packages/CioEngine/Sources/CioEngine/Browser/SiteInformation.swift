@@ -1,11 +1,11 @@
 import Foundation
 
 /// A snapshot of the visible document, never an inference from HTTPS alone.
-struct SiteInformation {
-  enum Connection {
+public struct SiteInformation: Sendable {
+  public enum Connection: Sendable {
     case secure, unencrypted, invalidCertificate, mixedContent, unavailable, local
 
-    var title: String {
+    public var title: String {
       switch self {
       case .secure: "连接是安全的"
       case .unencrypted: "连接未加密"
@@ -16,7 +16,7 @@ struct SiteInformation {
       }
     }
 
-    var symbol: String {
+    public var symbol: String {
       switch self {
       case .secure: "lock.fill"
       case .unencrypted, .invalidCertificate, .mixedContent: "exclamationmark.shield"
@@ -25,7 +25,7 @@ struct SiteInformation {
       }
     }
 
-    var explanation: String {
+    public var explanation: String {
       switch self {
       case .secure:
         "你与此网站之间传输的信息已通过 HTTPS 加密，Chromium 已验证网站证书。"
@@ -43,19 +43,19 @@ struct SiteInformation {
     }
   }
 
-  let url: URL?
-  let title: String
-  let connection: Connection
-  let certificateValid: Bool
-  let certificateChain: [Data]
+  public let url: URL?
+  public let title: String
+  public let connection: Connection
+  public let certificateValid: Bool
+  public let certificateChain: [Data]
 
-  var host: String {
+  public var host: String {
     guard let url else { return "网站信息" }
     if let host = url.host { return host + (url.port.map { ":\($0)" } ?? "") }
     return url.isFileURL ? "本地文件" : "浏览器页面"
   }
 
-  init(url: URL?, title: String, isLoading: Bool, loadFailed: Bool,
+  public init(url: URL?, title: String, isLoading: Bool, loadFailed: Bool,
        entryURL: URL?, usesTLS: Bool, certificateValid: Bool,
        hasInsecureContent: Bool, certificateChain: [Data]) {
     self.url = url

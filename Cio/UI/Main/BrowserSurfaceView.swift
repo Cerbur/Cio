@@ -20,6 +20,7 @@
 //  containers, no render can destroy a live browser.
 //
 
+import CioEngine
 import SwiftUI
 
 struct BrowserSurfaceView: NSViewRepresentable {

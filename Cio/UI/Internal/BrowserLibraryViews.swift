@@ -6,6 +6,7 @@
 //  The Chromium host remains mounted behind the active library.
 //
 
+import CioEngine
 import AppKit
 import SwiftUI
 

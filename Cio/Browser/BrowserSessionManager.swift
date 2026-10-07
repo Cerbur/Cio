@@ -11,6 +11,7 @@
 //  BrowserSurfaceHostView synchronization.
 //
 
+import CioEngine
 import CioModel
 import AppKit
 import Foundation

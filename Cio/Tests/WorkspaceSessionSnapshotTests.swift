@@ -5,6 +5,7 @@
 //  CEF-free Milestone 6 persistence and restore tests.
 //
 
+@testable import CioEngine
 import CioModel
 import XCTest
 

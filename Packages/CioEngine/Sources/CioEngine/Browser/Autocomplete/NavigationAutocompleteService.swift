@@ -5,8 +5,8 @@ import Foundation
 /// One instance per input surface. History and the search cache can be shared,
 /// while in-flight work, input and cancellation belong to this instance.
 @MainActor
-final class NavigationAutocompleteService: ObservableObject {
-  @Published private(set) var snapshot: NavigationAutocompleteSnapshot = .empty
+public final class NavigationAutocompleteService: ObservableObject {
+  @Published public private(set) var snapshot: NavigationAutocompleteSnapshot = .empty
 
   private let historyProvider: HistorySuggestionProvider
   private let searchProvider: SearchSuggestionProvider
@@ -20,12 +20,12 @@ final class NavigationAutocompleteService: ObservableObject {
   private var onlineSuggestions: [NavigationSuggestion] = []
   private(set) var requestedInput = ""
 
-  init(history: HistoryService, searchProvider: SearchSuggestionProvider = .init()) {
+  public init(history: HistoryService, searchProvider: SearchSuggestionProvider = .init()) {
     historyProvider = HistorySuggestionProvider(history: history)
     self.searchProvider = searchProvider
   }
 
-  func update(_ text: String) {
+  public func update(_ text: String) {
     let input = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if input == requestedInput && (remoteTask != nil || historyTask != nil) { return }
     remoteTask?.cancel()
@@ -89,7 +89,7 @@ final class NavigationAutocompleteService: ObservableObject {
     }
   }
 
-  func cancel() {
+  public func cancel() {
     remoteTask?.cancel()
     historyTask?.cancel()
     remoteTask = nil

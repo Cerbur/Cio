@@ -7,6 +7,7 @@
 //  adds an independent toolbar safe area above the Main View.
 //
 
+import CioEngine
 import AppKit
 import Combine
 import SwiftUI
@@ -159,9 +160,9 @@ final class BrowserToolbarController: NSObject {
   private enum ToolbarEvent {
     case geometryChanged
     case sessionChanged
-    case addressFocusChanged(BrowserSession, Bool)
-    case addressFocusRequested(BrowserSession)
-    case addressReloadOrStop(BrowserSession)
+    case addressFocusChanged(any BrowserSessionProtocol, Bool)
+    case addressFocusRequested(any BrowserSessionProtocol)
+    case addressReloadOrStop(any BrowserSessionProtocol)
   }
 
   private let workspace: BrowserWorkspaceStore
@@ -180,7 +181,7 @@ final class BrowserToolbarController: NSObject {
   private var windowObservations = Set<AnyCancellable>()
   private var workspaceObservation: AnyCancellable?
   private var selectedSessionObservations = Set<AnyCancellable>()
-  private weak var observedSession: BrowserSession?
+  private weak var observedSession: (any BrowserSessionProtocol)?
   private let addressPresentation = BrowserInteractionState()
   private let toolbarPresentation = ToolbarPresentationState()
   private let siteInformation = AddressSiteInformationState()
@@ -220,23 +221,23 @@ final class BrowserToolbarController: NSObject {
       for: .browserFocusAddressField
     ).sink { [weak self] notification in
       MainActor.assumeIsolated {
-        guard let session = notification.object as? BrowserSession else { return }
+        guard let session = notification.object as? any BrowserSessionProtocol else { return }
         self?.handle(.addressFocusRequested(session))
       }
     }
     bindSession(boundSession)
   }
 
-  private var boundSession: BrowserSession? {
-    workspace.session(for: tabID)
+  private var boundSession: (any BrowserSessionProtocol)? {
+    workspace.browserSession(for: tabID)
   }
 
-  private func isActive(_ session: BrowserSession) -> Bool {
-    boundSession === session && workspace.selectedSession === session
+  private func isActive(_ session: any BrowserSessionProtocol) -> Bool {
+    boundSession === session && workspace.engineSelectedSession === session
       && (isActivePane?() ?? true)
   }
 
-  private func activatePane(for session: BrowserSession) {
+  private func activatePane(for session: any BrowserSessionProtocol) {
     guard boundSession === session, !isActive(session) else { return }
     if let onActivatePane { onActivatePane() }
     else { workspace.selectTab(id: session.tabID) }
@@ -452,7 +453,7 @@ final class BrowserToolbarController: NSObject {
     handle(.sessionChanged)
   }
 
-  private func bindSession(_ session: BrowserSession?) {
+  private func bindSession(_ session: (any BrowserSessionProtocol)?) {
     guard let session else {
       selectedSessionObservations.removeAll()
       observedSession = nil
@@ -465,8 +466,8 @@ final class BrowserToolbarController: NSObject {
       selectedSessionObservations.removeAll()
       observedSession = session
       Publishers.CombineLatest(
-        session.$canGoBack,
-        session.$canGoForward
+        session.canGoBackPublisher,
+        session.canGoForwardPublisher
       )
       .receive(on: RunLoop.main)
       .sink { [weak self, weak session] canGoBack, canGoForward in
@@ -480,10 +481,10 @@ final class BrowserToolbarController: NSObject {
       }
       .store(in: &selectedSessionObservations)
 
-      session.$url.removeDuplicates().dropFirst()
+      session.urlPublisher.removeDuplicates().dropFirst()
         .sink { [weak self] _ in self?.siteInformation.dismiss() }
         .store(in: &selectedSessionObservations)
-      session.$isLoading.removeDuplicates().dropFirst()
+      session.isLoadingPublisher.removeDuplicates().dropFirst()
         .sink { [weak self, weak session] loading in
           guard let self, let session else { return }
           if loading { self.siteInformation.dismiss() }
@@ -496,7 +497,7 @@ final class BrowserToolbarController: NSObject {
           }
         }
         .store(in: &selectedSessionObservations)
-      Publishers.CombineLatest(session.$lastErrorCode, session.$rendererCrashed)
+      Publishers.CombineLatest(session.lastErrorCodePublisher, session.rendererCrashedPublisher)
         .sink { [weak self] error, crashed in
           if error != nil || crashed { self?.siteInformation.dismiss() }
         }
@@ -581,7 +582,7 @@ final class BrowserToolbarController: NSObject {
     session.goForward()
   }
 
-  private func toggleSiteInformation(for session: BrowserSession) {
+  private func toggleSiteInformation(for session: any BrowserSessionProtocol) {
     guard !isDisposed, boundSession === session, toolbarPresentation.isVisible else { return }
     activatePane(for: session)
     if siteInformation.isPresented { closeSiteInformation(); return }

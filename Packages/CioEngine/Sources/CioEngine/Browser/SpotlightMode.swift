@@ -10,7 +10,7 @@
 import CioModel
 import Foundation
 
-enum SpotlightAction: Equatable {
+public enum SpotlightAction: Equatable, Sendable {
   case openTab(URL)
 
   // TODO: Add History and Downloads modes with actions that open their own
@@ -18,11 +18,11 @@ enum SpotlightAction: Equatable {
   // is selected; only website and Google Search currently open the Space view.
 }
 
-enum SpotlightMode: Equatable {
+public enum SpotlightMode: Equatable, Sendable {
   case website(URL)
   case googleSearch(String)
 
-  var action: SpotlightAction {
+  public var action: SpotlightAction {
     switch self {
     case .website(let url): .openTab(url)
     case .googleSearch(let query): .openTab(GoogleSearchEngine().searchURL(for: query))
@@ -50,7 +50,7 @@ enum SpotlightMode: Equatable {
     }
   }
 
-  static func suggestions(for text: String) -> [SpotlightMode] {
+  public static func suggestions(for text: String) -> [SpotlightMode] {
     guard let input = parseNavigationInput(text) else { return [] }
     switch input {
     case .url(let url):

@@ -6,6 +6,7 @@
 //  normal field-editor behavior for IME composition and keyboard selection.
 //
 
+import CioEngine
 import AppKit
 import SwiftUI
 

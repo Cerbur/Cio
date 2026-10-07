@@ -15,6 +15,7 @@
 //  Tooling only: inert unless --dump-main-menu is passed.
 //
 
+import CioEngine
 import AppKit
 
 @MainActor

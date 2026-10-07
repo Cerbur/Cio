@@ -22,11 +22,12 @@
 //  field reports edits back through the coordinator.
 //
 
+import CioEngine
 import AppKit
 import SwiftUI
 
 struct AddressField: NSViewRepresentable {
-  @ObservedObject var model: AddressFieldModel
+  @ObservedEngine var model: any BrowserAddressEditing
   /// The toolbar controller owns the presentation state across tab changes.
   var isFocused: Bool
   /// Local AppKit monitors bypass SwiftUI's allowsHitTesting. Read the owning
@@ -138,7 +139,7 @@ struct AddressField: NSViewRepresentable {
     private var outsideClickMonitor: Any?
     /// The model the current observation is registered for. A focus request is
     /// only honoured for the session's own address field.
-    private var observedModel: AddressFieldModel?
+    private var observedModel: (any BrowserAddressEditing)?
     private(set) var isFocused = false
     private weak var addressField: CioAddressField?
     private let log = AppLog.navigation
@@ -183,7 +184,7 @@ struct AddressField: NSViewRepresentable {
     /// session's AddressFieldModel, so the observation is registered for that
     /// model only (Milestone 3 section 15). A field can therefore never react to
     /// another tab's ⌘L.
-    func observeFocusRequests(for field: CioAddressField, model: AddressFieldModel) {
+    func observeFocusRequests(for field: CioAddressField, model: any BrowserAddressEditing) {
       addressField = field
       if observedModel === model, focusObserver != nil { return }
       stopObservingFocusRequests()

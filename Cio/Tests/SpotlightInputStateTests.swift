@@ -1,3 +1,4 @@
+@testable import CioEngine
 import XCTest
 
 final class SpotlightInputStateTests: XCTestCase {

@@ -25,40 +25,10 @@
 //
 
 import CioModel
+import Combine
+import CioEngine
 import AppKit
 import Foundation
-
-/// A snapshot of everything the navigation UI needs (ARCHITECTURE.md section
-/// 20). Produced from the CEF callbacks; never derived from a Swift-side
-/// history counter.
-struct NavigationState: Equatable {
-  /// URL of the main frame.
-  var url: URL?
-  var title = ""
-
-  var isLoading = false
-  /// 0...1 while loading; `nil` when Chromium has not reported a value.
-  var loadingProgress: Double?
-
-  var canGoBack = false
-  var canGoForward = false
-}
-
-/// A CEF download callback translated into Swift-safe value types. CEF objects
-/// are never retained by BrowserSession or exposed beyond BrowserBridge.
-struct BrowserDownloadUpdate: Sendable {
-  let downloadID: UInt32
-  let sourceURL: URL
-  let suggestedFileName: String
-  let metadata: DownloadMetadata
-  let destinationURL: URL?
-  let receivedBytes: Int64
-  let totalBytes: Int64?
-  let isInProgress: Bool
-  let isComplete: Bool
-  let isCancelled: Bool
-  let isInterrupted: Bool
-}
 
 private enum BrowserSessionCloseState {
   case open
@@ -970,4 +940,16 @@ extension BrowserSession: NSWindowDelegate {
     guard let window = notification.object as? NSWindow, window === devToolsWindow else { return }
     bridge?.resizeDevTools()
   }
+}
+
+// Protocol projections retain the original session, editor and @Published streams.
+extension BrowserSession: BrowserSessionProtocol {
+  var engineAddressField: any BrowserAddressEditing { addressField }
+  var canGoBackPublisher: AnyPublisher<Bool, Never> { $canGoBack.eraseToAnyPublisher() }
+  var canGoForwardPublisher: AnyPublisher<Bool, Never> { $canGoForward.eraseToAnyPublisher() }
+  var urlPublisher: AnyPublisher<URL?, Never> { $url.eraseToAnyPublisher() }
+  var isLoadingPublisher: AnyPublisher<Bool, Never> { $isLoading.eraseToAnyPublisher() }
+  var lastErrorCodePublisher: AnyPublisher<Int?, Never> { $lastErrorCode.eraseToAnyPublisher() }
+  var rendererCrashedPublisher: AnyPublisher<Bool, Never> { $rendererCrashed.eraseToAnyPublisher() }
+  var hasFinishedFirstLoadPublisher: AnyPublisher<Bool, Never> { $hasFinishedFirstLoad.eraseToAnyPublisher() }
 }

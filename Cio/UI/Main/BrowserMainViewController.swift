@@ -6,6 +6,7 @@
 //  The Space sidebar and browser are rectangular; this view owns their edge.
 //
 
+import CioEngine
 import CioModel
 import AppKit
 import Combine
@@ -420,7 +421,7 @@ private struct BrowserShellContentView: View {
       }
 
       if runtime.presentedInternalPanel == nil,
-         let session = workspace.selectedSession, session.rendererCrashed {
+         let session = workspace.engineSelectedSession, session.rendererCrashed {
         VStack(spacing: 12) {
           Image(systemName: "exclamationmark.triangle")
             .font(.system(size: 28))
@@ -477,7 +478,7 @@ private struct BrowserTabDragPresentation: View {
   fileprivate func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
     if let tab = workspace.tab(withID: id) {
       DragContent(
-        pageURL: tab.url, session: workspace.session(for: id),
+        pageURL: tab.url, session: workspace.browserSession(for: id),
         title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
         rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
     }
@@ -490,7 +491,7 @@ private struct BrowserTabDragPresentation: View {
     if let tab = workspace.tab(withID: id) {
       if style == .row {
         SidebarRowLabel(title: tab.displayTitle) {
-          TabFaviconView(pageURL: tab.url, session: workspace.session(for: id),
+          TabFaviconView(pageURL: tab.url, session: workspace.browserSession(for: id),
             size: SidebarTabAppearance.faviconSize)
         }
         .padding(.trailing, BrowserLayout.sidebarTabTrailingInset)
@@ -505,7 +506,7 @@ private struct BrowserTabDragPresentation: View {
   /// title opacity can change without replacing either text view.
   private struct DragContent: View, Animatable {
     let pageURL: URL?
-    let session: BrowserSession?
+    let session: (any BrowserSessionProtocol)?
     let title: String
     let fallbackLetter: String?
     nonisolated var rowAmount: CGFloat

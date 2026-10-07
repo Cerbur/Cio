@@ -10,6 +10,7 @@
 //  this one stays about user commands.
 //
 
+import CioEngine
 import CioModel
 import AppKit
 import Foundation

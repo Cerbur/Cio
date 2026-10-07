@@ -7,17 +7,17 @@
 
 import Foundation
 
-struct HistoryEntry: Identifiable, Equatable, Sendable {
-  let id: UUID
-  let url: URL
-  var title: String
-  var visitCount: Int
-  var firstVisitedAt: Date
-  var lastVisitedAt: Date
+public struct HistoryEntry: Identifiable, Equatable, Sendable {
+  public let id: UUID
+  public let url: URL
+  public var title: String
+  public var visitCount: Int
+  public var firstVisitedAt: Date
+  public var lastVisitedAt: Date
 }
 
-enum HistoryURLPolicy {
-  static func isRecordable(_ url: URL) -> Bool {
+public enum HistoryURLPolicy {
+  public static func isRecordable(_ url: URL) -> Bool {
     guard let scheme = url.scheme?.lowercased() else { return false }
     return scheme == "http" || scheme == "https"
   }

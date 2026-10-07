@@ -2,7 +2,7 @@ import CioModel
 import Foundation
 
 @MainActor
-final class SearchSuggestionCache {
+public final class SearchSuggestionCache {
   static let shared = SearchSuggestionCache()
 
   private struct Entry {
@@ -38,7 +38,7 @@ final class SearchSuggestionCache {
     }
   }
 
-  func canRequest(now: Date = Date()) -> Bool {
+  public func canRequest(now: Date = Date()) -> Bool {
     guard let retryAfter else { return true }
     if now >= retryAfter {
       self.retryAfter = nil
@@ -48,25 +48,27 @@ final class SearchSuggestionCache {
     return false
   }
 
-  func recordFailure(now: Date = Date()) {
+  public func recordFailure(now: Date = Date()) {
     consecutiveFailures += 1
     if consecutiveFailures >= 2 {
       retryAfter = now.addingTimeInterval(failureCooldown)
     }
   }
+
+  public init() {}
 }
 
 @MainActor
-struct SearchSuggestionProvider {
+public struct SearchSuggestionProvider {
   let fetch: @Sendable (URLRequest) async throws -> (Data, URLResponse)
   private let cache: SearchSuggestionCache
 
-  init(session: URLSession = .shared) {
+  public init(session: URLSession = .shared) {
     fetch = { request in try await session.data(for: request) }
     cache = .shared
   }
 
-  init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
+  public init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
     self.fetch = fetch
     cache = SearchSuggestionCache()
   }
@@ -77,7 +79,7 @@ struct SearchSuggestionProvider {
 
   var canRequest: Bool { cache.canRequest() }
 
-  func suggestions(for input: String) async throws -> [NavigationSuggestion] {
+  public func suggestions(for input: String) async throws -> [NavigationSuggestion] {
     if let cached = cache.suggestions(for: input) { return cached }
     guard cache.canRequest() else { return [] }
     var components = URLComponents(string: "https://suggestqueries.google.com/complete/search")!
@@ -114,7 +116,7 @@ struct SearchSuggestionProvider {
     }
   }
 
-  static func maySend(_ input: String) -> Bool {
+  public static func maySend(_ input: String) -> Bool {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed.count <= 200 else { return false }
     // Check each token as well as the full input, so a private address inside

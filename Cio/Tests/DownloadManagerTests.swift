@@ -5,6 +5,7 @@
 //  CEF-free tests for download state and destination policy.
 //
 
+@testable import CioEngine
 import XCTest
 
 @MainActor

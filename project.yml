@@ -78,6 +78,9 @@ packages:
   CioModel:
     path: Packages/CioModel
 
+  CioEngine:
+    path: Packages/CioEngine
+
 targets:
   Cio:
     type: application
@@ -125,6 +128,7 @@ targets:
       - target: CioHelper
         embed: false
       - package: CioModel
+      - package: CioEngine
     preBuildScripts:
       - name: "Build libcef_dll_wrapper"
         path: Scripts/build_cef_wrapper.sh
@@ -141,9 +145,6 @@ targets:
     platform: macOS
     sources:
       - path: Cio/Tests
-      - path: Cio/Browser/SpotlightMode.swift
-      - path: Cio/Browser/SpotlightAutocompleteService.swift
-      - path: Cio/Browser/Autocomplete
       - path: Cio/UI/Spotlight/SpotlightHoverGate.swift
       - path: Cio/UI/Spotlight/SpotlightInputState.swift
       - path: Cio/UI/Main/BrowserShellLayout.swift
@@ -153,19 +154,15 @@ targets:
       - path: Cio/Animation/GlassComponentLayoutMotion.swift
       - path: Cio/UI/Sidebar/SpaceTabPanelRow.swift
       - path: Cio/UI/Sidebar/SidebarTabPanelLayout.swift
-      - path: Cio/Persistence/SessionStore.swift
-      - path: Cio/History/HistoryModels.swift
-      - path: Cio/Persistence/HistoryStore.swift
-      - path: Cio/Downloads/DownloadManager.swift
       # The address-field editing rules and the log categories they use are also
       # dependency free, so the "one address field per session" guarantee is
       # tested here too.
       - path: Cio/UI/CommandBar/AddressAutocompleteModel.swift
       - path: Cio/UI/CommandBar/AddressCapsuleInteraction.swift
       - path: Cio/UI/CommandBar/AddressFieldModel.swift
-      - path: Cio/App/Logging.swift
     dependencies:
       - package: CioModel
+      - package: CioEngine
     settings:
       base:
         PRODUCT_NAME: CioTests

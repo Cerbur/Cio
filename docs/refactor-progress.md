@@ -25,8 +25,8 @@ Raw original evidence is in /private/tmp/cio-refactor-baseline. The new responsi
 | --- | --- | --- |
 | C — Current-design documentation and verification cleanup | 4838518 | Complete; all current automated checks passed |
 | 0 — Full Cio rename | 984ed4f | Complete; current checks, Debug/Release, 244 tests and bundle checks passed |
-| 1 — CioModel | Pending | Complete; 86 package + 158 native tests and all current checks passed |
-| 2 — CioEngine | Pending | Actual-call protocol review; autonomous implementation authorized |
+| 1 — CioModel | df144a2 | Complete; 86 package + 158 native tests and all current checks passed |
+| 2 — CioEngine | Pending | Complete; standalone Engine/App builds, 244 tests and all current Debug/Release gates passed |
 | 3 — CioUI | Pending | Not started |
 | 4 — Diagnostic placement | Pending | Not started |
 
@@ -71,3 +71,9 @@ The next Stage 1 current-verifier attempt passed Model 86 tests, App build and r
 The Stage 1 retry then passed the repaired GUI gates but the workspace diagnostic remained at CEF initialization for almost two minutes, before any self-test. The agent sent SIGTERM only to its exact repository Debug --spaces-self-test process rather than waiting for the 600-second watchdog. This interrupted run is not passing coverage. All remaining GUI self-test timeout invocations now use the same ApplePersistenceIgnoreState isolation policy (including private diagnostic windows); existing instances of that option are retained without duplication. Raw evidence: validation-retry.log and interrupted-workspace.log under /private/tmp/cio-refactor-stage1.
 
 Stage 1 final verification passed the required Debug build, package-local swift test (86), native XCTest (158), all numbered compatibility verifiers/current responsibility checks, Release, individual bundle signatures/linkage and secret scans. Total distinct existing cases remain 244. Seven-file model audit found no ordinary statement changes; only access/initializers/checked Sendable/imports and updated parsing documentation. Bridge and CEF packaging have no Stage 1 diff. Final evidence: /private/tmp/cio-refactor-stage1/validation-final.log, swift-test.log and final-evidence.
+
+Stage 2's first App build caught an existential Sendable requirement at the existing native-field main-queue focus hop. The common observable protocol now explicitly requires checked Sendable; all implementations are original MainActor classes. No unchecked conformance or scheduling change was introduced. Independent Engine build passed before App integration.
+
+The next Stage 2 integration attempt caught SessionStore.isEnabled still having module-internal access; exporting that original immutable field fixed the workspace persistence caller. The failed build is retained in /private/tmp/cio-refactor-stage2/validation.log and is not passing validation. Engine service audit confirms the twelve migrated files retain their original ordinary statements.
+
+Stage 2 final validation passed all numbered compatibility verifiers, current runtime checks, two quit-soak iterations, Release and the final fresh Debug rebuild, individual signatures/linkage and secret scan. No Bridge or CEF packaging diff is present. Evidence: /private/tmp/cio-refactor-stage2/validation-retry.log and final-evidence. Protocol member-to-caller mapping is in engine-interface.md.

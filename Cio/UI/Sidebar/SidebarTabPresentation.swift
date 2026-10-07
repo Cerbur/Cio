@@ -1,3 +1,4 @@
+import CioEngine
 import SwiftUI
 
 enum SidebarTabAppearance {
@@ -113,7 +114,7 @@ struct SidebarRowLabel<Icon: View>: View {
 /// no separate compact text subtree or appearance/disappearance transition.
 struct SidebarRetainedTabLabel: View, Animatable {
   let pageURL: URL?
-  let session: BrowserSession?
+  let session: (any BrowserSessionProtocol)?
   let title: String
   let fallbackLetter: String?
   nonisolated var compactAmount: CGFloat

@@ -13,6 +13,7 @@
 //  and therefore destroy the CefBrowser (Milestone 3 section 11).
 //
 
+import CioEngine
 import AppKit
 
 @MainActor

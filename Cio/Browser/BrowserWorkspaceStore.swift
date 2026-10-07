@@ -11,6 +11,7 @@
 //  browser surface host.
 //
 
+import CioEngine
 import CioModel
 import AppKit
 import Combine
@@ -173,7 +174,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       if committed { ensureSelectedPresentationSessions() }
     }
     if committed {
-      selectedSession?.focusPage()
+      engineSelectedSession?.focusPage()
       emit("split:committed")
     }
     return committed
@@ -185,7 +186,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       _ = workspace.detachSplitPane(tabID, selectDetached: selectDetached)
       ensureSelectedPresentationSessions()
     }
-    selectedSession?.focusPage()
+    engineSelectedSession?.focusPage()
   }
 
   @discardableResult
@@ -220,7 +221,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       _ = workspace.selectTab(id: tabID)
       ensureSelectedPresentationSessions()
     }
-    selectedSession?.focusPage()
+    engineSelectedSession?.focusPage()
   }
 
   func swapSplitSides(containing tabID: UUID) {
@@ -235,7 +236,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       guard workspace.ungroupSplit(containing: tabID) else { return }
       ensureSelectedPresentationSessions()
     }
-    selectedSession?.focusPage()
+    engineSelectedSession?.focusPage()
   }
 
   @discardableResult
@@ -346,21 +347,21 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   func presentSpotlight() {
     guard !isTerminating else { return }
-    selectedSession?.blur()
+    engineSelectedSession?.blur()
     isSpotlightPresented = true
   }
 
   func dismissSpotlight(focusPage: Bool = true) {
     guard isSpotlightPresented else { return }
     isSpotlightPresented = false
-    if focusPage { selectedSession?.focusPage() }
+    if focusPage { engineSelectedSession?.focusPage() }
   }
 
   func submitSpotlight(opening url: URL) {
     guard isSpotlightPresented else { return }
     isSpotlightPresented = false
     guard createTab(url: url) != nil else { return }
-    selectedSession?.focusPage()
+    engineSelectedSession?.focusPage()
   }
 
   func selectTab(id: UUID, focusingPage: Bool = false) {
@@ -369,7 +370,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       return
     }
     if workspace.selectedTabID == id, focusingPage {
-      selectedSession?.focusPage()
+      engineSelectedSession?.focusPage()
       return
     }
     guard (workspace.globalPinnedTabIDs.contains(id)
@@ -382,7 +383,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       workspace.selectTab(id: id)
       ensureSelectedPresentationSessions()
     }
-    if wasSpotlightPresented { selectedSession?.focusPage() }
+    if wasSpotlightPresented { engineSelectedSession?.focusPage() }
     emit("tab:selected")
     AppLog.session.info("tab selected id=\(id.uuidString, privacy: .public)")
   }
@@ -504,7 +505,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   @discardableResult
   func loadInSelectedTab(_ url: URL) -> Bool {
-    guard let selectedSession else { return false }
+    guard let selectedSession = engineSelectedSession else { return false }
     selectedSession.load(url)
     return true
   }
@@ -523,7 +524,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     preserveSpotlight: Bool = false,
     _ change: () -> T
   ) -> T {
-    let outgoing = selectedSession
+    let outgoing = engineSelectedSession
     let previousSelection = workspace.selectedTabID
     let previousSpace = workspace.selectedSpaceID
     // A tab owns the keyboard through either Chromium or its native address
@@ -550,11 +551,11 @@ final class BrowserWorkspaceStore: ObservableObject {
     if !pageHeldKeyboard {
       // Set the intent before the incoming surface is made visible. This closes
       // the async browser-creation race where OnAfterCreated arrives late.
-      selectedSession?.blur()
+      engineSelectedSession?.blur()
     }
     publishWorkspace()
 
-    if let incoming = selectedSession, incoming !== outgoing {
+    if let incoming = engineSelectedSession, incoming !== outgoing {
       if pageHeldKeyboard {
         incoming.focusPage()
       } else {
@@ -596,13 +597,13 @@ final class BrowserWorkspaceStore: ObservableObject {
     guard workspace.tab(withID: id) != nil else { return }
 
     let selectedCloseHeldPageKeyboard = workspace.selectedTabID == id
-      ? sessionManager.session(for: id)?.ownsPageKeyboard == true
+      ? browserSession(for: id)?.ownsPageKeyboard == true
       : false
     if workspace.selectedTabID == id {
       // A selected close can race with the native address field's shared field
       // editor. Clear it before the tab leaves the domain so the replacement
       // tab never inherits an orphaned editing session.
-      sessionManager.session(for: id)?.releaseFocusBeforeTabRemoval()
+      browserSession(for: id)?.releaseFocusBeforeTabRemoval()
     }
 
     let closingSplit = activeSplit.flatMap { $0.contains(id) ? $0 : nil }
@@ -653,7 +654,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     emit("tab:closed")
   }
 
-  private func refreshTabMetadata(from session: BrowserSession) {
+  private func refreshTabMetadata(from session: any BrowserSessionProtocol) {
     guard var tab = workspace.tab(withID: session.tabID) else { return }
     let beforeSnapshot = sessionSnapshot
     if !session.title.isEmpty { tab.title = session.title }
@@ -670,7 +671,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   /// Popup routing always begins with the source runtime identity. The source
   /// tab's Space, not the currently selected Space, determines ownership.
-  private func openPopupInNewTab(url: String, from session: BrowserSession) {
+  private func openPopupInNewTab(url: String, from session: any BrowserSessionProtocol) {
     guard !isTerminating, !url.isEmpty, let target = URL(string: url),
       let sourceSpaceID = workspace.globalPinnedTabIDs.contains(session.tabID)
         ? workspace.selectedSpaceID : workspace.spaceID(containing: session.tabID)
@@ -737,5 +738,18 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   private func emit(_ event: String) {
     onLifecycleEvent?(event)
+  }
+}
+
+// The App keeps concrete lifecycle APIs; UI receives these original-object projections.
+extension BrowserWorkspaceStore: BrowserWorkspaceProtocol {
+  var engineSelectedSession: (any BrowserSessionProtocol)? { selectedSession }
+  func browserSession(for tabID: UUID) -> (any BrowserSessionProtocol)? { session(for: tabID) }
+  var isSpotlightPresentedPublisher: AnyPublisher<Bool, Never> {
+    $isSpotlightPresented.eraseToAnyPublisher()
+  }
+  @discardableResult
+  func moveSplitPane(_ tabID: UUID, to tier: WorkspaceCollection.TabTier, before targetID: UUID?) -> Bool {
+    moveSplitPane(tabID, to: SidebarTabDropTarget(tier: tier, before: targetID))
   }
 }
