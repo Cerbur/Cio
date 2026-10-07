@@ -10,7 +10,7 @@ import Foundation
 import OSLog
 
 public enum AppLog {
-  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.example.Cio"
+  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.cerbur.Cio"
 
   /// Application lifecycle: launch, activation, termination.
   public static let app = Logger(subsystem: subsystem, category: "app")

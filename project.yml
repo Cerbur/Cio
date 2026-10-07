@@ -18,7 +18,7 @@
 name: Cio
 
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.cerbur
   createIntermediateGroups: true
   generateEmptyDirectories: false
   groupSortPosition: top
@@ -98,7 +98,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Cio
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.Cio
+        PRODUCT_BUNDLE_IDENTIFIER: com.cerbur.Cio
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: Cio/Resources/Info.plist
@@ -155,7 +155,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: CioTests
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.CioTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.cerbur.CioTests
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         OTHER_LDFLAGS:

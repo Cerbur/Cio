@@ -109,7 +109,7 @@ build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio --parse-naviga
 
 ## Data and development signing
 
-The main bundle ID is com.example.Cio. Browser profile, session-v1.json and history.sqlite3 use ~/Library/Application Support/Cio/ by default. CIO_DATA_DIR overrides storage for verification; CIO_DOWNLOADS_DIR overrides the download destination. Local data is not migrated implicitly.
+The main bundle ID is com.cerbur.Cio. Browser profile, session-v1.json and history.sqlite3 use ~/Library/Application Support/Cio/ by default. CIO_DATA_DIR overrides storage for verification; CIO_DOWNLOADS_DIR overrides the download destination. Changing the bundle ID changes the UserDefaults preference domain; existing preferences are not migrated implicitly. The browser data directory remains Cio.
 
 Development signing is ad-hoc. A changed binary identity can cause a Chromium Safe Storage keychain dialog that blocks CEF initialization. The scripts cannot answer it. Stop and report a blocked run; do not change keychain contents or policy to manufacture a passing result.
 

@@ -54,7 +54,7 @@ Release clean also removes Debug products. verify_current.sh rebuilds the reques
 
 ## Rename namespace
 
-The main bundle identifier is now com.example.Cio; Helpers are com.example.Cio.helper plus the existing process suffixes. Default profile/session/history storage is ~/Library/Application Support/Cio. CIO_DATA_DIR, CIO_DOWNLOADS_DIR and the other CIO_* development overrides replace the previous product-prefixed environment names. Existing profile/session/history and preference domains remain in the previous namespace, untouched; there is no implicit migration. Chromium Safe Storage remains Chromium's own name. Packaging logic and the shared framework path are unchanged.
+At Stage 0, the main bundle identifier became com.example.Cio; Helpers are com.example.Cio.helper plus the existing process suffixes. Default profile/session/history storage is ~/Library/Application Support/Cio. CIO_DATA_DIR, CIO_DOWNLOADS_DIR and the other CIO_* development overrides replace the previous product-prefixed environment names. Existing profile/session/history and preference domains remain in the previous namespace, untouched; there is no implicit migration. Chromium Safe Storage remains Chromium's own name. Packaging logic and the shared framework path are unchanged.
 
 ## Stage 0 verification retry
 
@@ -119,3 +119,12 @@ Original baseline failures remain failures in the baseline table, not post-refac
 - Actual native key events/IME/material outlines/split and drag motion were not checked; all REQUIRES MANUAL VERIFICATION items remain unverified.
 
 See README Layout and ARCHITECTURE's package graph, engine-interface.md for every Engine member/caller mapping, and ui-injection.md for original native-object/publisher/factory ownership.
+
+
+## Bundle namespace follow-up
+
+The requested main bundle ID is now com.cerbur.Cio. The five packaged Helpers derive com.cerbur.Cio.helper and their existing process suffixes from the App build setting. CioTests uses com.cerbur.CioTests, and the logging fallback and verification expectations use the same namespace. The Stage 0 namespace above remains a historical record.
+
+The required CONFIGURATION=Debug Scripts/build.sh passed. The built App, framework and all five Helpers passed strict signature verification, and the main/Helper executables still have no direct CEF linkage. Actual App and Helper plist identifiers match the requested namespace. Evidence: /private/tmp/cio-bundle-id-build.log and cio-bundle-id-verification.log. The prior full refactor tests are recorded above; runtime/manual checks and the full unit suite were not rerun for this identifier-only follow-up.
+
+Browser storage remains ~/Library/Application Support/Cio/. The UserDefaults domain changes with the bundle ID; existing preferences remain untouched and are not migrated implicitly.

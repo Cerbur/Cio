@@ -161,7 +161,7 @@ for SUFFIX in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
   fi
   BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$HELPER/Contents/Info.plist" 2>/dev/null)"
   case "$BUNDLE_ID" in
-    com.example.Cio.helper*) pass "bundle identifier $BUNDLE_ID" ;;
+    com.cerbur.Cio.helper*) pass "bundle identifier $BUNDLE_ID" ;;
     *) fail "unexpected helper bundle identifier: $BUNDLE_ID" ;;
   esac
   # otool mishandles paths containing parentheses, so probe a copy.

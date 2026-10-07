@@ -18,6 +18,8 @@ check_linkage() {
   fi
   echo "PASS: runtime CEF loading: $1"
 }
+actual_app_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+[ "$actual_app_id" = "com.cerbur.Cio" ]
 codesign --verify --deep --strict "$APP"
 codesign --verify --deep --strict "$FRAMEWORKS/Chromium Embedded Framework.framework"
 check_linkage "$APP/Contents/MacOS/Cio"
@@ -30,7 +32,7 @@ for index in "${!suffixes[@]}"; do
   helper="$FRAMEWORKS/$name.app"
   codesign --verify --deep --strict "$helper"
   actual_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$helper/Contents/Info.plist")"
-  [ "$actual_id" = "com.example.Cio.helper${ids[$index]}" ]
+  [ "$actual_id" = "com.cerbur.Cio.helper${ids[$index]}" ]
   actual_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$helper/Contents/Info.plist")"
   [ "$actual_executable" = "$name" ]
   check_linkage "$helper/Contents/MacOS/$name"
