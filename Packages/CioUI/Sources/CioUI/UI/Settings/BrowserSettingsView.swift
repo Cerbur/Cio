@@ -2,7 +2,13 @@ import SwiftUI
 
 /// Native Settings scene: sidebar categories and grouped system-style forms.
 public struct BrowserSettingsView: View {
-  public init() {}
+  private let openChromiumSettings: @MainActor (URL) -> Bool
+  @Environment(\.dismiss) private var dismiss
+  @State private var failedToOpenSettings = false
+
+  public init(openChromiumSettings: @escaping @MainActor (URL) -> Bool) {
+    self.openChromiumSettings = openChromiumSettings
+  }
   private enum Page: Hashable { case general }
   @State private var selection: Page? = .general
   @ObservedObject private var animations = BrowserAnimationPreferences.shared
@@ -60,11 +66,46 @@ public struct BrowserSettingsView: View {
           }
           .padding(.vertical, 6)
         }
+        Section("浏览器设置") {
+          settingsButton("Chrome 设置", path: "", symbol: "slider.horizontal.3")
+          settingsButton("首选语言", path: "languages", symbol: "globe")
+          settingsButton("Cookie 与网站数据", path: "content/all", symbol: "externaldrive")
+          settingsButton("第三方 Cookie", path: "cookies", symbol: "hand.raised")
+          settingsButton("隐私与安全", path: "privacy", symbol: "lock.shield")
+          Text("首选语言初始使用系统语言，可在 Chrome 设置中调整。Cookie 与网站数据会保存在本机，退出后保留。")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
       }
       .formStyle(.grouped)
       .navigationTitle("通用")
     }
     .frame(minWidth: 700, minHeight: 440)
+    .alert("无法打开 Chrome 设置", isPresented: $failedToOpenSettings) {
+      Button("好", role: .cancel) {}
+    } message: {
+      Text("请稍后重试。")
+    }
+  }
+
+  private func settingsButton(_ title: String, path: String, symbol: String) -> some View {
+    Button {
+      guard let url = URL(string: "chrome://settings/\(path)") else { return }
+      guard openChromiumSettings(url) else {
+        failedToOpenSettings = true
+        return
+      }
+      dismiss()
+    } label: {
+      HStack {
+        Label(title, systemImage: symbol)
+        Spacer()
+        Image(systemName: "arrow.up.forward")
+          .foregroundStyle(.secondary)
+      }
+    }
+    .buttonStyle(.plain)
+    .accessibilityHint("在 Cio 的标签页中打开")
   }
 
   private var speedPosition: Binding<Double> {

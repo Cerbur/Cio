@@ -33,6 +33,27 @@ final class DownloadManagerTests: XCTestCase {
 
   private var sourceURL: URL { URL(string: "http://127.0.0.1:43123/download")! }
 
+  func testMissingFileInsideSymlinkedDirectoryCanBeReserved() throws {
+    let target = directory.appendingPathComponent("actual", isDirectory: true)
+    let alias = directory.appendingPathComponent("alias", isDirectory: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+    let manager = DownloadManager(downloadsDirectory: alias)
+    let destination = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 1, sourceURL: sourceURL, suggestedFileName: "fixture.bin"))
+    XCTAssertEqual(destination.lastPathComponent, "fixture.bin")
+    XCTAssertEqual(manager.items.first?.state, .pending)
+  }
+
+  func testDanglingLeafSymlinkCannotReserveOutsideDownloadDirectory() throws {
+    let outside = directory.deletingLastPathComponent()
+      .appendingPathComponent("missing-\(UUID().uuidString)")
+    try FileManager.default.createSymbolicLink(
+      at: directory.appendingPathComponent("fixture.bin"), withDestinationURL: outside)
+    XCTAssertNil(manager().prepareDownload(
+      downloadID: 1, sourceURL: sourceURL, suggestedFileName: "fixture.bin"))
+  }
+
   private func metadata(
     cefSuggestedFileName: String = "",
     contentDisposition: String = "",

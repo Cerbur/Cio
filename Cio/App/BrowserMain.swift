@@ -4,18 +4,11 @@
 //
 //  Process entry point.
 //
-//  Order matters here (ARCHITECTURE.md section 11):
-//    1. hand the process off to CEF if it was launched as a sub-process,
-//    2. load the CEF framework and initialize it,
-//    3. start the SwiftUI/AppKit application,
-//    4. shut CEF down after the run loop returns.
-//
-//  Nothing here changed for Milestone 3's CEF bootstrap: the framework loading,
-//  the helper packaging, CefInitialize/CefExecuteProcess, the sandbox
-//  configuration, the cache path and the message-loop architecture are exactly
-//  the Milestone 2 code.
-//
+//  Start Chromium's retained hosted runtime before SwiftUI creates the window.
+//  Standard Chromium helpers handle renderer/GPU/utility subprocesses. Cio owns
+//  the AppKit loop and shuts the engine down after all managed pages close.
 
+import CioChromium
 import CioEngine
 import CioModel
 import AppKit
@@ -25,7 +18,7 @@ import Foundation
 @MainActor
 enum BrowserMain {
   static func main() {
-    let subprocessExitCode = CEFProcessHost.executeSubprocess()
+    let subprocessExitCode = ChromiumProcessHost.executeSubprocess()
     if subprocessExitCode >= 0 {
       // This process is a CEF sub-process and has already done its work.
       exit(subprocessExitCode)
@@ -46,7 +39,7 @@ enum BrowserMain {
       // checks; it is not the app's logging mechanism (see AppLog).
       runtime.beginLifecycleTrace()
     }
-    runtime.startCEF()
+    runtime.startBrowserEngine()
 
     if runSelfTestIfRequested(runtime: runtime) {
       return
@@ -57,7 +50,7 @@ enum BrowserMain {
       if runtime.hasLiveBrowsers {
         drainBrowserClosure(runtime: runtime)
       }
-      _ = runtime.shutdownCEF()
+      _ = runtime.shutdownBrowserEngine()
       return
     }
     _ = HistoryDownloadsSelfTest.installIfRequested(runtime: runtime)
@@ -79,7 +72,7 @@ enum BrowserMain {
       if runtime.hasLiveBrowsers {
         drainBrowserClosure(runtime: runtime)
       }
-      _ = runtime.shutdownCEF()
+      _ = runtime.shutdownBrowserEngine()
       return
     }
     // Milestone 4 multi-Space integration check. It is installed as a driver that
@@ -105,7 +98,7 @@ enum BrowserMain {
       AppLog.cef.error("run loop returned with a live browser; requesting closure")
       drainBrowserClosure(runtime: runtime)
     }
-    _ = runtime.shutdownCEF()
+    _ = runtime.shutdownBrowserEngine()
   }
 
   /// True when the process was launched by the milestone verification tooling.
@@ -230,12 +223,12 @@ enum BrowserMain {
       let closeDeadline = Date().addingTimeInterval(30)
       Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
         let finished = MainActor.assumeIsolated {
-          runtime.hasShutDownCEF || Date() >= closeDeadline
+          runtime.hasShutDownBrowserEngine || Date() >= closeDeadline
         }
         guard finished else { return }
         timer.invalidate()
         MainActor.assumeIsolated {
-          let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownCEF
+          let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownBrowserEngine
           let closeDuration = Date().timeIntervalSince(closeStart)
           print(
             "browser-self-test: browser-closed=\(closed) close-seconds=\(String(format: "%.2f", closeDuration))"
@@ -252,10 +245,10 @@ enum BrowserMain {
       }
     }
     let closeDeadline = Date().addingTimeInterval(30)
-    while Date() < closeDeadline, !runtime.hasShutDownCEF {
+    while Date() < closeDeadline, !runtime.hasShutDownBrowserEngine {
       RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
-    let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownCEF
+    let closed = session.isClosed && !runtime.hasLiveBrowsers && runtime.hasShutDownBrowserEngine
     let closeDuration = Date().timeIntervalSince(closeStart)
     print(
       "browser-self-test: browser-closed=\(closed) close-seconds=\(String(format: "%.2f", closeDuration))"
@@ -433,7 +426,7 @@ enum BrowserMain {
   private static func runSelfTestIfRequested(runtime: ApplicationRuntime) -> Bool {
     guard CommandLine.arguments.contains("--cef-self-test") else { return false }
 
-    let started = runtime.cefStatus.isReady
+    let started = runtime.engineStatus.isReady
     AppLog.cef.info("CEF self-test starting (initialized: \(started, privacy: .public))")
 
     if started {
@@ -449,10 +442,10 @@ enum BrowserMain {
       if runtime.hasLiveBrowsers {
         drainBrowserClosure(runtime: runtime)
       }
-      runtime.shutdownCEF()
+      runtime.shutdownBrowserEngine()
     }
 
-    let cleanShutdown = !CEFProcessHost.isInitialized
+    let cleanShutdown = !ChromiumProcessHost.isInitialized
     AppLog.cef.info(
       "CEF self-test finished (initialized: \(started, privacy: .public), clean shutdown: \(cleanShutdown, privacy: .public))"
     )

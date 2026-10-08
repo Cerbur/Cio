@@ -1,19 +1,21 @@
 # Cio
 
-A macOS Chromium browser shell using SwiftUI, AppKit, Objective-C++ and CEF. The native shell owns Spaces, tab tiers, split pages, Spotlight, address editing, History, Downloads and Settings. Chromium owns page rendering and navigation. Browser surfaces and their native editors remain mounted across selection and UI updates.
+A macOS Chromium browser shell using SwiftUI, AppKit, Objective-C++ and native Chromium. The native shell owns Spaces, tab tiers, split pages, Spotlight, address editing, History, Downloads and Settings. Chromium owns page rendering and navigation. Browser surfaces and their native editors remain mounted across selection and UI updates.
+
+See [code provenance, reuse scope and third-party notices](THIRD_PARTY_NOTICES.md). Chromium is the active native engine. Two Mori BrowserWindow files are adapted under MIT with attribution and a bundled license.
 
 ## Build
 
-Requires macOS 26+, Apple Silicon, Xcode with Swift 6, and XcodeGen. CEF 152.0.6 is pinned by the repository scripts and is not committed.
+Requires macOS 26+, Apple Silicon, Xcode with Swift 6, and XcodeGen. Chromium 152.0.7977.83 is pinned by the engine scripts and is not committed. Xcode 27 and the Apple Metal Toolchain are required for this engine build.
 
 ```bash
-Scripts/fetch_cef.sh                  # once, if ThirdParty/CEF is absent
+python3 Scripts/try_chromium_build.py # once; official source and resumable build
 CONFIGURATION=Debug Scripts/build.sh
 ```
 
-The build regenerates Cio.xcodeproj from project.yml, installs the shared scheme, compiles the wrapper when needed and packages/signs CEF and five Helper applications. The product is build/DerivedData/Build/Products/Debug/Cio.app. Use CONFIGURATION=Release with the same script for Release. Generated projects, CEF binaries and build output are ignored.
+The build incrementally compiles the native Chromium bridge, regenerates Cio.xcodeproj, installs the shared scheme and packages/signs Chromium, its component libraries and four standard Helpers. The product is build/DerivedData/Build/Products/Debug/Cio.app. Use CONFIGURATION=Release with the same script for Release. Source, toolchains, binaries and generated projects stay under ignored build directories.
 
-The CEF framework is loaded at runtime; otool -L must not show a direct CEF dependency. Scripts/package_cef_runtime.sh stays an Xcode build phase. Helper executable names follow the main product name and share one framework through `../../..`. See [Chromium capabilities](docs/chromium-capabilities.md) for accessibility, Web Inspector/CDP and the codec runtime recipe.
+Scripts/package_native_chromium.py closes the runtime dependency graph using bundle-relative paths. Scripts/verify_bundle.sh checks native exports, libraries, signatures and licenses without launching the app. See [the native engine guide](Engine/Chromium/README.md) for profiles, updates, codecs and current UI limitations.
 
 ## Verify
 
@@ -27,13 +29,13 @@ Individual entry points:
 | --- | --- |
 | verify_unit_tests.sh | Standalone XCTest and local package tests |
 | verify_bundle.sh | Individual App/framework/Helper signatures, identities and linkage |
-| verify_runtime.sh | CEF init/pump/shutdown, bundle identity, five Helpers, signatures and linkage |
+| verify_runtime.sh | Legacy CEF runtime acceptance (not a native-engine validation gate) |
 | verify_rendering.sh | Real application page load, callbacks and typed shutdown |
 | verify_navigation.sh | Parser/probe, navigation, reload/stop, redaction and quit ordering |
 | verify_tabs.sh | Multi-browser quit, real main menu and URL privacy |
 | verify_workspace.sh | Current Space/tab/runtime invariants from the compatibility driver |
 | verify_session_restore.sh | Separate seed/relaunch processes, exact persistence and lazy sessions |
-| verify_history_downloads.sh | Real CEF history/download callbacks, SQLite and downloaded bytes |
+| verify_history_downloads.sh | History/download callback driver, SQLite and downloaded bytes |
 | verify_stability.sh | Tab/Space stress, lazy restore, beforeunload, bounded soak and Release |
 | verify_release_candidate.sh | Hardened local Release bundle, rendering, restore, history/downloads |
 | check_no_secrets.sh | Tracked files and git history; matched secret values are never printed |
@@ -44,17 +46,23 @@ The pre-refactor baseline had passing build, 244 passing unit tests, runtime/bun
 
 [Manual verification](docs/manual-verification.md) covers native keyboard/focus/IME and actual visual behavior. Script results do not claim these checks were performed. Open the freshly built Debug bundle only for explicitly requested computer-use validation.
 
+## Chromium migration
+
+The application imports the stable Objective-C CioChromium interface and uses the `chromium-native` backend. Native Browser/WebContents views are attached to Cio's existing AppKit shell. Chrome Settings is opened as a Cio tab using the same profile. The native engine is built separately with a version-pinned overlay; engine upgrades require rebuilding that overlay and replacing the complete runtime bundle. See [architecture and upgrade boundaries](Engine/Chromium/README.md).
+
 ## Layout
 
 ```text
 Cio/
   App/                    entry point, scene, native menus and runtime
   Diagnostics/            existing self-tests and navigation/sidebar probes
-  Bridge/                 Objective-C++ boundary, event support, bridging header
-  Browser/                workspace policy, sessions and CEF containers
-  Helper/                 separate CEF process entry point
+  Browser/                workspace policy, sessions and Chromium containers
+  Helper/                 legacy CEF entry point (not built)
   Resources/              Info.plist and signing entitlements
   Tests/                  standalone logic/native-model tests
+Engine/
+  CioChromium/           public interface, native loader and GN bridge; legacy CEF source
+  Chromium/              migration status and pinned source reference
 Packages/
   CioModel/
     Sources/CioModel/     workspace/tab/split/snapshot values, parsing, URL redaction
@@ -80,7 +88,7 @@ Packages/
       Animation/          shared motion, tuning and preferences
 SchemeTemplates/Cio.xcscheme
 Scripts/                  reproducible build and verification tools
-ThirdParty/               untracked CEF distribution and wrapper products
+ThirdParty/               upstream notices; ignored legacy CEF products
 project.yml               sole Xcode project definition
 AGENTS.md                 shell, native-control, animation and validation constraints
 ARCHITECTURE.md            current ownership, lifetime and interaction design
@@ -88,12 +96,12 @@ ARCHITECTURE.md            current ownership, lifetime and interaction design
 
 ## Architecture decisions
 
-- CEF initialization, pumping and shutdown belong to the application, not views. Termination cancels the native request, waits for typed OnBeforeClose from every live session, calls CefShutdown once and retries termination.
+- Chromium initialization, pumping and shutdown belong to the application, not views. Termination cancels the native request, waits for typed OnBeforeClose from every live session, shuts Chromium down once and retries termination.
 - WorkspaceCollection owns domain identity/order/policy. BrowserSessionManager owns only live sessions and stable containers. Restored inactive tabs are lazy; selection cannot rebuild a live browser.
 - Each page retains a tab-bound toolbar/editor and outer viewport. Section, tab and split changes preserve native component identity. Shared layout dimensions come from BrowserShellLayout.swift.
 - Address editing uses native NSTextField and its field editor. The committed URL and edit buffer are separate; background callbacks cannot overwrite active input. Selecting another page ends the outgoing address edit.
 - Cmd-L/R/[/] and tab commands are native menu equivalents. Cmd-T opens Spotlight. Current selection is resolved at action time.
-- Popups route to managed tabs using the source runtime identity. CEF C++ objects and download callbacks stay behind the bridge.
+- Popups route to managed tabs using the source runtime identity. Chromium C++ objects and download callbacks stay behind the bridge.
 - Navigation and persistence retain complete URLs. Every URL log/probe uses the single URLLogSanitizer policy.
 - Native materials, system controls and animation APIs retain their normal interactions. Animation tuning and speed scaling live in Packages/CioUI/Sources/CioUI/Animation/; AGENTS.md records the required geometry and motion contract.
 
@@ -111,6 +119,8 @@ build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio --parse-naviga
 
 The main bundle ID is com.cerbur.Cio. Browser profile, session-v1.json and history.sqlite3 use ~/Library/Application Support/Cio/ by default. CIO_DATA_DIR overrides storage for verification; CIO_DOWNLOADS_DIR overrides the download destination. Changing the bundle ID changes the UserDefaults preference domain; existing preferences are not migrated implicitly. The browser data directory remains Cio.
 
-Development signing is ad-hoc. A changed binary identity can cause a Chromium Safe Storage keychain dialog that blocks CEF initialization. The scripts cannot answer it. Stop and report a blocked run; do not change keychain contents or policy to manufacture a passing result.
+Native Cio uses its own `Cio Safe Storage` keychain item rather than Chrome/Chromium's item. Development signing is ad-hoc: a changed binary identity can still cause a macOS authorization dialog after a rebuild. A stable signing identity is required for distribution and reliable authorization across updates. Verification cannot answer a user's keychain prompt or change its access policy. `Scripts/verify_native_runtime.py --mock-keychain` uses Chromium's explicit test keychain only with disposable profiles in the system temporary directory; logs remain under `build/verification/native-runtime`. It does not validate production encrypted-cookie migration.
 
-The app currently supports one workspace window. CEF navigation history, form/scroll state and full popup window.opener semantics are not restored. Developer ID signing/notarization and final distribution assets remain outside the current local build.
+Cookies (including session cookies) use Chromium's persistent profile and are flushed before normal application termination. Chromium continues to enforce expiry and the user's cookie/site-data policies. On the first launch with language initialization enabled, Cio seeds the profile's selected and accept languages from macOS's ordered preferred languages, normalizing Chinese script tags for Chrome. Later changes in `chrome://settings/languages` persist without a recurring language override. Native Settings provides entry points to Chrome Settings, Languages, Cookies, Site Data and Privacy in the current Cio profile.
+
+The app currently supports one workspace window. Chromium navigation history and form/scroll state are not restored from Cio workspace snapshots; live popups retain their original WebContents and opener. Developer ID signing/notarization and final distribution assets remain outside the current local build.

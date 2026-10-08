@@ -245,8 +245,8 @@ fi
 
 echo
 echo "9. static hardening gates"
-check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/Cio/Bridge/BrowserBridge.mm"
-check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/Cio/Bridge/BrowserBridge.mm"
+check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/Engine/CioChromium/CEF/BrowserBridge.mm"
+check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/Engine/CioChromium/CEF/BrowserBridge.mm"
 check_contains "CEF shutdown has a live-browser guard" "guard !workspaceStore.hasLiveSessions" "$REPO_ROOT/Cio/App/ApplicationRuntime.swift"
 
 check_contains "renderer termination has a recoverable UI" "renderer-crash-reload" "$REPO_ROOT/Packages/CioUI/Sources/CioUI/UI/Main/BrowserMainViewController.swift"

@@ -50,7 +50,7 @@ enum HistoryDownloadsSelfTest {
       let baseURL = URL(string: baseURLString)
     else {
       print("m7-self-test: FAIL setup")
-      runtime.shutdownCEF()
+      runtime.shutdownBrowserEngine()
       exit(2)
     }
 
@@ -156,14 +156,14 @@ enum HistoryDownloadsSelfTest {
     if !closed {
       closed = waitUntil(timeout: 5) { session.isClosed }
     }
-    let shutdownBeforeDeferredDrain = runtime.shutdownCEF()
+    let shutdownBeforeDeferredDrain = runtime.shutdownBrowserEngine()
     if runtime.hasLiveBrowsers {
       check(!shutdownBeforeDeferredDrain, "cef-shutdown-guarded-with-live-browser")
       _ = runtime.drainDeferredBrowserCloseForM7SelfTest()
       closed = waitUntil(timeout: 5) { session.isClosed }
     }
     check(closed, "clean-browser-shutdown")
-    check(runtime.hasShutDownCEF && runtime.cefShutdownCount == 1, "cef-shutdown-once")
+    check(runtime.hasShutDownBrowserEngine && runtime.engineShutdownCount == 1, "cef-shutdown-once")
     print("m7-self-test: checks=\(phase) failures=\(failures) close-seconds=\(String(format: "%.2f", Date().timeIntervalSince(closeStarted)))")
     runtime.emitLifecycleTrace()
     exit(failures == 0 ? 0 : 2)

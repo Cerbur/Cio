@@ -1,20 +1,5 @@
-# XcodeGen specification for Cio.
-#
-#   xcodegen generate          # (re)create Cio.xcodeproj
-#   Scripts/fetch_cef.sh       # download the CEF distribution (once)
-#   CONFIGURATION=Debug Scripts/build.sh
-#
-# The generated .xcodeproj is not committed; project.yml is the source of truth.
-#
-# CEF integration notes:
-#   * The app does NOT link "Chromium Embedded Framework.framework" directly.
-#     On macOS the framework is loaded at runtime from the app bundle by
-#     CefScopedLibraryLoader, which is required by the Chromium sandbox and is
-#     how the CEF binary distribution expects clients to start up.
-#   * Only libcef_dll_wrapper.a (built by Scripts/build_cef_wrapper.sh) is linked.
-#   * The bundle layout (framework + "Cio Helper*.app") is assembled by
-#     Scripts/package_cef_runtime.sh after the app is linked and before Xcode
-#     signs it.
+# XcodeGen specification. Native Chromium is built separately by GN/Ninja.
+# Build the app with CONFIGURATION=Debug Scripts/build.sh.
 name: Cio
 
 options:
@@ -32,8 +17,7 @@ settings:
     CLANG_CXX_LIBRARY: "libc++"
     CLANG_ENABLE_OBJC_ARC: YES
     GCC_C_LANGUAGE_STANDARD: "gnu17"
-    # The CEF wrapper build and the bundle packaging steps write outside the
-    # target's build directory, so script sandboxing stays off.
+    # Native engine packaging writes into the assembled app bundle.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     DEAD_CODE_STRIPPING: YES
     CODE_SIGN_STYLE: Manual
@@ -41,9 +25,7 @@ settings:
     DEVELOPMENT_TEAM: ""
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    # The checked-in CEF distribution and wrapper are arm64-only. Keep the
-    # generated app/helper architecture aligned with that runtime; producing a
-    # universal artifact requires a separate x86_64 CEF distribution.
+    # The pinned native engine build targets macOS arm64.
     ARCHS: arm64
   configs:
     Debug:
@@ -102,13 +84,12 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: Cio/Resources/Info.plist
-        SWIFT_OBJC_BRIDGING_HEADER: Cio/Bridge/Cio-Bridging-Header.h
-        HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/ThirdParty/CEF"
+        # Chromium retains its process runtime before SwiftUI starts. Use the
+        # real app entry point instead of Xcode's preview trampoline/dylib.
+        ENABLE_DEBUG_DYLIB: NO
         LIBRARY_SEARCH_PATHS:
-          - "$(SRCROOT)/ThirdParty"
+          - "$(SRCROOT)/build/ChromiumBuild/src/out/CioDev"
         OTHER_LDFLAGS:
-          - "-lcef_dll_wrapper"
           - "-lsqlite3"
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
@@ -123,24 +104,47 @@ targets:
       # unit tests need a TestAction; XcodeGen's generated scheme
       # has none, and a build phase refreshes the copy after every generate.
     dependencies:
-      # Build ordering only: the helper executable is copied into the
-      # "Cio Helper*.app" bundles by Scripts/package_cef_runtime.sh,
-      # so it must not be embedded into the app's Resources.
-      - target: CioHelper
-        embed: false
+      - target: CioChromium
+        embed: true
       - package: CioModel
       - package: CioEngine
       - package: CioUI
-    preBuildScripts:
-      - name: "Build libcef_dll_wrapper"
-        path: Scripts/build_cef_wrapper.sh
-        basedOnDependencyAnalysis: false
     postBuildScripts:
-      - name: "Package CEF runtime (framework + helper applications)"
-        path: Scripts/package_cef_runtime.sh
+      - name: "Package native Chromium runtime"
+        path: Scripts/package_native_chromium.sh
         basedOnDependencyAnalysis: false
 
-  # Standalone logic/native-model tests; no TEST_HOST and no CEF launch.
+  # Swift sees only this stable interface; Chromium C++ is built by GN.
+  CioChromium:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Engine/CioChromium/Public
+        headerVisibility: public
+      - path: Engine/CioChromium/Shared
+      - path: Engine/CioChromium/NativeLoader
+        headerVisibility: private
+    settings:
+      base:
+        PRODUCT_NAME: CioChromium
+        PRODUCT_BUNDLE_IDENTIFIER: com.cerbur.Cio.Chromium
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Engine/CioChromium/Public"
+          - "$(SRCROOT)/Engine/CioChromium/Native"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/build/ChromiumBuild/src/out/CioDev"
+        OTHER_LDFLAGS:
+          - "-Wl,-reexport_library,$(SRCROOT)/build/ChromiumBuild/src/out/CioDev/libchrome_dll.dylib"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@loader_path/../../../"
+          - "@executable_path/../Frameworks"
+    dependencies:
+      - sdk: AppKit.framework
+  # Standalone logic/native-model tests; no TEST_HOST and no browser launch.
   # The model is imported from the same local package used by the App.
   CioTests:
     type: bundle.unit-test
@@ -160,23 +164,3 @@ targets:
         SWIFT_VERSION: "6.0"
         OTHER_LDFLAGS:
           - "-lsqlite3"
-
-  # Chromium sub-process entry point. The binary produced here is copied into
-  # the "Cio Helper*.app" bundles by Scripts/package_cef_runtime.sh.
-  CioHelper:
-    type: tool
-    platform: macOS
-    sources:
-      - path: Cio/Helper
-    settings:
-      base:
-        PRODUCT_NAME: CioHelper
-        HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/ThirdParty/CEF"
-        LIBRARY_SEARCH_PATHS:
-          - "$(SRCROOT)/ThirdParty"
-        OTHER_LDFLAGS:
-          - "-lcef_dll_wrapper"
-      configs:
-        Release:
-          CODE_SIGN_ENTITLEMENTS: Cio/Resources/Cio.entitlements

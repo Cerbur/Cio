@@ -1,8 +1,10 @@
 //
-//  CEFProcessHost.mm
+//  ChromiumProcessHost.mm
 //  Cio
 //
 //  Objective-C++ implementation of the CEF lifecycle boundary.
+//  Provenance: Cio's former Cio/Bridge/CEFProcessHost.mm, renamed and relocated.
+//  Third-party dependencies and reference scope: THIRD_PARTY_NOTICES.md.
 //
 //  On macOS the CEF framework must be loaded at runtime from the app bundle
 //  (CefScopedLibraryLoader) instead of being linked directly; that is a
@@ -10,19 +12,151 @@
 //  binary distribution expects client applications to start up.
 //
 
-#import "CEFProcessHost.h"
+#import "ChromiumProcessHost+CEF.h"
+#import <AppKit/AppKit.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
 
 #include "include/cef_app.h"
+#include "include/cef_browser.h"
+#include "include/cef_client.h"
 #include "include/cef_command_line.h"
+#include "include/cef_cookie.h"
 #include "include/cef_request_context.h"
 #include "include/cef_version.h"
 #include "include/wrapper/cef_library_loader.h"
 
 namespace {
+
+/// Chrome WebUI needs a Chrome-style top-level browser on macOS. A parent
+/// NSView forces Alloy, which blocks chrome://settings before it can load.
+/// Own every Chrome UI browser here, including tabs/windows Chrome creates,
+/// and wait for typed OnBeforeClose callbacks before shutting down CEF.
+class ChromeSettingsClient final : public CefClient,
+                                   public CefLifeSpanHandler {
+ public:
+  ChromeSettingsClient() = default;
+  CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+
+  bool Open(const std::string& url) {
+    if (closing_) return false;
+    pending_url_ = url;
+    if (!browsers_.empty()) {
+      auto browser = browsers_.front();
+      browser->GetMainFrame()->LoadURL(url);
+      Show(browser);
+      return true;
+    }
+    if (pending_) return true;
+    CefWindowInfo window;
+    window.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    window.bounds = CefRect(120, 120, 1000, 760);
+    CefBrowserSettings settings;
+    pending_ = CefBrowserHost::CreateBrowser(
+        window, this, url, settings, nullptr, CefRequestContext::GetGlobalContext());
+    return pending_;
+  }
+
+  bool HasLiveBrowsers() const { return pending_ || !browsers_.empty(); }
+
+  void CloseAll(void (^completion)(void)) {
+    closing_ = true;
+    completion_ = [completion copy];
+    // CloseBrowser may initiate callbacks; don't iterate a mutable registry.
+    auto browsers = browsers_;
+    for (auto browser : browsers) browser->GetHost()->CloseBrowser(true);
+    CompleteIfClosed();
+  }
+
+  void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+    browsers_.push_back(browser);
+    browser->GetHost()->SetAccessibilityState(STATE_ENABLED);
+    if (pending_) {
+      pending_ = false;
+      browser->GetMainFrame()->LoadURL(pending_url_);
+    }
+    if (closing_) browser->GetHost()->CloseBrowser(true);
+    else Show(browser);
+  }
+
+  void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+    std::erase_if(browsers_, [&](const auto& item) { return item->IsSame(browser); });
+    CompleteIfClosed();
+  }
+
+ private:
+  static void Show(CefRefPtr<CefBrowser> browser) {
+    NSView *view = CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+    [view.window makeKeyAndOrderFront:nil];
+    browser->GetHost()->SetFocus(true);
+  }
+
+  void CompleteIfClosed() {
+    if (!HasLiveBrowsers() && completion_) {
+      void (^completion)(void) = completion_;
+      completion_ = nil;
+      completion();
+    }
+  }
+
+  std::vector<CefRefPtr<CefBrowser>> browsers_;
+  std::string pending_url_;
+  bool pending_ = false;
+  bool closing_ = false;
+  void (^completion_)(void) = nil;
+  IMPLEMENT_REFCOUNTING(ChromeSettingsClient);
+  DISALLOW_COPY_AND_ASSIGN(ChromeSettingsClient);
+};
+
+CefRefPtr<ChromeSettingsClient> gChromeSettingsClient;
+
+CefRefPtr<ChromeSettingsClient> GetChromeSettingsClient() {
+  if (!gChromeSettingsClient) gChromeSettingsClient = new ChromeSettingsClient();
+  return gChromeSettingsClient;
+}
+
+constexpr char kLanguageDefaultsInitialized[] = "cio.language_defaults_initialized";
+
+/// Apple uses script-qualified Chinese tags; Chrome's language settings use
+/// zh-CN/zh-TW. Preserve the system's order and remove duplicate tags.
+NSString *SystemPreferredLanguages() {
+  NSMutableOrderedSet<NSString *> *languages = [NSMutableOrderedSet orderedSet];
+  for (NSString *identifier in NSLocale.preferredLanguages) {
+    NSDictionary *components = [NSLocale componentsFromLocaleIdentifier:identifier];
+    NSString *language = components[NSLocaleLanguageCode];
+    if (language.length == 0) continue;
+    NSString *region = components[NSLocaleCountryCode];
+    NSString *script = components[NSLocaleScriptCode];
+    NSString *tag = [identifier stringByReplacingOccurrencesOfString:@"_" withString:@"-"];
+    if ([language isEqualToString:@"zh"]) {
+      if ([region isEqualToString:@"HK"] || [region isEqualToString:@"MO"]) {
+        tag = @"zh-HK";
+      } else {
+        tag = ([script isEqualToString:@"Hant"] || [region isEqualToString:@"TW"])
+            ? @"zh-TW" : @"zh-CN";
+      }
+    }
+    [languages addObject:tag];
+  }
+  return languages.count ? [languages.array componentsJoinedByString:@","] : @"en-US,en";
+}
+
+/// The completion is delivered on CEF's UI thread. Swift schedules the next
+/// shutdown step after this callback returns, keeping CefShutdown off-stack.
+class CookieFlushCompletion final : public CefCompletionCallback {
+ public:
+  explicit CookieFlushCompletion(void (^completion)(BOOL))
+      : completion_([completion copy]) {}
+  void OnComplete() override { completion_(YES); }
+
+ private:
+  void (^completion_)(BOOL);
+  IMPLEMENT_REFCOUNTING(CookieFlushCompletion);
+  DISALLOW_COPY_AND_ASSIGN(CookieFlushCompletion);
+};
 
 /// Minimal CefApp implementation.
 ///
@@ -37,6 +171,10 @@ class CioApp final : public CefApp,
   // CefApp
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
     return this;
+  }
+
+  CefRefPtr<CefClient> GetDefaultClient() override {
+    return GetChromeSettingsClient();
   }
 
   void OnBeforeCommandLineProcessing(
@@ -63,6 +201,38 @@ class CioApp final : public CefApp,
   }
 
   // CefBrowserProcessHandler
+  void OnRegisterCustomPreferences(
+      cef_preferences_type_t type,
+      CefRawPtr<CefPreferenceRegistrar> registrar) override {
+    if (type == CEF_PREFERENCES_TYPE_REQUEST_CONTEXT) {
+      CefRefPtr<CefValue> value = CefValue::Create();
+      value->SetBool(false);
+      registrar->AddPreference(kLanguageDefaultsInitialized, value);
+    }
+  }
+
+  void OnContextInitialized() override {
+    CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+    CefRefPtr<CefValue> initialized = context->GetPreference(kLanguageDefaultsInitialized);
+    if (!initialized || initialized->GetBool()) return;
+
+    // Seed once in the Chrome profile (including profiles from older Cio
+    // versions). Leave CefSettings.accept_language_list empty: CEF otherwise
+    // overrides chrome://settings/languages on every request and restart.
+    CefRefPtr<CefValue> languages = CefValue::Create();
+    languages->SetString(SystemPreferredLanguages().UTF8String);
+    CefString error;
+    if (!context->SetPreference("intl.selected_languages", languages, error) ||
+        !context->SetPreference("intl.accept_languages", languages, error)) {
+      fprintf(stderr, "[cef] unable to initialize system language preferences\n");
+      return;
+    }
+    initialized->SetBool(true);
+    if (!context->SetPreference(kLanguageDefaultsInitialized, initialized, error)) {
+      fprintf(stderr, "[cef] unable to persist language initialization\n");
+    }
+  }
+
   ///
   /// The external message pump contract: CEF asks the client to run
   /// CefDoMessageLoopWork() now (delay_ms <= 0) or after |delay_ms|. Ignoring
@@ -215,13 +385,15 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   if (delay_ms <= 0) {
     // Work is pending right now; a zero-delay hop keeps the ordering correct
     // without spinning the run loop.
-    [CEFProcessHost scheduleMessagePumpWorkAfter:0];
+    [ChromiumProcessHost scheduleMessagePumpWorkAfter:0];
     return;
   }
-  [CEFProcessHost scheduleMessagePumpWorkAfter:delay_ms / 1000.0];
+  [ChromiumProcessHost scheduleMessagePumpWorkAfter:delay_ms / 1000.0];
 }
 
-@implementation CEFProcessHost
+@implementation ChromiumProcessHost
+
++ (NSString *)backendIdentifier { return @"cef-alloy"; }
 
 + (void)setDarkAppearance:(BOOL)dark {
   NSAssert(NSThread.isMainThread,
@@ -286,6 +458,9 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   if (!EnsureDirectory(cachePath, &directoryError) ||
       !EnsureDirectory(logDirectory, &directoryError)) {
     fprintf(stderr, "[cef] unable to prepare private data directories\n");
+    gState = RuntimeState::kFailed;
+    if (error != nullptr) *error = directoryError;
+    return NO;
   }
 
   const CefMainArgs main_args = CreateMainArgs();
@@ -312,7 +487,9 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   settings.no_sandbox = true;
 #endif
   settings.log_severity = LOGSEVERITY_INFO;
-  settings.persist_session_cookies = false;
+  // Chromium owns the cookie database, expiry, security attributes and
+  // encryption. Retain session cookies along with Cio's restored tabs.
+  settings.persist_session_cookies = true;
   settings.remote_debugging_port = 0;
 #if defined(DEBUG)
   // Network debugging is opt-in. The in-process inspector needs no listener.
@@ -336,8 +513,8 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   // CEF 120+ protects root_cache_path with a process-singleton lock. Set it
   // explicitly instead of relying on the platform default so every isolated
   // verification run (and the production profile) owns a deterministic,
-  // writable lock location. cache_path remains the profile-specific child
-  // used by this browser instance.
+  // writable lock location. Chrome bootstrap uses its default profile child
+  // under this root; keep the existing storage configuration for old profiles.
   CefString(&settings.root_cache_path).FromString(dataDirectory.UTF8String);
   CefString(&settings.cache_path).FromString(cachePath.UTF8String);
   CefString(&settings.log_file)
@@ -369,12 +546,46 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   return YES;
 }
 
++ (BOOL)openChromeSettingsURL:(NSURL *)url {
+  NSAssert(NSThread.isMainThread, @"Chrome settings must open on the CEF UI thread.");
+  if (gState != RuntimeState::kInitialized ||
+      ![url.scheme.lowercaseString isEqualToString:@"chrome"] ||
+      ![url.host.lowercaseString isEqualToString:@"settings"]) return NO;
+  return GetChromeSettingsClient()->Open(url.absoluteString.UTF8String);
+}
+
++ (BOOL)hasLiveChromeSettingsBrowsers {
+  return gChromeSettingsClient && gChromeSettingsClient->HasLiveBrowsers();
+}
+
++ (void)closeChromeSettingsWithCompletion:(void (^)(void))completion {
+  NSAssert(NSThread.isMainThread, @"Chrome settings must close on the CEF UI thread.");
+  if (gChromeSettingsClient) gChromeSettingsClient->CloseAll(completion);
+  else completion();
+}
+
++ (void)flushCookiesWithCompletion:(void (^)(BOOL))completion {
+  NSAssert(NSThread.isMainThread, @"Cookies must be flushed on the CEF UI thread.");
+  if (gState != RuntimeState::kInitialized) {
+    completion(YES);
+    return;
+  }
+  CefRefPtr<CefCookieManager> manager = CefCookieManager::GetGlobalManager(nullptr);
+  if (!manager || !manager->FlushStore(new CookieFlushCompletion(completion))) {
+    fprintf(stderr, "[cef] unable to flush cookie storage\n");
+    completion(NO);
+  }
+}
+
 + (void)shutdown {
   if (gState != RuntimeState::kInitialized) {
     return;
   }
   NSAssert(NSThread.isMainThread,
            @"CefShutdown() must be called on the main thread.");
+  NSAssert(!self.hasLiveChromeSettingsBrowsers,
+           @"Chrome settings must reach OnBeforeClose before CefShutdown.");
+  gChromeSettingsClient = nullptr;
   gState = RuntimeState::kNotInitialized;
   CefShutdown();
   fprintf(stderr, "[cef] shutdown complete\n");
@@ -401,14 +612,14 @@ void CioApp::OnScheduleMessagePumpWork(int64_t delay_ms) {
   }
   if (delay <= 0) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      [CEFProcessHost doMessageLoopWork];
+      [ChromiumProcessHost doMessageLoopWork];
     });
     return;
   }
   dispatch_after(
       dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
       dispatch_get_main_queue(), ^{
-        [CEFProcessHost doMessageLoopWork];
+        [ChromiumProcessHost doMessageLoopWork];
       });
 }
 

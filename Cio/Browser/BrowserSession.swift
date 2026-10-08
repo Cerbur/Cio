@@ -27,6 +27,7 @@
 import CioUI
 import CioModel
 import Combine
+import CioChromium
 import CioEngine
 import AppKit
 import Foundation
@@ -178,6 +179,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private var lastMainFrameLoadFailed = false
 
   private var bridge: BrowserBridge?
+  private var browserCreationScheduled = false
   private var lastAppliedDarkAppearance: Bool?
   private weak var containerView: ChromiumContainerView?
   private var didStartLoading = false
@@ -255,6 +257,19 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   private func createBrowserIfPossible() {
     guard !isClosed, bridge == nil, let view = containerView, view.window != nil else {
+      return
+    }
+    // AppKit notifies a parent before propagating its window to the child
+    // hosting WebContents. Native Chromium requires that child's real window.
+    guard view.pageContentView.window != nil else {
+      guard !browserCreationScheduled else { return }
+      browserCreationScheduled = true
+      emit("browser:waiting-for-content-window")
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.browserCreationScheduled = false
+        self.createBrowserIfPossible()
+      }
       return
     }
     let bridge = BrowserBridge(parentView: view.pageContentView)
@@ -624,6 +639,12 @@ extension BrowserSession: BrowserBridgeDelegate {
     guard acceptsCallback(from: bridge), closeState == .open,
           let containerView else { return }
     if docked {
+      // Chromium's own Inspect Element command can open DevTools directly.
+      // Adopt that frontend into the same Cio panel used by our toolbar.
+      if !isDevToolsOpen {
+        isDevToolsOpen = true
+        containerView.showDevToolsPane()
+      }
       bridge.reparentDevTools(to: containerView.devToolsHostView)
       devToolsWindow?.orderOut(nil)
       devToolsWindow?.delegate = nil

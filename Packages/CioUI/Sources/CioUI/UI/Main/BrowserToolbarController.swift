@@ -389,15 +389,16 @@ final class BrowserToolbarController: NSObject {
       if focused { siteInformation.dismiss() }
       session.addressFieldFocusChanged(focused)
     case .addressFocusRequested(let session):
-      guard isActive(session), toolbarPresentation.isVisible,
-            let window, chromeView?.window === window else { return }
+      guard isActive(session), toolbarPresentation.isVisible else { return }
       siteInformation.dismiss()
-      // Focus only this tab's stable editor, after its overlay is mounted.
+      // Let the mounted field's coordinator prepare its editing state before
+      // the native field/editor handoff. Address overlays are content siblings
+      // and must not depend on the navigation host's window or view traversal.
       DispatchQueue.main.async { [weak self, weak session] in
         guard let self, let session, self.isActive(session),
-              self.toolbarPresentation.isVisible, let overlay = self.addressOverlay,
-              overlay.window === self.window else { return }
-        self.addressField(in: overlay)?.focusAndSelectAll()
+              self.toolbarPresentation.isVisible else { return }
+        NotificationCenter.default.post(
+          name: .browserAddressFieldShouldFocus, object: session.engineAddressField)
       }
     case .addressReloadOrStop(let session):
       guard boundSession === session, toolbarPresentation.isVisible else { return }
@@ -408,14 +409,6 @@ final class BrowserToolbarController: NSObject {
       break
     }
     applyCurrentLayout()
-  }
-
-  private func addressField(in view: NSView) -> CioAddressField? {
-    if let field = view as? CioAddressField { return field }
-    for subview in view.subviews {
-      if let field = addressField(in: subview) { return field }
-    }
-    return nil
   }
 
   private func preparePageControlsForAppearance() {

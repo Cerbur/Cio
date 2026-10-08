@@ -44,6 +44,22 @@ if [ ! -x "$HELPER_PRODUCT" ]; then
   exit 1
 fi
 
+# Keep the actual runtime's license/credits together with the distribution.
+# Legacy CEF packaging only; the active native backend uses
+# Scripts/package_native_chromium.py and includes the adapted Mori license.
+for NOTICE in LICENSE.txt CREDITS.html; do
+  if [ ! -f "$CEF_ROOT/$NOTICE" ]; then
+    echo "error: CEF distribution is missing required notice $NOTICE" >&2
+    exit 1
+  fi
+done
+NOTICES_DIR="$CONTENTS/Resources/ThirdPartyNotices"
+mkdir -p "$NOTICES_DIR"
+cp "$CEF_ROOT/LICENSE.txt" "$NOTICES_DIR/CEF-LICENSE.txt"
+cp "$CEF_ROOT/CREDITS.html" "$NOTICES_DIR/Chromium-CREDITS.html"
+cp "$SRCROOT/THIRD_PARTY_NOTICES.md" "$NOTICES_DIR/THIRD_PARTY_NOTICES.md"
+printf '%s\n' "$CEF_VERSION" > "$NOTICES_DIR/CEF-VERSION.txt"
+
 mkdir -p "$FRAMEWORKS_DIR"
 
 # ---------------------------------------------------------------------------

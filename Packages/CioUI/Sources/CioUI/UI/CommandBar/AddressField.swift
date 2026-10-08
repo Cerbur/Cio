@@ -402,7 +402,13 @@ public final class CioAddressField: NSTextField {
   public override func resignFirstResponder() -> Bool {
     let resigned = super.resignFirstResponder()
     if resigned {
-      onFocusChange?(false)
+      // A field also resigns when handing focus to AppKit's shared text
+      // editor. Wait for that handoff before declaring the address blurred.
+      DispatchQueue.main.async { [weak self] in
+        guard let self, let window = self.window,
+              !self.hasKeyboardFocus(in: window) else { return }
+        self.onFocusChange?(false)
+      }
     }
     return resigned
   }
@@ -443,6 +449,9 @@ public final class CioAddressField: NSTextField {
     // shared field editor. Start editing before selecting, so capsule clicks
     // and ⌘L leave the address ready for the next keystroke.
     if currentEditor() == nil { selectText(nil) }
+    if let editor = currentEditor(), window.firstResponder !== editor {
+      _ = window.makeFirstResponder(editor)
+    }
     configureFieldEditor()
     selectAllFromStart()
   }

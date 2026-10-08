@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Once cleanup finishes, issue a new termination request and allow it.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     let runtime = ApplicationRuntime.shared
-    if terminationReady || runtime.hasShutDownCEF {
+    if terminationReady || runtime.hasShutDownBrowserEngine {
       runtime.record("appkit:terminate-ready")
       return .terminateNow
     }
@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // The Terminator calls CefShutdown only after every typed OnBeforeClose
     // callback has released its session. Never bypass that ordering here.
     if !runtime.hasLiveBrowsers {
-      runtime.shutdownCEF()
+      runtime.shutdownBrowserEngine()
     }
     SessionRestoreSelfTest.noteTerminationCompletion()
     // The late dump is what proves the Command-W conflict stayed resolved for

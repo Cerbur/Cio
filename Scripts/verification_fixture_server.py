@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -41,6 +42,31 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._beforeunload_page()
         elif path == "/popup":
             self._popup_page()
+        elif path == "/native-bridge":
+            self._native_bridge_page()
+        elif path == "/native-child":
+            self._send(200, b'''<!doctype html><meta charset=utf-8>
+                <title>Native child</title><h1>Native child</h1><p id=result></p>
+                <script>document.querySelector('#result').textContent =
+                window.opener ? 'PASS: original popup retained opener' : 'FAIL: opener missing';
+                if(window.opener) window.opener.postMessage('popup-opener-pass', location.origin);
+                </script>''', "text/html; charset=utf-8")
+        elif path == "/native-media":
+            self._send(200, b'''<!doctype html><meta charset=utf-8><title>Native codec acceptance</title>
+              <h1>Native codec acceptance</h1><p id=h264>H264 pending</p><p id=h265>H265 pending</p>
+              <script>for(const name of ['h264','h265']) {
+                const v=document.createElement('video'); v.muted=true; v.autoplay=true;
+                v.width=320; v.src='/'+name+'.mp4'; document.body.append(v);
+                v.onerror=()=>document.getElementById(name).textContent=name+' FAIL '+v.error.code;
+                v.ontimeupdate=()=>{if(v.currentTime>0.5)
+                  document.getElementById(name).textContent=name+' PASS decoded '+v.currentTime.toFixed(2)+'s'};
+              }</script>''', "text/html; charset=utf-8")
+        elif path in ("/h264.mp4", "/h265.mp4"):
+            fixture = Path(__file__).resolve().parents[1] / "build/verification/native-bridge" / path[1:]
+            if fixture.exists():
+                self._send(200, fixture.read_bytes(), "video/mp4")
+            else:
+                self._send(404, b"Generate codec fixtures with ffmpeg first", "text/plain")
         elif path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/page-b")
@@ -93,6 +119,25 @@ class FixtureHandler(BaseHTTPRequestHandler):
             '<button id="open" onclick="window.open(\'/page-b\', \'_blank\')">'
             "Open popup</button></main>"
         ).encode("utf-8")
+        self._send(200, payload, "text/html; charset=utf-8")
+
+    def _native_bridge_page(self) -> None:
+        # These are disposable loopback test cookies, never user credentials.
+        payload = b'''<!doctype html><meta charset=utf-8><title>Native bridge acceptance</title>
+        <h1>Native bridge acceptance</h1>
+        <p id=cookies></p><p id=language></p><p id=popup>Popup pending</p>
+        <button onclick="document.cookie='cio_session=acceptance;path=/';
+          document.cookie='cio_persistent=acceptance;path=/;max-age=86400'; render()">Seed test cookies</button>
+        <p><a href=/page-b>Navigate to Page B</a></p>
+        <button onclick="window.open('/native-child', '_blank')">Open original popup</button>
+        <p><a href=/native-child target=_blank>Open target blank</a></p>
+        <p><a href=/download>Download fixture</a></p>
+        <p><a href=/beforeunload>Beforeunload fixture</a></p>
+        <script>function render(){document.querySelector('#cookies').textContent=
+          'Test cookies: '+(document.cookie||'(none)')}
+        render(); document.querySelector('#language').textContent='Language: '+navigator.language;
+        addEventListener('message', e=>{if(e.origin===location.origin)
+          document.querySelector('#popup').textContent=e.data});</script>'''
         self._send(200, payload, "text/html; charset=utf-8")
 
     def _slow_download(self) -> None:

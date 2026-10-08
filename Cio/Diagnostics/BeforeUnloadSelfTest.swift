@@ -55,7 +55,7 @@ enum BeforeUnloadSelfTest {
       let tabID = workspace.selectedTabID
     else {
       print("beforeunload-self-test: FAIL setup")
-      runtime.shutdownCEF()
+      runtime.shutdownBrowserEngine()
       exit(2)
     }
 
@@ -107,9 +107,9 @@ enum BeforeUnloadSelfTest {
     runtime.requestBrowserClosure()
     let allClosed = waitUntil(timeout: 30) { !runtime.hasLiveBrowsers }
     check(allClosed, "termination-closes-remaining-runtimes")
-    let shutdown = runtime.shutdownCEF()
-    check(shutdown || runtime.hasShutDownCEF, "cef-shutdown-once")
-    check(runtime.cefShutdownCount == 1, "cef-shutdown-count-is-one")
+    let shutdown = runtime.shutdownBrowserEngine()
+    check(shutdown || runtime.hasShutDownBrowserEngine, "cef-shutdown-once")
+    check(runtime.engineShutdownCount == 1, "cef-shutdown-count-is-one")
 
     window.close()
     print("beforeunload-self-test: choice=\(choice == .cancel ? "cancel" : "accept") failures=\(failures)")

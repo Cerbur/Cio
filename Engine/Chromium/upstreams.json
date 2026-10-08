@@ -1,0 +1,99 @@
+{
+  "reference": {
+    "name": "Mori",
+    "repository": "https://github.com/FujiwaraChoki/mori-browser.git",
+    "revision": "b5b29c2e29061f9b2009e8cc0b2756c6ad62bb20",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 Mori contributors",
+    "license_notice": "ThirdParty/Notices/Mori-MIT.txt",
+    "reuse_status": "adapted-source",
+    "copied_implementation_files": [
+      {
+        "upstream": "ungoogled-chromium-macos/build/src/chrome/browser/ui/mori/mori_browser_window.h",
+        "destination": "Engine/CioChromium/Native/CioBrowserWindow.h"
+      },
+      {
+        "upstream": "ungoogled-chromium-macos/build/src/chrome/browser/ui/mori/mori_browser_window.mm",
+        "destination": "Engine/CioChromium/Native/CioBrowserWindow.mm"
+      }
+    ],
+    "included_in_product": true,
+    "bridge_path": "ungoogled-chromium-macos/build/src/chrome/browser/ui/mori",
+    "role": "MIT BrowserWindow implementation adapted for Cio and Chromium 152; no Mori SwiftUI app or binary is included"
+  },
+  "engine": {
+    "repository": "https://chromium.googlesource.com/chromium/src.git",
+    "version": "152.0.7977.83",
+    "revision": "79460ebecaa5625e57a5fb679a735659e73dc687",
+    "source_archive": "https://commondatastorage.googleapis.com/chromium-browser-official/chromium-152.0.7977.83-lite.tar.xz",
+    "source_sha256": "ba910f09b487b076f79fa8badfa0cefd130cc50fcae88d61a7d92ee2d9665ad2",
+    "role": "Native Chromium engine compiled with the version-pinned Cio overlay",
+    "state": "native-integrated-runtime-validated",
+    "stock_build": {
+      "completed_at": "2026-10-08T01:00:14.702371+00:00",
+      "platform": "macOS-arm64",
+      "configuration": "release-component-no-symbols",
+      "output": "build/ChromiumBuild/src/out/CioDev/Chromium.app",
+      "status_record": "build/ChromiumBuild/attempt.json",
+      "log": "build/ChromiumBuild/build.log",
+      "native_backend_built": false,
+      "integrated_in_cio": false,
+      "runtime_validated": false
+    },
+    "included_in_product": true,
+    "native_build": {
+      "completed_at": "2026-10-08T04:42:42.716531+00:00",
+      "platform": "macOS-arm64",
+      "configuration": "release-component-no-symbols",
+      "backend_identifier": "chromium-native",
+      "interface_version": 1,
+      "output": "build/DerivedData/Build/Products/Debug/Cio.app",
+      "app_build_command": "CONFIGURATION=Debug Scripts/build.sh",
+      "app_build_log": "build/verification/native-bridge/rebuild-address-routing.log",
+      "bundle_validation_command": "Scripts/verify_bundle.sh",
+      "bundle_validation_log": "build/verification/native-bridge/bundle-final.log",
+      "native_backend_built": true,
+      "integrated_in_cio": true,
+      "static_bundle_validated": true,
+      "runtime_validated": true,
+      "component_libraries": 519,
+      "standard_helpers": 4,
+      "runtime_validation": {
+        "date": "2026-10-08",
+        "command": "python3 Scripts/verify_native_runtime.py --mock-keychain",
+        "log": "build/verification/native-bridge/runtime-final.log",
+        "cases": [
+          "normal",
+          "page",
+          "settings",
+          "repeat",
+          "beforeunload-cancel",
+          "beforeunload-accept"
+        ],
+        "profile": "disposable temporary profiles, explicit mock keychain",
+        "gui_scope": [
+          "tab selection",
+          "popup opener",
+          "1-to-2-to-3 split",
+          "3-to-2 close",
+          "ungroup",
+          "independent pane navigation",
+          "sidebar collapse/expand",
+          "chrome settings languages",
+          "H264 and H265 decode",
+          "beforeunload Stay and Leave",
+          "normal quit and cookie restore",
+          "docked DevTools",
+          "fixture download",
+          "Command-L editor focus and paste navigation",
+          "Command-L selected split pane only",
+          "Command-W closes pane tab, keeps other pane"
+        ],
+        "unverified": [
+          "real keychain authorization across ad-hoc rebuilds",
+          "legacy encrypted-cookie migration"
+        ]
+      }
+    }
+  }
+}

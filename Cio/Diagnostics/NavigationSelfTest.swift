@@ -21,6 +21,7 @@
 //  candidate windows or resizing feel. Those stay in the manual checklist.
 //
 
+import CioChromium
 import CioModel
 import AppKit
 import Foundation

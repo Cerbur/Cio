@@ -380,7 +380,19 @@ public final class DownloadManager: ObservableObject {
 
   private func containedURL(_ url: URL) -> Bool {
     let root = downloadsDirectoryURL.standardizedFileURL.resolvingSymlinksInPath()
-    let candidate = url.standardizedFileURL.resolvingSymlinksInPath()
+    let exists = fileManager.fileExists(atPath: url.path)
+    // A dangling leaf symlink must not turn a missing-file reservation into a
+    // write outside the allowed directory.
+    if !exists, (try? fileManager.destinationOfSymbolicLink(atPath: url.path)) != nil {
+      return false
+    }
+    // Foundation does not resolve a missing file's parent consistently (for
+    // example /private/tmp vs /tmp). Resolve the existing parent separately
+    // when reserving a new filename, while resolving existing leaf symlinks.
+    let candidate = exists
+      ? url.standardizedFileURL.resolvingSymlinksInPath()
+      : url.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+        .appendingPathComponent(url.lastPathComponent)
     let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
     return candidate.path.hasPrefix(prefix)
   }

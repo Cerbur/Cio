@@ -14,9 +14,9 @@ DERIVED_DATA="${DERIVED_DATA:-$REPO_ROOT/build/DerivedData}"
 
 cd "$REPO_ROOT"
 
-if [ ! -f "$REPO_ROOT/ThirdParty/CEF/include/cef_app.h" ]; then
-  "$REPO_ROOT/Scripts/fetch_cef.sh"
-fi
+# Keep the native engine incremental and version-pinned. The stock source and
+# toolchains are prepared once by Scripts/try_chromium_build.py.
+PYTHONDONTWRITEBYTECODE=1 python3 "$REPO_ROOT/Scripts/build_native_chromium.py"
 
 xcodegen generate
 # XcodeGen's generated scheme has no TestAction, so the shared scheme from

@@ -3,9 +3,11 @@
 //  Cio
 //
 //  Objective-C++ implementation of the CEF browser boundary.
+//  Provenance: relocated from Cio/Bridge/BrowserBridge.mm, not a Mori port.
+//  Third-party dependencies and reference scope: THIRD_PARTY_NOTICES.md.
 //
 
-#import "BrowserBridge.h"
+#import "BrowserBridge+CEF.h"
 
 #import "CEFClientHandler.h"
 #import "ShutdownTiming.h"

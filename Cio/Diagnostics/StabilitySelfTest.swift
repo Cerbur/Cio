@@ -401,11 +401,11 @@ final class StabilitySelfTest {
       advance: { self.terminationFinished },
       finish: { completed in
         let clean = completed && self.manager.liveSessionCount == 0
-          && self.runtime.hasShutDownCEF && self.runtime.cefShutdownCount == 1
+          && self.runtime.hasShutDownBrowserEngine && self.runtime.engineShutdownCount == 1
         self.report(
           "all-live-sessions-close-before-single-cef-shutdown",
           clean,
-          "live=\(self.manager.liveSessionCount) shutdowns=\(self.runtime.cefShutdownCount)")
+          "live=\(self.manager.liveSessionCount) shutdowns=\(self.runtime.engineShutdownCount)")
         self.finishRun()
       })
   }

@@ -17,6 +17,7 @@
 //  Chromium view owns the keyboard.
 //
 
+import CioChromium
 import CioUI
 import SwiftUI
 
@@ -43,7 +44,11 @@ struct CioApp: App {
     // SwiftUI installs the native Settings menu item and Command-comma, which
     // AppKit dispatches even while Chromium owns the browser's first responder.
     Settings {
-      BrowserSettingsView()
+      BrowserSettingsView { url in
+        guard !runtime.workspaceStore.isTerminating else { return false }
+        runtime.presentedInternalPanel = nil
+        return runtime.workspaceStore.createTab(url: url, title: "设置") != nil
+      }
     }
     .defaultSize(width: 760, height: 520)
   }

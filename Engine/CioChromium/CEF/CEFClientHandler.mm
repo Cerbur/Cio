@@ -5,7 +5,7 @@
 
 #import "CEFClientHandler.h"
 
-#import "BrowserBridge.h"
+#import "BrowserBridge+CEF.h"
 
 #include <string>
 

@@ -11,7 +11,7 @@ CioUI imports only system frameworks, CioEngine and CioModel. App remains the co
 | BrowserNativeSurface.nativeView | Returns the same ChromiumContainerView; original mount/layout/visibility operations are forwarded |
 | BrowserNativeSurface.browserSession | Resolves the existing weak delegate, preserving session ownership |
 | BrowserSurfaceAttachment | Transfers only original surface reference, never a new NSView or strong session retention |
-| onProcessAppearanceChange | Original CEFProcessHost call runs first, followed by original onDarkAppearanceChange; hook installed before mounting, including bare diagnostic hosts |
+| onProcessAppearanceChange | Original ChromiumProcessHost call runs first, followed by original onDarkAppearanceChange; hook installed before mounting, including bare diagnostic hosts |
 | AddressField / CioAddressField | Original NSTextField, field editor, IME delegate and focus callbacks; protocol object is the original AddressFieldModel |
 | BrowserCommandNotifications | Original notification names and objects; AppCommands retains native menu equivalents |
 | Animation | Original tuning, persisted speed/Reduce Motion policy and handoff/completion order moved with UI |

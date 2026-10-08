@@ -8,6 +8,7 @@
 //
 
 import CioUI
+import CioChromium
 import CioEngine
 import AppKit
 import Foundation
@@ -1099,11 +1100,11 @@ final class SpacesSelfTest {
         self.report(
           "onbeforeclose-before-cef-shutdown",
           completed && closeBeforeCef,
-          "live=\(self.manager.liveSessionCount) cef-down=\(self.runtime.hasShutDownCEF)")
+          "live=\(self.manager.liveSessionCount) cef-down=\(self.runtime.hasShutDownBrowserEngine)")
         self.report(
           "shutdown-waits-for-onbeforeclose",
           completed && self.manager.liveSessionCount == 0 && closeBeforeCef
-            && self.runtime.hasShutDownCEF,
+            && self.runtime.hasShutDownBrowserEngine,
           "seconds=\(String(format: "%.2f", seconds)) live=\(self.manager.liveSessionCount) ordered=\(closeBeforeCef)")
       })
   }
@@ -1119,8 +1120,8 @@ final class SpacesSelfTest {
       finish: { _ in
         self.report(
           "cef-shutdown-once",
-          self.runtime.cefShutdownCount == 1 && !CEFProcessHost.isInitialized,
-          "count=\(self.runtime.cefShutdownCount) initialized=\(CEFProcessHost.isInitialized)")
+          self.runtime.engineShutdownCount == 1 && !ChromiumProcessHost.isInitialized,
+          "count=\(self.runtime.engineShutdownCount) initialized=\(ChromiumProcessHost.isInitialized)")
         self.finishRun()
       })
   }

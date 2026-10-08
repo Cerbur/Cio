@@ -12,7 +12,7 @@
 
 #include <cstdio>
 #include <set>
-#include "../Bridge/InspectorFrontend.h"
+#include "InspectorFrontend.h"
 
 #include "include/cef_app.h"
 #include "include/cef_frame.h"

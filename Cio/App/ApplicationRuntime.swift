@@ -9,11 +9,12 @@
 //  Milestone 4 separates pure workspace policy from Chromium runtime policy:
 //  the runtime owns one BrowserWorkspaceStore, which owns one
 //  BrowserSessionManager. Nothing here keeps a second liveness registry -
-//  hasLiveBrowsers asks the manager through the workspace store, and the
+//  hasLiveBrowsers asks both the workspace manager and native Chrome UI host. The
 //  termination coordinator is woken by a typed per-session callback rather
 //  than by parsing a lifecycle string.
 //
 
+import CioChromium
 import CioEngine
 import Combine
 import CioUI
@@ -25,8 +26,8 @@ final class ApplicationRuntime: ObservableObject {
   /// Shared instance. The entry point creates it before the UI exists.
   static let shared = ApplicationRuntime()
 
-  /// Mirrors CEFProcessHost state in a form the UI can render.
-  enum CEFStatus: Equatable {
+  /// Mirrors ChromiumProcessHost state in a form the UI can render.
+  enum EngineStatus: Equatable {
     case notInitialized
     case initialized(version: String)
     case failed(message: String)
@@ -97,7 +98,7 @@ final class ApplicationRuntime: ObservableObject {
     performSpotlightAction: { [weak self] in self?.performSpotlightAction($0) },
     noteMainWindowAppeared: { [weak self] in self?.noteMainWindowAppeared() })
 
-  @Published private(set) var cefStatus: CEFStatus = .notInitialized
+  @Published private(set) var engineStatus: EngineStatus = .notInitialized
 
   /// Ordered lifecycle milestones. Verification modes print this trace so that
   /// "CEF initializes and shuts down cleanly" can be checked automatically.
@@ -108,16 +109,18 @@ final class ApplicationRuntime: ObservableObject {
   /// the callback carries the session, so the receiver always knows which
   /// browser closed (Milestone 3 section 7).
   var onLiveSessionDidClose: ((BrowserSession) -> Void)?
+  private var onChromeSettingsDidClose: (() -> Void)?
 
   /// Optional launch-driver hook used by the direct browser self-test. It
   /// fires only after the real SwiftUI window and stable surface host exist.
   var onMainWindowAppeared: (() -> Void)?
 
+  private var nativeActionObservations: Set<AnyCancellable> = []
   private var messagePumpTimer: Timer?
   private var terminationWatchdogTimer: Timer?
   private var terminationWatchdogStartedAt: Date?
-  private var didShutDownCEF = false
-  private var cefShutdownInvocations = 0
+  private var didShutDownBrowserEngine = false
+  private var engineShutdownInvocations = 0
   private var isTracingEnabled = false
 
   private init() {
@@ -129,6 +132,29 @@ final class ApplicationRuntime: ObservableObject {
       initialTabURL: Self.homeURL,
       sessionStore: sessionStore)
     workspaceStore = store
+    NotificationCenter.default.publisher(for: Notification.Name("CioOpenChromeSettings"))
+      .sink { [weak self] notification in
+        MainActor.assumeIsolated {
+          guard let self, let url = notification.object as? URL,
+                !self.workspaceStore.isTerminating else { return }
+          self.presentedInternalPanel = nil
+          self.workspaceStore.createTab(url: url, title: "设置")
+        }
+      }.store(in: &nativeActionObservations)
+    NotificationCenter.default.publisher(for: Notification.Name("CioFocusAddress"))
+      .sink { [weak self] _ in MainActor.assumeIsolated {
+        self?.workspaceStore.selectedSession?.requestAddressFieldFocus()
+      }}.store(in: &nativeActionObservations)
+    NotificationCenter.default.publisher(for: Notification.Name("CioShowTabSearch"))
+      .sink { [weak self] _ in MainActor.assumeIsolated {
+        self?.workspaceStore.presentSpotlight()
+      }}.store(in: &nativeActionObservations)
+    NotificationCenter.default.publisher(for: Notification.Name("CioBookmarkURL"))
+      .sink { [weak self] _ in MainActor.assumeIsolated {
+        guard let self, let id = self.workspaceStore.selectedTabID else { return }
+        NotificationCenter.default.post(name: .browserToggleSpacePin, object: self.workspaceStore,
+                                        userInfo: ["tabID": id])
+      }}.store(in: &nativeActionObservations)
     store.onLifecycleEvent = { [weak self] event in
       self?.record(event)
     }
@@ -237,6 +263,11 @@ final class ApplicationRuntime: ObservableObject {
     guard !didAppearInWindow else { return }
     didAppearInWindow = true
     record("swiftui:main-window-appeared")
+    // Native Chromium can finish AppKit startup before SwiftUI installs our
+    // application delegate. Window mounting is the reliable host boundary;
+    // startMessagePump is idempotent when didFinishLaunching also arrives.
+    startMessagePump()
+    MainMenuDump.claimCloseTabShortcut()
     // AppKit may choose the first native NSTextField as the initial responder
     // while SwiftUI installs the toolbar. The browser surface is the launch
     // target, so explicitly complete the initial hand-off once the real
@@ -261,15 +292,16 @@ final class ApplicationRuntime: ObservableObject {
 
   /// Initializes CEF for the browser process. Must run on the main thread
   /// before the application's run loop starts.
-  func startCEF() {
+  func startBrowserEngine() {
     do {
-      try CEFProcessHost.start()
-      let version = CEFProcessHost.versionString ?? "unknown version"
-      cefStatus = .initialized(version: version)
+      try ChromiumProcessHost.start()
+      let version = ChromiumProcessHost.versionString ?? "unknown version"
+      engineStatus = .initialized(version: version)
       record("cef:initialized")
-      AppLog.cef.info("CEF initialized: \(version, privacy: .public)")
+      AppLog.cef.info(
+        "Browser engine initialized: \(ChromiumProcessHost.backendIdentifier, privacy: .public) interface=\(CioChromiumInterfaceVersion, privacy: .public) \(version, privacy: .public)")
     } catch {
-      cefStatus = .failed(message: error.localizedDescription)
+      engineStatus = .failed(message: error.localizedDescription)
       record("cef:failed(\(error.localizedDescription))")
       AppLog.cef.error(
         "CEF initialization failed: \(error.localizedDescription, privacy: .public)")
@@ -278,7 +310,7 @@ final class ApplicationRuntime: ObservableObject {
 
   /// Starts pumping CEF's message loop on the main run loop.
   func startMessagePump() {
-    guard CEFProcessHost.isInitialized, messagePumpTimer == nil else { return }
+    guard ChromiumProcessHost.isInitialized, messagePumpTimer == nil else { return }
     let timer = Timer.scheduledTimer(
       withTimeInterval: Self.messagePumpInterval, repeats: true
     ) { _ in
@@ -309,6 +341,14 @@ final class ApplicationRuntime: ObservableObject {
   /// This checks the coordinator but does not reproduce a native Cmd+Q event
   /// dispatched from inside Chromium. Real-key testing remains necessary.
   func pumpMessageLoop() {
+    guard !isPumpingBrowserEngine else { return }
+    isPumpingBrowserEngine = true
+    defer {
+      isPumpingBrowserEngine = false
+      let completion = onBrowserPumpReturned
+      onBrowserPumpReturned = nil
+      completion?()
+    }
     if let deadline = terminateInPumpDeadline, deadline.timeIntervalSinceNow <= 0 {
       terminateInPumpDeadline = nil
       if focusAddressFieldForTooling {
@@ -323,8 +363,11 @@ final class ApplicationRuntime: ObservableObject {
       AppLog.app.info("tooling: requesting termination from inside the CEF message pump")
       NSApp.terminate(nil)
     }
-    CEFProcessHost.doMessageLoopWork()
+    ChromiumProcessHost.doMessageLoopWork()
   }
+
+  private var isPumpingBrowserEngine = false
+  private var onBrowserPumpReturned: (() -> Void)?
 
   /// Deadline for the tooling hook above; nil unless it was requested.
   private var terminateInPumpDeadline: Date?
@@ -341,16 +384,18 @@ final class ApplicationRuntime: ObservableObject {
   // MARK: - Shutdown
 
   /// True once CefShutdown() has run. CefShutdown() must be called exactly once.
-  var hasShutDownCEF: Bool { didShutDownCEF }
+  var hasShutDownBrowserEngine: Bool { didShutDownBrowserEngine }
 
   /// How many times CefShutdown() actually ran. The multi-tab integration test
   /// asserts this is exactly 1.
-  var cefShutdownCount: Int { cefShutdownInvocations }
+  var engineShutdownCount: Int { engineShutdownInvocations }
 
   /// True while any browser has not yet reached OnBeforeClose, including the
-  /// browsers whose tab has already left the sidebar. The manager owns the one
-  /// and only registry, so this cannot disagree with what termination closes.
-  var hasLiveBrowsers: Bool { workspaceStore.hasLiveSessions }
+  /// browsers whose tab has already left the sidebar, and native Chrome UI
+  /// windows owned by the process host.
+  var hasLiveBrowsers: Bool {
+    workspaceStore.hasLiveSessions || ChromiumProcessHost.hasLiveChromeSettingsBrowsers
+  }
 
   /// Requests browser closure without waiting for it.
   ///
@@ -360,6 +405,9 @@ final class ApplicationRuntime: ObservableObject {
     // Persist the durable domain graph before any live Chromium object starts
     // closing. Lazy tabs have no runtime and therefore need no synthetic close.
     workspaceStore.flushSessionPersistence()
+    ChromiumProcessHost.closeChromeSettings { [weak self] in
+      MainActor.assumeIsolated { self?.onChromeSettingsDidClose?() }
+    }
     guard workspaceStore.hasLiveSessions else {
       AppLog.cef.info("no live Chromium browser to close")
       return
@@ -376,9 +424,10 @@ final class ApplicationRuntime: ObservableObject {
   /// MUST NOT be called while Chromium is on the stack: CefShutdown() re-enters
   /// CEF and trips a Chromium CHECK (see Terminator).
   @discardableResult
-  func shutdownCEF() -> Bool {
-    guard !didShutDownCEF else { return true }
-    guard !workspaceStore.hasLiveSessions else {
+  func shutdownBrowserEngine() -> Bool {
+    guard !didShutDownBrowserEngine else { return true }
+    guard !isPumpingBrowserEngine else { return false }
+    guard !hasLiveBrowsers else {
       // This is a hard safety boundary. A timer, a missing callback or a
       // returning NSApplication loop must never turn a live-browser condition
       // into CefShutdown; the caller must keep pumping until OnBeforeClose.
@@ -387,13 +436,13 @@ final class ApplicationRuntime: ObservableObject {
         "refusing CefShutdown while \(self.workspaceStore.liveSessionCount, privacy: .public) browser session(s) remain live")
       return false
     }
-    didShutDownCEF = true
-    cefShutdownInvocations += 1
+    didShutDownBrowserEngine = true
+    engineShutdownInvocations += 1
     markShutdownPhase("T5")
     stopMessagePump()
-    CEFProcessHost.shutdown()
+    ChromiumProcessHost.shutdown()
     markShutdownPhase("T6")
-    record("cef:shutdown(clean: \(!CEFProcessHost.isInitialized))")
+    record("cef:shutdown(clean: \(!ChromiumProcessHost.isInitialized))")
     AppLog.cef.info("CEF shutdown requested")
     return true
   }
@@ -401,27 +450,27 @@ final class ApplicationRuntime: ObservableObject {
   /// Drains a close that this installed CEF build defers until CefShutdown
   /// after an attachment download has completed. This is deliberately limited
   /// to the M7 real-CEF diagnostic: production termination must use
-  /// `shutdownCEF()`, which refuses to cross the live-session boundary.
+  /// `shutdownBrowserEngine()`, which refuses to cross the live-session boundary.
   @discardableResult
   func drainDeferredBrowserCloseForM7SelfTest() -> Bool {
-    guard !didShutDownCEF else { return true }
+    guard !didShutDownBrowserEngine else { return true }
     guard CommandLine.arguments.contains(where: {
       $0 == "--milestone7-self-test=seed" || $0 == "--milestone7-self-test=verify"
     }) else {
       return false
     }
     guard workspaceStore.isTerminating, workspaceStore.hasLiveSessions else {
-      return shutdownCEF()
+      return shutdownBrowserEngine()
     }
 
     record("cef:self-test-deferred-close-drain(live=\(workspaceStore.liveSessionCount))")
-    didShutDownCEF = true
-    cefShutdownInvocations += 1
+    didShutDownBrowserEngine = true
+    engineShutdownInvocations += 1
     markShutdownPhase("T5")
     stopMessagePump()
-    CEFProcessHost.shutdown()
+    ChromiumProcessHost.shutdown()
     markShutdownPhase("T6")
-    record("cef:shutdown(clean: \(!CEFProcessHost.isInitialized))")
+    record("cef:shutdown(clean: \(!ChromiumProcessHost.isInitialized))")
     AppLog.cef.info("CEF shutdown requested by the M7 deferred-close diagnostic")
     return true
   }
@@ -495,6 +544,8 @@ final class ApplicationRuntime: ObservableObject {
     private var didFinish = false
     private var didMarkFirstStep = false
     private var didRequestClosure = false
+    private var didRequestCookieFlush = false
+    private var didCompleteCookieFlush = false
     private var pendingStep: Timer?
 
     init(runtime: ApplicationRuntime, onFinished: @escaping () -> Void) {
@@ -512,6 +563,7 @@ final class ApplicationRuntime: ObservableObject {
       // Typed wake-up: the manager reports which session reached OnBeforeClose.
       // A close is never inferred from a lifecycle string.
       runtime.onLiveSessionDidClose = { [weak self] _ in self?.scheduleStep() }
+      runtime.onChromeSettingsDidClose = { [weak self] in self?.scheduleStep() }
       // Close only after the original terminate(_:) and key event return.
       scheduleStep()
     }
@@ -531,6 +583,12 @@ final class ApplicationRuntime: ObservableObject {
 
     private func step() {
       guard !didFinish else { return }
+      // Chromium's macOS pump can dispatch native timers/events. A timer is
+      // not proof that its stack has unwound: wait for the outer pump return.
+      if runtime.isPumpingBrowserEngine {
+        runtime.onBrowserPumpReturned = { [weak self] in self?.scheduleStep() }
+        return
+      }
       if !didMarkFirstStep {
         didMarkFirstStep = true
         runtime.markShutdownPhase("firstStep")
@@ -543,6 +601,23 @@ final class ApplicationRuntime: ObservableObject {
         runtime.requestBrowserClosure()
       }
       if !runtime.hasLiveBrowsers {
+        if !didRequestCookieFlush {
+          didRequestCookieFlush = true
+          runtime.record("termination:cookie-flush-started")
+          ChromiumProcessHost.flushCookies { [weak self] success in
+            MainActor.assumeIsolated {
+              guard let self else { return }
+              if !success {
+                AppLog.cef.error("Cookie store flush could not be started")
+              }
+              self.didCompleteCookieFlush = true
+              self.runtime.record(success ? "termination:cookies-flushed" : "termination:cookie-flush-failed")
+              self.scheduleStep()
+            }
+          }
+          return
+        }
+        guard didCompleteCookieFlush else { return }
         AppLog.app.info("termination: every browser is closed")
         runtime.record("termination:browsers-closed")
         runtime.markShutdownPhase("T4")
@@ -562,15 +637,19 @@ final class ApplicationRuntime: ObservableObject {
         scheduleStep()
         return
       }
+      guard runtime.shutdownBrowserEngine() else {
+        scheduleStep()
+        return
+      }
       didFinish = true
       isRunning = false
       pendingStep?.invalidate()
       pendingStep = nil
       runtime.onLiveSessionDidClose = nil
+      runtime.onChromeSettingsDidClose = nil
       runtime.stopLivenessWatchdog()
 
       AppLog.cef.info("termination: shutting CEF down")
-      runtime.shutdownCEF()
       AppLog.app.info("termination: CEF is down; requesting final termination")
       runtime.record("termination:finished")
       onFinished()

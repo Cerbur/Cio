@@ -12,6 +12,7 @@
 //
 
 import CioUI
+import CioChromium
 import CioEngine
 import CioModel
 import AppKit
@@ -417,6 +418,6 @@ func makeBrowserSurfaceHost(frame: NSRect = .zero) -> BrowserSurfaceHostView {
   let host = BrowserSurfaceHostView(frame: frame)
   // Preserve global process appearance before per-session notification,
   // including bare diagnostic hosts before manager attachment.
-  host.onProcessAppearanceChange = { CEFProcessHost.setDarkAppearance($0) }
+  host.onProcessAppearanceChange = { ChromiumProcessHost.setDarkAppearance($0) }
   return host
 }

@@ -246,7 +246,7 @@ final class SessionRestoreSelfTest {
         self.requestTermination()
       },
       advance: {
-        self.runtime.hasShutDownCEF
+        self.runtime.hasShutDownBrowserEngine
       },
       finish: { completed in
         if completed {
@@ -474,7 +474,7 @@ final class SessionRestoreSelfTest {
         self.requestTermination()
       },
       advance: {
-        self.runtime.hasShutDownCEF
+        self.runtime.hasShutDownBrowserEngine
       },
       finish: { completed in
         if completed {
@@ -495,8 +495,8 @@ final class SessionRestoreSelfTest {
     let name = mode == .seed ? "seed-clean-shutdown" : "verify-clean-shutdown"
     report(
       name,
-      runtime.hasShutDownCEF && !runtime.hasLiveBrowsers,
-      "cef-shutdown=\(runtime.hasShutDownCEF) live-sessions=\(manager.liveSessionCount)")
+      runtime.hasShutDownBrowserEngine && !runtime.hasLiveBrowsers,
+      "cef-shutdown=\(runtime.hasShutDownBrowserEngine) live-sessions=\(manager.liveSessionCount)")
   }
 
   private func report(_ name: String, _ passed: Bool, _ details: String) {

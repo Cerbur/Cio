@@ -5,8 +5,8 @@
 //  Objective-C boundary around a single Chromium browser instance
 //  (ARCHITECTURE.md section 8).
 //
-//  This is the only interface Swift sees for browser content. CEF C++ types
-//  (CefBrowser, CefClient, CefFrame, CefBrowserHost, ...) never appear here.
+//  This is the only interface Swift sees for browser content. Chromium C++ types
+//  (Browser, WebContents, Profile, ...) never appear here.
 //
 
 #import <AppKit/AppKit.h>
@@ -17,6 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Value-only security information for Chromium's visible navigation entry.
 NS_SWIFT_UI_ACTOR
+__attribute__((visibility("default")))
 @interface BrowserConnectionInfo : NSObject
 @property(nonatomic, readonly, copy) NSString *url;
 @property(nonatomic, readonly) BOOL usesTLS;
@@ -28,7 +29,7 @@ NS_SWIFT_UI_ACTOR
 /// Events produced by a Chromium browser instance.
 ///
 /// Every method is called on the main thread: the Objective-C++ side marshals
-/// CEF callbacks before delivering them, so implementations may touch AppKit
+/// Chromium callbacks before delivering them, so implementations may touch AppKit
 /// and SwiftUI state directly.
 NS_SWIFT_UI_ACTOR
 @protocol BrowserBridgeDelegate <NSObject>
@@ -69,8 +70,8 @@ NS_SWIFT_UI_ACTOR
                                mimeType:(NSString *)mimeType
                             originalURL:(NSString *)originalURL;
 
-/// A typed download progress/status update translated from CEF. Empty strings
-/// mean that CEF has not supplied a path yet; no CEF object crosses this API.
+/// A typed download progress/status update translated from Chromium. Empty strings
+/// mean that Chromium has not supplied a path yet; no Chromium object crosses this API.
 - (void)browserBridge:(BrowserBridge *)bridge
     didUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
                           sourceURL:(NSString *)sourceURL
@@ -90,13 +91,12 @@ NS_SWIFT_UI_ACTOR
 
 /// Chromium requested a popup (`target=_blank`, `window.open`).
 ///
-/// The unmanaged native CEF window has already been cancelled; `url` is the
-/// target the runtime owner should open as a managed tab instead (Milestone 3
-/// section 26). The URL is NOT logged here: it routinely carries an OAuth code
-/// or a signature, and the owner reports it through URLLogSanitizer.
+/// The runtime adopts the original popup WebContents into a managed Cio tab.
+/// No Chromium top-level window is created. URLs may contain authentication
+/// material and must be passed through URLLogSanitizer before logging.
 - (void)browserBridge:(BrowserBridge *)bridge didRequestNewTabWithURL:(NSString *)url;
 
-/// Chromium is asking for the keyboard (`CefFocusHandler::OnSetFocus`).
+/// Chromium is asking for the keyboard.
 ///
 /// Chromium asks when a browser component starts navigating, which happens
 /// asynchronously - after the tab may already have been hidden and after the
@@ -128,12 +128,13 @@ NS_SWIFT_UI_ACTOR
 /// Owns one Chromium browser and renders it into an NSView provided by the
 /// caller.
 NS_SWIFT_UI_ACTOR
+__attribute__((visibility("default")))
 @interface BrowserBridge : NSObject
 
 @property(nonatomic, weak, nullable) id<BrowserBridgeDelegate> delegate;
 
 /// YES when the underlying Chromium browser no longer exists, i.e. after
-/// CefLifeSpanHandler::OnBeforeClose. A closed bridge cannot be reused.
+/// WebContents destruction. A closed bridge cannot be reused.
 @property(nonatomic, readonly, getter=isClosed) BOOL closed;
 
 /// Chromium's identifier for the browser this bridge owns, or -1 before the
@@ -165,11 +166,11 @@ NS_SWIFT_UI_ACTOR
 /// The device-mode toolbox remains in the page shell when the inspector undocks.
 - (void)setDevToolsEmulationHostView:(NSView *)view;
 
-/// Reads the visible entry on CEF's UI thread. Certificates are DER bytes;
-/// no CEF objects escape the bridge and no second network request is made.
+/// Reads the visible entry on Chromium's UI thread. Certificates are DER bytes;
+/// no Chromium objects escape the bridge and no second network request is made.
 - (nullable BrowserConnectionInfo *)connectionInfo;
 
-/// Starts a download through the browser's real CEF download pipeline. The
+/// Starts a download through the browser's real Chromium download pipeline. The
 /// verification harness uses this to avoid making download correctness depend
 /// on the fixture page's DOM or synthetic input dispatch.
 - (void)startDownloadURL:(NSString *)url;
@@ -201,75 +202,14 @@ NS_SWIFT_UI_ACTOR
 /// application is quitting. It must NOT run for an ordinary background-tab
 /// close: with several browsers in one window it would take the keyboard away
 /// from the active tab or from the native address field (Milestone 3 section
-/// 17). Either way the closed browser always releases its own CEF focus, and the
+/// 17). Either way the closed browser always releases its own Chromium focus, and the
 /// window's first responder is cleared when it belonged to the view being
 /// destroyed.
 - (void)closeForApplicationTermination:(BOOL)applicationTerminating;
 
-/// Releases the Chromium view, which is what actually destroys the browser.
-///
-/// Normally reached through CefLifeSpanHandler::DoClose. Exposed because DoClose
-/// is not always delivered - a real Cmd+Q that Chromium dispatched itself was
-/// observed to lose the close while the run loop stayed healthy - so the
-/// termination path can complete the release instead of waiting. Idempotent.
+/// Finishes an already accepted close as a teardown fallback. This method is
+/// idempotent and never bypasses Chromium's beforeunload veto.
 - (void)releaseBrowserView;
-
-// MARK: - Events from the CEF layer
-//
-// Called by CEFClientHandler when Chromium reports something. Not part of the
-// Swift-facing API.
-
-- (void)browserDidCreate;
-- (void)completeClose;
-- (void)browserDidUpdateTitle:(NSString *)title;
-- (void)browserDidUpdateFaviconURLs:(NSArray<NSString *> *)urls;
-- (void)browserDidUpdateURL:(NSString *)url;
-- (void)browserDidUpdateLoadingState:(BOOL)isLoading
-                           canGoBack:(BOOL)canGoBack
-                        canGoForward:(BOOL)canGoForward;
-- (void)browserDidUpdateLoadingProgress:(double)progress;
-- (void)browserDidFailLoadWithError:(NSString *)errorText
-                          errorCode:(NSInteger)errorCode
-                          failedURL:(NSString *)failedURL;
-- (void)browserDidFinishMainFrameLoadWithURL:(NSString *)url;
-- (NSString *)downloadDestinationPathForIdentifier:(NSInteger)downloadIdentifier
-                                          sourceURL:(NSString *)sourceURL
-                                    suggestedFileName:(NSString *)suggestedFileName
-                                 cefSuggestedFileName:(NSString *)cefSuggestedFileName
-                                  contentDisposition:(NSString *)contentDisposition
-                                          mimeType:(NSString *)mimeType
-                                       originalURL:(NSString *)originalURL;
-- (void)browserDidUpdateDownloadWithIdentifier:(NSInteger)downloadIdentifier
-                                      sourceURL:(NSString *)sourceURL
-                                suggestedFileName:(NSString *)suggestedFileName
-                              cefSuggestedFileName:(NSString *)cefSuggestedFileName
-                               contentDisposition:(NSString *)contentDisposition
-                                       mimeType:(NSString *)mimeType
-                                    originalURL:(NSString *)originalURL
-                                destinationPath:(NSString *)destinationPath
-                                   receivedBytes:(long long)receivedBytes
-                                      totalBytes:(long long)totalBytes
-                                   hasTotalBytes:(BOOL)hasTotalBytes
-                                    isInProgress:(BOOL)isInProgress
-                                      isComplete:(BOOL)isComplete
-                                      isCanceled:(BOOL)isCanceled
-                                   isInterrupted:(BOOL)isInterrupted;
-- (void)browserDidRequestPopup:(NSString *)url;
-/// CefFocusHandler::OnSetFocus: Chromium is requesting keyboard focus. Answered
-/// by the delegate; a closing or closed bridge never allows it.
-- (BOOL)browserRequestsFocusFromSystem:(BOOL)fromSystem;
-- (void)browserDidAcceptClose;
-- (void)browserDidCancelClose;
-- (void)browserDidRequestBeforeUnloadDialog:(NSString *)message;
-- (void)browserDidResetBeforeUnloadDialog;
-- (void)browserDidTerminateRendererWithStatus:(NSInteger)status
-                                     errorCode:(NSInteger)errorCode;
-- (void)browserDidClose;
-- (void)devToolsDidCreate;
-- (void)browserDidRequestInspectNode:(NSInteger)backendNodeID;
-- (void)devToolsDidClose;
-- (BOOL)devToolsAllowsFocus;
-- (nullable NSView *)devToolsEmulationHostView;
 
 @end
 
