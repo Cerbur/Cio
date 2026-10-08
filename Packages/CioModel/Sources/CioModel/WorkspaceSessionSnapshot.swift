@@ -119,19 +119,25 @@ public struct PersistedTab: Codable, Equatable, Sendable {
   public let url: String?
   public let createdAt: Date
   public let lastActivatedAt: Date
+  public let spacePinURL: String?
+  public let isSpacePinClosed: Bool
 
   public init(
     id: UUID,
     title: String,
     url: String?,
     createdAt: Date,
-    lastActivatedAt: Date
+    lastActivatedAt: Date,
+    spacePinURL: String? = nil,
+    isSpacePinClosed: Bool = false
   ) {
     self.id = id
     self.title = title
     self.url = url
     self.createdAt = createdAt
     self.lastActivatedAt = lastActivatedAt
+    self.spacePinURL = spacePinURL
+    self.isSpacePinClosed = isSpacePinClosed
   }
 
   public init(tab: BrowserTab) {
@@ -140,7 +146,25 @@ public struct PersistedTab: Codable, Equatable, Sendable {
       title: tab.title,
       url: tab.url?.absoluteString,
       createdAt: tab.createdAt,
-      lastActivatedAt: tab.lastActivatedAt)
+      lastActivatedAt: tab.lastActivatedAt,
+      spacePinURL: tab.spacePinURL?.absoluteString,
+      isSpacePinClosed: tab.isSpacePinClosed)
+  }
+  private enum CodingKeys: String, CodingKey {
+    case id, title, url, createdAt, lastActivatedAt, spacePinURL, isSpacePinClosed
+  }
+
+  public init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    id = try values.decode(UUID.self, forKey: .id)
+    title = try values.decode(String.self, forKey: .title)
+    url = try values.decodeIfPresent(String.self, forKey: .url)
+    createdAt = try values.decode(Date.self, forKey: .createdAt)
+    lastActivatedAt = try values.decode(Date.self, forKey: .lastActivatedAt)
+    let bookmark = try values.decodeIfPresent(String.self, forKey: .spacePinURL)
+    // Legacy snapshots had no bookmark; use their last recorded address once.
+    spacePinURL = values.contains(.isSpacePinClosed) ? bookmark : (bookmark ?? url)
+    isSpacePinClosed = try values.decodeIfPresent(Bool.self, forKey: .isSpacePinClosed) ?? false
   }
 }
 

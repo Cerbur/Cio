@@ -21,6 +21,9 @@ public enum WorkspaceTabRemovalOutcome: Equatable, Sendable {
   case removedSelectionUnchanged
   case removedSelectionMoved(to: UUID)
   case removedLast
+  case retainedSelectionUnchanged
+  case retainedSelectionMoved(to: UUID)
+  case retainedLast
 }
 
 /// The result the runtime owner needs after a domain close.
@@ -92,12 +95,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
       guard !name.isEmpty else {
         throw WorkspaceSessionSnapshotError.emptySpaceName
       }
-      guard !persistedSpace.tabs.isEmpty else {
-        throw WorkspaceSessionSnapshotError.emptySpace
-      }
-      guard let selectedTabID = persistedSpace.selectedTabID else {
-        throw WorkspaceSessionSnapshotError.missingSelectedTab
-      }
+      let selectedTabID = persistedSpace.selectedTabID
 
       var orderedTabIDs: [UUID] = []
       orderedTabIDs.reserveCapacity(persistedSpace.tabs.count)
@@ -116,17 +114,28 @@ public struct WorkspaceCollection: Equatable, Sendable {
           url = nil
         }
 
+        let spacePinURL: URL?
+        if let rawURL = persistedTab.spacePinURL {
+          guard !rawURL.isEmpty, let decodedURL = URL(string: rawURL), decodedURL.scheme != nil else {
+            throw WorkspaceSessionSnapshotError.invalidURL
+          }
+          spacePinURL = decodedURL
+        } else {
+          spacePinURL = nil
+        }
         orderedTabIDs.append(persistedTab.id)
         restoredTabs[persistedTab.id] = BrowserTab(
           id: persistedTab.id,
           title: persistedTab.title,
           url: url,
           isLoading: false,
+          spacePinURL: persistedSpace.pinnedTabIDs.contains(persistedTab.id) ? spacePinURL : nil,
+          isSpacePinClosed: persistedTab.isSpacePinClosed,
           createdAt: persistedTab.createdAt,
           lastActivatedAt: persistedTab.lastActivatedAt)
       }
 
-      guard orderedTabIDs.contains(selectedTabID) else {
+      guard selectedTabID.map({ orderedTabIDs.contains($0) }) ?? true else {
         throw WorkspaceSessionSnapshotError.selectedTabNotInSpace
       }
       guard Set(persistedSpace.pinnedTabIDs).count == persistedSpace.pinnedTabIDs.count,
@@ -619,8 +628,8 @@ public struct WorkspaceCollection: Equatable, Sendable {
       guard selectedTabID != id else { return false }
       selectedGlobalTabID = id
       tabsByID[id]?.lastActivatedAt = Date()
-      if let ownerIndex = spaceID(containing: id).flatMap(index(of:)) {
-        recordStableTab(id, in: ownerIndex)
+      if let selectedIndex = index(of: selectedSpaceID) {
+        recordStableTab(id, in: selectedIndex)
       }
       validateInvariants()
       return true
@@ -629,6 +638,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
       spaces[spaceIndex].tabIDs.contains(id)
     else { return false }
     guard selectedTabID != id else { return false }
+    tabsByID[id]?.isSpacePinClosed = false
     spaces[spaceIndex].selectedTabID = id
     selectedGlobalTabID = nil
     tabsByID[id]?.lastActivatedAt = Date()
@@ -647,6 +657,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
 
     let changed = selectedGlobalTabID != nil || selectedSpaceID != spaceID || spaces[spaceIndex].selectedTabID != tabID
     selectedSpaceID = spaceID
+    tabsByID[tabID]?.isSpacePinClosed = false
     spaces[spaceIndex].selectedTabID = tabID
     selectedGlobalTabID = nil
     tabsByID[tabID]?.lastActivatedAt = Date()
@@ -670,14 +681,18 @@ public struct WorkspaceCollection: Equatable, Sendable {
   /// Applies metadata from the runtime to exactly one domain tab.
   @discardableResult
   public mutating func refresh(_ tab: BrowserTab) -> Bool {
-    guard tabsByID[tab.id] != nil, tabsByID[tab.id] != tab else { return false }
-    tabsByID[tab.id] = tab
+    guard let existing = tabsByID[tab.id], !existing.isSpacePinClosed else { return false }
+    var refreshed = tab
+    refreshed.spacePinURL = existing.spacePinURL
+    refreshed.isSpacePinClosed = existing.isSpacePinClosed
+    guard existing != refreshed else { return false }
+    tabsByID[tab.id] = refreshed
     validateInvariants()
     return true
   }
 
-  /// Removes one tab from its owning Space and applies the selection policy
-  /// within that Space only.
+  /// Temporary tabs are removed; Space Pins close their runtime but retain
+  /// their bookmark; Top Pins only leave the visible activation stack.
   @discardableResult
   public mutating func close(
     _ tabID: UUID,
@@ -689,87 +704,98 @@ public struct WorkspaceCollection: Equatable, Sendable {
       let tab = tabsByID[tabID]
     else {
       return WorkspaceTabCloseResult(
-        outcome: .unknownTab,
-        spaceID: nil,
-        snapshot: nil,
-        needsReplacementTab: false)
+        outcome: .unknownTab, spaceID: nil, snapshot: nil, needsReplacementTab: false)
     }
 
-    let wasSelected = spaces[spaceIndex].selectedTabID == tabID
     let wasEffectiveSelection = selectedTabID == tabID
+    let wasSelected = spaces[spaceIndex].selectedTabID == tabID
+    let isTopPin = globalPinnedTabIDs.contains(tabID)
+    let retainsPin = reason == .userClosed
+      && (isTopPin || spaces[spaceIndex].pinnedTabIDs.contains(tabID))
     var snapshot: ClosedTabSnapshot?
-    if reason == .userClosed, tab.url != nil {
+    if reason == .userClosed, !retainsPin, tab.url != nil {
       snapshot = ClosedTabSnapshot(
-        url: tab.url,
-        title: tab.title,
-        spaceID: spaceID,
-        originalIndex: tabIndex)
+        url: tab.url, title: tab.title, spaceID: spaceID, originalIndex: tabIndex)
       recentlyClosed.append(snapshot!)
       if recentlyClosed.count > Self.recentlyClosedLimit {
         recentlyClosed.removeFirst(recentlyClosed.count - Self.recentlyClosedLimit)
       }
     }
 
-    spaces[spaceIndex].tabIDs.remove(at: tabIndex)
-    spaces[spaceIndex].splitGroups.removeAll { $0.contains(tabID) }
-    spaces[spaceIndex].pinnedTabIDs.removeAll { $0 == tabID }
-    globalPinnedTabIDs.removeAll { $0 == tabID }
-    if selectedGlobalTabID == tabID { selectedGlobalTabID = nil }
-    tabsByID.removeValue(forKey: tabID)
-
-    var nextStableID: UUID?
-    if reason == .userClosed && wasEffectiveSelection {
-      var stack = spaces[spaceIndex].stableTabStack
-      if Set(stack).count != stack.count {
-        stack.removeAll()
-      } else {
-        stack.removeAll { $0 == tabID }
-        while let candidate = stack.popLast() {
-          if spaces[spaceIndex].tabIDs.contains(candidate), tabsByID[candidate] != nil {
-            nextStableID = candidate
-            stack.append(candidate)
-            break
-          }
-        }
+    // Preserve the remaining split panes and their focus when closing one pane.
+    _ = detachSplitPane(tabID)
+    if retainsPin {
+      if !isTopPin {
+        tabsByID[tabID]?.url = tab.spacePinURL
+        tabsByID[tabID]?.isLoading = false
+        tabsByID[tabID]?.isSpacePinClosed = true
       }
-      spaces[spaceIndex].stableTabStack = stack
-    }
-
-    if spaces[spaceIndex].tabIDs.isEmpty {
-      spaces[spaceIndex].selectedTabID = nil
-      validateInvariants()
-      return WorkspaceTabCloseResult(
-        outcome: .removedLast,
-        spaceID: spaceID,
-        snapshot: snapshot,
-        needsReplacementTab: reason == .userClosed)
-    }
-
-    guard wasSelected else {
-      validateInvariants()
-      return WorkspaceTabCloseResult(
-        outcome: .removedSelectionUnchanged,
-        spaceID: spaceID,
-        snapshot: snapshot,
-        needsReplacementTab: false)
-    }
-
-    let nextID: UUID
-    if reason == .userClosed && wasEffectiveSelection {
-      nextID = nextStableID
-        ?? tabIDs(in: .temporary(spaceID)).first
-        ?? spaces[spaceIndex].tabIDs[0]
+      // A dismissed pin must not resurface from another Space's stale stack.
+      for index in spaces.indices {
+        spaces[index].stableTabStack.removeAll { $0 == tabID }
+      }
     } else {
-      let nextIndex = min(tabIndex, spaces[spaceIndex].tabIDs.count - 1)
-      nextID = spaces[spaceIndex].tabIDs[nextIndex]
+      spaces[spaceIndex].tabIDs.removeAll { $0 == tabID }
+      spaces[spaceIndex].pinnedTabIDs.removeAll { $0 == tabID }
+      globalPinnedTabIDs.removeAll { $0 == tabID }
+      tabsByID.removeValue(forKey: tabID)
     }
-    spaces[spaceIndex].selectedTabID = nextID
+
+    if selectedGlobalTabID == tabID { selectedGlobalTabID = nil }
+    if spaces[spaceIndex].selectedTabID == tabID { spaces[spaceIndex].selectedTabID = nil }
+
+    if wasEffectiveSelection {
+      // detachSplitPane may already have selected the surviving pane.
+      selectPreviousStableTab(afterClosing: tabID, in: index(of: selectedSpaceID)!)
+    } else if wasSelected && !retainsPin {
+      // Background Spaces have their own independent activation stack.
+      let next = previousStableTab(afterClosing: tabID, in: spaceIndex)
+      spaces[spaceIndex].selectedTabID = next.flatMap { globalPinnedTabIDs.contains($0) ? nil : $0 }
+    }
+
     validateInvariants()
+    let outcome: WorkspaceTabRemovalOutcome
+    if wasEffectiveSelection {
+      if let next = selectedTabID {
+        outcome = retainsPin ? .retainedSelectionMoved(to: next) : .removedSelectionMoved(to: next)
+      } else {
+        outcome = retainsPin ? .retainedLast : .removedLast
+      }
+    } else {
+      outcome = retainsPin ? .retainedSelectionUnchanged
+        : (spaces[spaceIndex].tabIDs.isEmpty ? .removedLast : .removedSelectionUnchanged)
+    }
     return WorkspaceTabCloseResult(
-      outcome: .removedSelectionMoved(to: nextID),
-      spaceID: spaceID,
-      snapshot: snapshot,
-      needsReplacementTab: false)
+      outcome: outcome, spaceID: spaceID, snapshot: snapshot, needsReplacementTab: false)
+  }
+
+  private mutating func previousStableTab(afterClosing tabID: UUID, in spaceIndex: Int) -> UUID? {
+    var stack = spaces[spaceIndex].stableTabStack
+    if Set(stack).count != stack.count { stack.removeAll() }
+    stack.removeAll { $0 == tabID }
+    var next: UUID?
+    while let candidate = stack.last {
+      if let tab = tabsByID[candidate], !tab.isSpacePinClosed,
+        globalPinnedTabIDs.contains(candidate) || spaces[spaceIndex].tabIDs.contains(candidate) {
+        next = candidate
+        break
+      }
+      stack.removeLast()
+    }
+    spaces[spaceIndex].stableTabStack = stack
+    return next
+  }
+
+  private mutating func selectPreviousStableTab(afterClosing tabID: UUID, in spaceIndex: Int) {
+    let next = previousStableTab(afterClosing: tabID, in: spaceIndex)
+    if let next, globalPinnedTabIDs.contains(next) {
+      selectedGlobalTabID = next
+      spaces[spaceIndex].selectedTabID = nil
+    } else {
+      selectedGlobalTabID = nil
+      spaces[spaceIndex].selectedTabID = next
+    }
+    if let next { tabsByID[next]?.lastActivatedAt = Date() }
   }
 
   /// Inserts a fresh tab at a closed snapshot's original index, switches to
@@ -827,6 +853,16 @@ public struct WorkspaceCollection: Equatable, Sendable {
     }
 
     let wasSelected = selectedTabID == tabID
+    let wasSpacePin = spaces[ownerIndex].pinnedTabIDs.contains(tabID)
+    if case .space = tier {
+      if !wasSpacePin {
+        let pinnedURL = tabsByID[tabID]?.url
+        tabsByID[tabID]?.spacePinURL = pinnedURL
+      }
+    } else {
+      tabsByID[tabID]?.spacePinURL = nil
+      tabsByID[tabID]?.isSpacePinClosed = false
+    }
     spaces[ownerIndex].splitGroups.removeAll { $0.contains(tabID) }
     spaces[ownerIndex].tabIDs.removeAll { $0 == tabID }
     spaces[ownerIndex].pinnedTabIDs.removeAll { $0 == tabID }
@@ -834,13 +870,9 @@ public struct WorkspaceCollection: Equatable, Sendable {
 
     let destinationIndex = index(of: destinationSpaceID)!
     if ownerID != destinationSpaceID {
-      if spaces[ownerIndex].tabIDs.isEmpty {
-        let replacement = BrowserTab()
-        tabsByID[replacement.id] = replacement
-        spaces[ownerIndex].tabIDs.append(replacement.id)
-      }
       if spaces[ownerIndex].selectedTabID == tabID {
-        spaces[ownerIndex].selectedTabID = spaces[ownerIndex].tabIDs.first
+        let next = previousStableTab(afterClosing: tabID, in: ownerIndex)
+        spaces[ownerIndex].selectedTabID = next.flatMap { globalPinnedTabIDs.contains($0) ? nil : $0 }
       }
     }
     if !spaces[destinationIndex].tabIDs.contains(tabID) {
@@ -879,14 +911,15 @@ public struct WorkspaceCollection: Equatable, Sendable {
 
     if wasSelected {
       if case .global = tier {
+        if spaces[ownerIndex].selectedTabID == tabID { spaces[ownerIndex].selectedTabID = nil }
         selectedGlobalTabID = tabID
       } else {
         selectedGlobalTabID = nil
         selectedSpaceID = destinationSpaceID
+        tabsByID[tabID]?.isSpacePinClosed = false
         spaces[destinationIndex].selectedTabID = tabID
+        if ownerID != destinationSpaceID { recordStableTab(tabID, in: destinationIndex) }
       }
-    } else if spaces[destinationIndex].selectedTabID == nil {
-      spaces[destinationIndex].selectedTabID = tabID
     }
     if selectedGlobalTabID == tabID, !globalPinnedTabIDs.contains(tabID) {
       selectedGlobalTabID = nil
@@ -945,7 +978,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
         guard tabsByID[tabID] != nil, seen.insert(tabID).inserted else { return false }
       }
       if let selectedTabID = space.selectedTabID,
-        !space.tabIDs.contains(selectedTabID)
+        (!space.tabIDs.contains(selectedTabID) || tabsByID[selectedTabID]?.isSpacePinClosed == true)
       {
         return false
       }

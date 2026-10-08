@@ -204,7 +204,7 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(collection.selectedSpace!.stableTabStack, [ids[0]])
   }
 
-  func testEmptyStackFallsBackToTemporaryQueueHead() throws {
+  func testEmptyStackLeavesNoSelectedPage() throws {
     var collection = workspace(["A", "B", "C"])
     let ids = collection.currentTabIDs
     let space = collection.selectedSpace!
@@ -215,7 +215,8 @@ final class WorkspaceCollectionTests: XCTestCase {
         tabs: collection.currentTabs.map(PersistedTab.init))])
     collection = try WorkspaceCollection(restoring: snapshot)
 
-    XCTAssertEqual(collection.close(ids[2], reason: .userClosed).outcome, .removedSelectionMoved(to: ids[0]))
+    XCTAssertEqual(collection.close(ids[2], reason: .userClosed).outcome, .removedLast)
+    XCTAssertNil(collection.selectedTabID)
     XCTAssertTrue(collection.selectedSpace!.stableTabStack.isEmpty)
   }
 
@@ -254,8 +255,8 @@ final class WorkspaceCollectionTests: XCTestCase {
 
     var restored = try WorkspaceCollection(restoring: snapshot)
     XCTAssertTrue(restored.selectedSpace!.stableTabStack.isEmpty)
-    XCTAssertEqual(restored.close(ids[1], reason: .userClosed).outcome,
-      .removedSelectionMoved(to: ids[0]))
+    XCTAssertEqual(restored.close(ids[1], reason: .userClosed).outcome, .removedLast)
+    XCTAssertNil(restored.selectedTabID)
   }
 
   func testMoveAndSpaceSwitchLeaveStaleStackEntryToBeSkipped() throws {
@@ -289,10 +290,11 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertTrue(collection.selectTab(id: top))
     let otherStack = collection.space(withID: other)!.stableTabStack
 
-    XCTAssertEqual(collection.close(top, reason: .userClosed).outcome, .removedLast)
+    XCTAssertEqual(collection.close(top, reason: .userClosed).outcome, .retainedSelectionMoved(to: otherTab.id))
+    XCTAssertNotNil(collection.tab(withID: top))
     XCTAssertEqual(collection.selectedSpaceID, other)
     XCTAssertEqual(collection.selectedTabID, otherTab.id)
-    XCTAssertEqual(collection.space(withID: other)!.stableTabStack, otherStack)
+    XCTAssertEqual(collection.space(withID: other)!.stableTabStack, otherStack.filter { $0 != top })
     XCTAssertTrue(collection.space(withID: owner)!.stableTabStack.isEmpty)
   }
 
@@ -309,7 +311,7 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertEqual(collection.currentTabs.map(\.title), ["A", "C"])
   }
 
-  func testClosingLastTabRequestsReplacementInItsOwnSpace() {
+  func testClosingLastTabLeavesItsOwnSpaceEmpty() {
     var collection = WorkspaceCollection(initialTab: tab("Main"))
     let mainID = collection.selectedSpaceID
     let otherID = collection.createSpace(initialTab: tab("Other"))!
@@ -318,7 +320,7 @@ final class WorkspaceCollectionTests: XCTestCase {
 
     let result = collection.close(onlyOther, reason: .userClosed)
     XCTAssertEqual(result.outcome, .removedLast)
-    XCTAssertTrue(result.needsReplacementTab)
+    XCTAssertFalse(result.needsReplacementTab)
     XCTAssertTrue(collection.tabs(in: otherID).isEmpty)
 
     let replacement = tab("replacement")
@@ -494,13 +496,13 @@ final class WorkspaceCollectionTests: XCTestCase {
     XCTAssertTrue(collection.validateInvariants())
   }
 
-  func testMovingLastTabToAnotherSpaceKeepsSourceUsable() throws {
+  func testMovingLastTabToAnotherSpaceLeavesSourceEmpty() throws {
     var collection = WorkspaceCollection(initialTab: tab("Only"))
     let source = collection.selectedSpaceID
     let onlyID = collection.selectedTabID!
     let destination = collection.createSpace(initialTab: tab("Other"))!
     XCTAssertTrue(collection.moveTab(onlyID, to: .space(destination)))
-    XCTAssertEqual(collection.tabs(in: source).count, 1)
+    XCTAssertTrue(collection.tabs(in: source).isEmpty)
     XCTAssertEqual(collection.currentSpacePinnedTabs.map(\.title), ["Only"])
     XCTAssertTrue(collection.validateInvariants())
     XCTAssertNoThrow(try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: collection)))

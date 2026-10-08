@@ -36,6 +36,7 @@ final class BrowserMainViewController: NSViewController {
   })
   var onToolbarLayoutChange: (() -> Void)?
   private var panelObservation: AnyCancellable?
+  private var workspaceObservation: AnyCancellable?
   private var sidebarCommandObservation: AnyCancellable?
   private var sidebarCollapseObservation: NSKeyValueObservation?
   private var sidebarWasCollapsedBeforeLibrary = false
@@ -106,7 +107,11 @@ final class BrowserMainViewController: NSViewController {
   }
   override func viewDidLoad() {
     super.viewDidLoad()
-    spaceToolbar.setVisible(runtime.presentedInternalPanel == nil, animated: false)
+    updateSpaceToolbarVisibility(animated: false)
+    workspaceObservation = runtime.workspaceStore.objectWillChange
+      .receive(on: RunLoop.main).sink { [weak self] _ in
+        MainActor.assumeIsolated { self?.updateSpaceToolbarVisibility(animated: true) }
+      }
     sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak self] _, _ in
       MainActor.assumeIsolated {
         guard let self else { return }
@@ -165,7 +170,13 @@ final class BrowserMainViewController: NSViewController {
       wasShowingLibrary = false
       if !sidebarWasCollapsedBeforeLibrary && sidebarItem.isCollapsed { toggleSpaceSidebar() }
     }
-    spaceToolbar.setVisible(panel == nil, animated: true)
+    updateSpaceToolbarVisibility(animated: true)
+  }
+
+  private func updateSpaceToolbarVisibility(animated: Bool) {
+    spaceToolbar.setVisible(
+      runtime.presentedInternalPanel == nil && runtime.workspaceStore.selectedTabID != nil,
+      animated: animated)
   }
 
   private func toggleSpaceSidebar() {

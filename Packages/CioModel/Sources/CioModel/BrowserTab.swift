@@ -34,6 +34,10 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
   public var url: URL?
   /// Whether Chromium is currently loading in this tab.
   public var isLoading: Bool
+  /// Captured when entering the Space Pin tier, independent of live navigation.
+  public var spacePinURL: URL?
+  /// A retained Space Pin whose Chromium runtime has been closed.
+  public var isSpacePinClosed: Bool
 
   public let createdAt: Date
   public var lastActivatedAt: Date
@@ -46,6 +50,8 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
     title: String = "",
     url: URL? = nil,
     isLoading: Bool = false,
+    spacePinURL: URL? = nil,
+    isSpacePinClosed: Bool = false,
     createdAt: Date = Date(),
     lastActivatedAt: Date = Date()
   ) {
@@ -53,6 +59,8 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
     self.title = title
     self.url = url
     self.isLoading = isLoading
+    self.spacePinURL = spacePinURL
+    self.isSpacePinClosed = isSpacePinClosed
     self.createdAt = createdAt
     self.lastActivatedAt = lastActivatedAt
   }

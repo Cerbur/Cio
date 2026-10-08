@@ -101,7 +101,6 @@ final class SpacesSelfTest {
   private var selectedCloseDidRequest = false
   private var closeSpaceID: UUID?
   private var closeLastOldTabID: UUID?
-  private var closeLastReplacementTabID: UUID?
   private var closeLastActiveSpaceID: UUID?
   private var closeLastOtherCounts: [UUID: Int] = [:]
 
@@ -189,7 +188,7 @@ final class SpacesSelfTest {
       backgroundTabCloseIsolation(),
       selectedTabCloseTransfersFocus(),
       closeLastTabInInactiveSpace(),
-      closeLastTabCreatesSameSpaceReplacement(),
+      closeLastTabLeavesSpaceEmpty(),
       reopenClosedTabInOriginalSpace(),
       popupRoutesToSourceSpace(),
       terminateEverySpace(),
@@ -840,7 +839,7 @@ final class SpacesSelfTest {
       })
   }
 
-  // MARK: - Same-Space close/replacement
+  // MARK: - Same-Space close and empty presentation
 
   private func closeLastTabInInactiveSpace() -> Step {
     Step(
@@ -874,7 +873,7 @@ final class SpacesSelfTest {
       })
   }
 
-  private func closeLastTabCreatesSameSpaceReplacement() -> Step {
+  private func closeLastTabLeavesSpaceEmpty() -> Step {
     Step(
       name: "close-last-tab-same-space",
       timeout: 120,
@@ -882,10 +881,6 @@ final class SpacesSelfTest {
         guard let target = self.closeSpaceID,
           let oldID = self.workspace.tabs(in: target).first?.id
         else { return }
-        // Milestone 6 keeps a last-tab replacement domain-only when its Space
-        // is inactive. Select the target first so this legacy integration
-        // check continues to exercise the immediate active-Space replacement
-        // contract; lazy inactive replacement is covered by the restore test.
         self.workspace.selectSpace(id: target)
         self.closeLastOldTabID = oldID
         self.closeLastActiveSpaceID = self.workspace.selectedSpaceID
@@ -894,21 +889,14 @@ final class SpacesSelfTest {
         self.workspace.closeTab(id: oldID)
       },
       advance: {
-        guard let target = self.closeSpaceID,
-          let oldID = self.closeLastOldTabID,
-          let replacement = self.workspace.tabs(in: target).first?.id
-        else { return false }
-        self.closeLastReplacementTabID = replacement
-        let replacementSession = self.manager.session(for: replacement)
-        return self.workspace.tabs(in: target).count == 1
-          && replacement != oldID
+        guard let target = self.closeSpaceID, let oldID = self.closeLastOldTabID else { return false }
+        return self.workspace.tabs(in: target).isEmpty
+          && self.workspace.selectedTabID == nil
           && self.manager.session(for: oldID) == nil
-          && replacementSession?.hasBrowser == true
-          && replacementSession?.browserCreationCount == 1
       },
       finish: { completed in
         guard let target = self.closeSpaceID else {
-          self.report("last-tab-replacement-stays-in-space", false, "missing target Space")
+          self.report("last-tab-close-leaves-space-empty", false, "missing target Space")
           return
         }
         let activeStayed = self.workspace.selectedSpaceID == self.closeLastActiveSpaceID
@@ -916,13 +904,9 @@ final class SpacesSelfTest {
           id == target || self.workspace.tabs(in: id).count == self.closeLastOtherCounts[id]
         }
         self.report(
-          "last-tab-replacement-stays-in-space",
+          "last-tab-close-leaves-space-empty",
           completed && activeStayed && otherCountsStayed,
-          "replacement=\(self.shortID(self.closeLastReplacementTabID)) active-stayed=\(activeStayed)")
-        self.report(
-          "last-tab-replacement-created-once",
-          completed && (self.closeLastReplacementTabID.flatMap { self.manager.session(for: $0)?.browserCreationCount } == 1),
-          "creation-count=\(self.closeLastReplacementTabID.flatMap { self.manager.session(for: $0)?.browserCreationCount } ?? 0)")
+          "tabs=\(self.workspace.tabs(in: target).count) active-stayed=\(activeStayed)")
       })
   }
 

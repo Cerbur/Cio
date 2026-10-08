@@ -69,6 +69,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     }
     manager.onCloseCancelled = { [weak self] session in
       guard let self else { return }
+      self.refreshTabMetadata(from: session)
       self.emit("tab:close-cancelled")
       AppLog.session.info(
         "tab close cancelled id=\(session.tabID.uuidString, privacy: .public)")
@@ -366,6 +367,7 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   func selectTab(id: UUID, focusingPage: Bool = false) {
+    guard !isTerminating, !sessionManager.isClosing(tabID: id) else { return }
     if workspace.selectedTabID == id, isSpotlightPresented {
       dismissSpotlight()
       return
@@ -391,7 +393,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   @discardableResult
   func moveTab(_ id: UUID, to tier: WorkspaceCollection.TabTier, before targetID: UUID? = nil) -> Bool {
-    guard !isTerminating else { return false }
+    guard !isTerminating, !sessionManager.isClosing(tabID: id) else { return false }
     var moved = false
     withSelectionTransition {
       moved = workspace.moveTab(id, to: tier, before: targetID)
@@ -435,6 +437,16 @@ final class BrowserWorkspaceStore: ObservableObject {
       !sessionManager.isClosing(tabID: id)
     else { return }
 
+    if workspace.globalPinnedTabIDs.contains(id) {
+      // Top Pin close is a selection transition: Chromium stays mounted and live.
+      withSelectionTransition {
+        _ = workspace.close(id, reason: .userClosed)
+        ensureSelectedPresentationSessions()
+      }
+      emit("tab:top-pin-collapsed")
+      return
+    }
+    guard workspace.tab(withID: id)?.isSpacePinClosed != true else { return }
     guard sessionManager.session(for: id) != nil else {
       // Lazy-restored tabs have no renderer and therefore no beforeunload path.
       commitTabClose(id: id, reason: .userClosed)
@@ -574,7 +586,7 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   private func reconcileUnexpectedClose(for tabID: UUID) {
-    guard !isTerminating, workspace.tab(withID: tabID) != nil,
+    guard !isTerminating, let tab = workspace.tab(withID: tabID), !tab.isSpacePinClosed,
       !sessionManager.isClosePending(tabID: tabID)
     else { return }
     AppLog.session.warning(
@@ -582,9 +594,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     commitTabClose(id: tabID, reason: .userClosed)
   }
 
-  /// Completes the last-tab replacement after the old runtime has reached
-  /// OnBeforeClose. This is intentionally event-driven; no timer or guessed
-  /// delay is used to coordinate two Chromium browser lifetimes.
+  /// Activates a lazy previous tab after the closing runtime reaches OnBeforeClose.
   private func activateSelectedTabRuntimeIfNeeded() {
     guard !isTerminating, selectedTab != nil, selectedSession == nil else { return }
     ensureSelectedPresentationSessions()
@@ -607,43 +617,16 @@ final class BrowserWorkspaceStore: ObservableObject {
       browserSession(for: id)?.releaseFocusBeforeTabRemoval()
     }
 
-    let closingSplit = activeSplit.flatMap { $0.contains(id) ? $0 : nil }
-
     var result: WorkspaceTabCloseResult?
     withSelectionTransition(
       pageHeldKeyboardOverride: selectedCloseHeldPageKeyboard ? true : nil
     ) {
-      if closingSplit != nil { _ = workspace.detachSplitPane(id) }
       let closeResult = workspace.close(id, reason: reason)
-      guard closeResult.outcome != .unknownTab, let spaceID = closeResult.spaceID else {
-        result = closeResult
-        return
-      }
       result = closeResult
-      if closeResult.needsReplacementTab {
-        let replacement = BrowserTab()
-        let inserted = workspace.appendTab(replacement, in: spaceID, select: false)
-        if inserted {
-          // The active Space keeps its existing invariant: a last-tab close
-          // immediately has a visible replacement. An inactive Space may
-          // leave that replacement domain-only until the Space is selected.
-          if workspace.selectedSpaceID == spaceID,
-            !sessionManager.isClosing(tabID: id)
-          {
-            _ = sessionManager.createSession(for: replacement.id, initialURL: homeURL)
-          }
-          logTabCreated(replacement.id, url: homeURL)
-        }
-      }
-
-      if workspace.selectedTab != nil,
-        !sessionManager.isClosing(tabID: id)
-      {
-        // When the selected tab was the Space's last tab, its replacement is
-        // created in the domain immediately but its Chromium runtime waits for
-        // the closing session's OnBeforeClose. Creating a new Chromium view from
-        // inside the old DoClose callback can re-enter the view hierarchy and
-        // strand the closing browser.
+      guard closeResult.outcome != .unknownTab else { return }
+      if workspace.selectedTab != nil, !sessionManager.isClosing(tabID: id) {
+        // Browser creation inside the old DoClose callback can reenter the view
+        // hierarchy. Wait for OnBeforeClose when the next runtime is lazy.
         ensureSelectedPresentationSessions()
       }
     }
@@ -656,7 +639,8 @@ final class BrowserWorkspaceStore: ObservableObject {
   }
 
   private func refreshTabMetadata(from session: any BrowserSessionProtocol) {
-    guard var tab = workspace.tab(withID: session.tabID) else { return }
+    guard var tab = workspace.tab(withID: session.tabID), !tab.isSpacePinClosed,
+      !sessionManager.isClosing(tabID: session.tabID) else { return }
     let beforeSnapshot = sessionSnapshot
     if !session.title.isEmpty { tab.title = session.title }
     if session.url != nil { tab.url = session.url }
