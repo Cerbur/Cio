@@ -15,7 +15,7 @@ public enum AppLog {
   /// Application lifecycle: launch, activation, termination.
   public static let app = Logger(subsystem: subsystem, category: "app")
 
-  /// CEF initialization, shutdown, message pump and bridge failures.
+  /// Native engine lifecycle and bridge failures; category retained for log compatibility.
   public static let cef = Logger(subsystem: subsystem, category: "cef")
 
   /// Browser creation and destruction.

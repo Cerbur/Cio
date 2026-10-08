@@ -2,7 +2,7 @@
 //  ApplicationRuntime.swift
 //  Cio
 //
-//  Application scoped runtime state. CEF's lifecycle belongs to the
+//  Application scoped runtime state. Chromium's lifecycle belongs to the
 //  application, not to any view (ARCHITECTURE.md section 40, constraint 8),
 //  so it lives here and is owned by the process entry point.
 //
@@ -20,7 +20,7 @@ import Combine
 import CioUI
 import Foundation
 
-/// Owns the CEF runtime for the whole application.
+/// Owns the Chromium runtime for the whole application.
 @MainActor
 final class ApplicationRuntime: ObservableObject {
   /// Shared instance. The entry point creates it before the UI exists.
@@ -39,8 +39,8 @@ final class ApplicationRuntime: ObservableObject {
 
   }
 
-  /// CEF is pumped from the application's own run loop because the app owns
-  /// the NSApplication run loop (SwiftUI) rather than CEF owning it.
+  /// Chromium is pumped from the application's own run loop because the app owns
+  /// the NSApplication run loop (SwiftUI) rather than Chromium owning it.
   private static let messagePumpInterval: TimeInterval = 1.0 / 60.0
 
   /// Milestone 1 opened a single hard-coded page. Milestone 3 opens one tab with
@@ -101,7 +101,7 @@ final class ApplicationRuntime: ObservableObject {
   @Published private(set) var engineStatus: EngineStatus = .notInitialized
 
   /// Ordered lifecycle milestones. Verification modes print this trace so that
-  /// "CEF initializes and shuts down cleanly" can be checked automatically.
+  /// "Chromium initializes and shuts down cleanly" can be checked automatically.
   private(set) var lifecycleTrace: [String] = []
 
   /// Typed notification that one browser session reached OnBeforeClose and was
@@ -170,7 +170,7 @@ final class ApplicationRuntime: ObservableObject {
       // OnTitleChange can arrive before OnLoadEnd. The session's current main
       // frame URL is therefore the in-flight committed candidate; using the
       // previous successful URL would rename the page that was just left.
-      // BrowserSession suppresses this callback for CEF's error document.
+      // BrowserSession suppresses this callback for Chromium's error document.
       self.historyService.updateTitle(for: url, title: session.title)
     }
     store.sessionManager.onDownloadRequested = {
@@ -290,7 +290,7 @@ final class ApplicationRuntime: ObservableObject {
 
   // MARK: - Startup
 
-  /// Initializes CEF for the browser process. Must run on the main thread
+  /// Initializes Chromium for the browser process. Must run on the main thread
   /// before the application's run loop starts.
   func startBrowserEngine() {
     do {
@@ -308,7 +308,7 @@ final class ApplicationRuntime: ObservableObject {
     }
   }
 
-  /// Starts pumping CEF's message loop on the main run loop.
+  /// Starts pumping Chromium's message loop on the main run loop.
   func startMessagePump() {
     guard ChromiumProcessHost.isInitialized, messagePumpTimer == nil else { return }
     let timer = Timer.scheduledTimer(
@@ -325,8 +325,8 @@ final class ApplicationRuntime: ObservableObject {
     AppLog.cef.info("CEF message pump started")
   }
 
-  /// Stops pumping CEF's message loop. Called before CEF shuts down so that no
-  /// CEF call is made after CefShutdown().
+  /// Stops pumping Chromium's message loop. Called before Chromium shuts down so that no
+  /// Chromium call is made after native engine shutdown.
   func stopMessagePump() {
     guard let timer = messagePumpTimer else { return }
     timer.invalidate()
@@ -335,9 +335,9 @@ final class ApplicationRuntime: ObservableObject {
     AppLog.cef.info("CEF message pump stopped")
   }
 
-  /// Drives CEF's message loop once. CEF callbacks are delivered from here.
+  /// Drives Chromium's message loop once. Chromium callbacks are delivered from here.
   ///
-  /// Tooling only: requests termination before entering CefDoMessageLoopWork.
+  /// Tooling only: requests termination before entering the native task pump.
   /// This checks the coordinator but does not reproduce a native Cmd+Q event
   /// dispatched from inside Chromium. Real-key testing remains necessary.
   func pumpMessageLoop() {
@@ -383,10 +383,10 @@ final class ApplicationRuntime: ObservableObject {
 
   // MARK: - Shutdown
 
-  /// True once CefShutdown() has run. CefShutdown() must be called exactly once.
+  /// True once Chromium has shut down. Shutdown must run exactly once.
   var hasShutDownBrowserEngine: Bool { didShutDownBrowserEngine }
 
-  /// How many times CefShutdown() actually ran. The multi-tab integration test
+  /// How many times native engine shutdown actually ran. The multi-tab integration test
   /// asserts this is exactly 1.
   var engineShutdownCount: Int { engineShutdownInvocations }
 
@@ -419,10 +419,10 @@ final class ApplicationRuntime: ObservableObject {
     workspaceStore.requestCloseAllForTermination()
   }
 
-  /// Shuts CEF down. Idempotent, and safe to call when CEF never started.
+  /// Shuts Chromium down. Idempotent, and safe to call when Chromium never started.
   ///
-  /// MUST NOT be called while Chromium is on the stack: CefShutdown() re-enters
-  /// CEF and trips a Chromium CHECK (see Terminator).
+  /// MUST NOT be called while Chromium is on the stack: native engine shutdown re-enters
+  /// Chromium and trips a Chromium CHECK (see Terminator).
   @discardableResult
   func shutdownBrowserEngine() -> Bool {
     guard !didShutDownBrowserEngine else { return true }
@@ -430,7 +430,7 @@ final class ApplicationRuntime: ObservableObject {
     guard !hasLiveBrowsers else {
       // This is a hard safety boundary. A timer, a missing callback or a
       // returning NSApplication loop must never turn a live-browser condition
-      // into CefShutdown; the caller must keep pumping until OnBeforeClose.
+      // into native engine shutdown; the caller must keep pumping until OnBeforeClose.
       record("cef:shutdown-refused(live=\(workspaceStore.liveSessionCount))")
       AppLog.cef.error(
         "refusing CefShutdown while \(self.workspaceStore.liveSessionCount, privacy: .public) browser session(s) remain live")
@@ -447,9 +447,8 @@ final class ApplicationRuntime: ObservableObject {
     return true
   }
 
-  /// Drains a close that this installed CEF build defers until CefShutdown
-  /// after an attachment download has completed. This is deliberately limited
-  /// to the M7 real-CEF diagnostic: production termination must use
+  /// Historical M7 diagnostic compatibility for deferred closes after downloads.
+  /// This is deliberately limited to that diagnostic: production termination must use
   /// `shutdownBrowserEngine()`, which refuses to cross the live-session boundary.
   @discardableResult
   func drainDeferredBrowserCloseForM7SelfTest() -> Bool {
@@ -492,7 +491,7 @@ final class ApplicationRuntime: ObservableObject {
   }
 
   /// Starts non-destructive production diagnostics during termination. The
-  /// watchdog reports a stuck/slow close but never forces CefShutdown.
+  /// watchdog reports a stuck/slow close but never forces native engine shutdown.
   func startLivenessWatchdog() {
     stopLivenessWatchdog()
     let startedAt = Date()
@@ -522,7 +521,7 @@ final class ApplicationRuntime: ObservableObject {
   }
 
   /// Records a timestamp for a shutdown phase on the shared monotonic epoch
-  /// (see ShutdownTiming.h), so Swift, the Objective-C++ bridge and CEF's
+  /// (see ShutdownTiming.h), so Swift, the Objective-C++ bridge and Chromium's
   /// callbacks are all measured against one clock. Off unless enabled.
   func markShutdownPhase(_ phase: String) {
     guard shutdownTimingEnabled else { return }
@@ -531,10 +530,10 @@ final class ApplicationRuntime: ObservableObject {
 
   // MARK: - Termination
 
-  /// Closes browsers and CEF after AppDelegate cancels the initial quit request.
+  /// Closes browsers and Chromium after AppDelegate cancels the initial quit request.
   /// Cancellation lets the native event stack unwind; terminateLater would
   /// instead keep that stack alive beneath AppKit's nested modal loop.
-  /// OnBeforeClose must arrive before CefShutdown. Completion asks AppKit to
+  /// OnBeforeClose must arrive before native engine shutdown. Completion asks AppKit to
   /// terminate again, this time with terminateNow.
   @MainActor
   final class Terminator {
@@ -624,7 +623,7 @@ final class ApplicationRuntime: ObservableObject {
         finish()
         return
       }
-      // OnBeforeClose schedules the next step. Do not busy-poll while CEF
+      // OnBeforeClose schedules the next step. Do not busy-poll while Chromium
       // and AppKit finish releasing the browser views.
     }
 

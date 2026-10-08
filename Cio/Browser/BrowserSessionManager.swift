@@ -35,7 +35,7 @@ final class BrowserSessionManager: ObservableObject {
   /// The callback carries the exact session released by OnBeforeClose.
   var onLiveSessionDidClose: ((BrowserSession) -> Void)?
 
-  /// CEF accepted or cancelled an ordinary user close. The workspace store
+  /// Chromium accepted or cancelled an ordinary user close. The workspace store
   /// uses these callbacks to delay domain removal until acceptance.
   var onCloseAccepted: ((BrowserSession) -> Void)?
   var onCloseCancelled: ((BrowserSession) -> Void)?
@@ -73,7 +73,7 @@ final class BrowserSessionManager: ObservableObject {
   private var sessionOrder: [UUID] = []
   /// Sessions requested to close, retained until the typed OnBeforeClose path.
   private var closingTabIDs: [UUID] = []
-  /// Ordinary close requests waiting for CEF's beforeunload result.
+  /// Ordinary close requests waiting for Chromium's beforeunload result.
   private var pendingCloseTabIDs: [UUID] = []
   private var containers: [UUID: ChromiumContainerView] = [:]
   var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)? {
@@ -320,7 +320,7 @@ final class BrowserSessionManager: ObservableObject {
         let created = ChromiumContainerView(frame: host.bounds)
         created.autoresizingMask = [.width, .height]
         // Presentation needs first-load readiness before it starts the glass
-        // reveal. The session's container binding and CEF creation still happen
+        // reveal. The session's container binding and Chromium creation still happen
         // below, after the host has mounted and assigned the final pane size.
         created.delegate = sessions[tabID]
         containers[tabID] = created
@@ -336,7 +336,7 @@ final class BrowserSessionManager: ObservableObject {
 
     host.present(containers: live.mapValues { BrowserSurfaceAttachment(surface: $0) }, selectedTabID: selectedSurfaceTabID, split: splitLayout)
 
-    // Attach after the containers are subviews. BrowserSession creates its CEF
+    // Attach after the containers are subviews. BrowserSession creates its Chromium
     // browser only once the container has a window, and never on a visibility
     // or selection update.
     for tabID in liveSessionOrder {
@@ -382,7 +382,7 @@ final class BrowserSessionManager: ObservableObject {
     emit("session:released")
 
     // OnBeforeClose has already run, so the Chromium view is no longer owned by
-    // CEF and the container may finally leave the stable host.
+    // Chromium and the container may finally leave the stable host.
     if let container = containers.removeValue(forKey: tabID) {
       container.removeFromSuperview()
     }

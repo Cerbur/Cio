@@ -2,6 +2,7 @@
 
 > 2026-10-08 状态更新：下文保留最初的 CEF/Arc 调研记录。当前 Cio 已转向原生
 > Chromium 152 桥接，实际代码复用了 Mori 的两个 MIT BrowserWindow 文件；
+> 旧 CEF 接入、Helper 和构建脚本已移除。
 > 构建、窗口宿主、Settings 标签页和升级边界见 [引擎说明](../Engine/Chromium/README.md)。
 > 原先“只参考 Mori”“先验证 CEF Views”的建议不再代表当前实现。
 
@@ -48,12 +49,12 @@ Mori 的 ObjC++ 桥接代码使用真实 Chromium `Browser` 与 `WebContents`。
 核查，没有在本机编译运行 Mori，也未验证其所有设置项。
 [桥接源码](https://github.com/FujiwaraChoki/mori-browser/blob/main/ungoogled-chromium-macos/build/src/chrome/browser/ui/mori/mori_chrome_bridge.mm#L991)
 
-## Cio 当前为什么失败
+## 当时的 CEF 接入为什么失败
 
 当前 CEF 固定提交为 `708dc140cbc3286826a8abef89dc23a44ff9ea72`。
 macOS 的 `CefWindowInfo.parent_view` 一旦提供，浏览器总是采用 Alloy style；
 改写 `runtime_style` 或改为离屏渲染不能避开这一规则。
-本地依据：`ThirdParty/CEF/include/internal/cef_types_mac.h`。
+上游依据：[固定版本 macOS 接口](https://github.com/chromiumembedded/cef/blob/708dc140cbc3286826a8abef89dc23a44ff9ea72/include/internal/cef_types_mac.h)。
 
 CEF 的 Alloy 导航代码拒绝未在白名单中的 `chrome://` WebUI，`settings`
 不在当前白名单中。Cio 的运行日志也报告相同拦截。此前创建无父视图的
@@ -74,15 +75,15 @@ Chrome style 不必展示 Chrome 工具栏。但 BrowserView 必须有 Views 宿
 当前 AppKit 的 `SetAsChild` 不是这一接口。一个 Chrome-style CefWindow
 最多容纳一个 Chrome-style BrowserView，可以同时容纳多个 Alloy
 BrowserView。Cio 的分屏与标签生命周期必须纳入验证。
-本地依据：`ThirdParty/CEF/include/views/cef_browser_view_delegate.h` 和
-`ThirdParty/CEF/include/internal/cef_types_runtime.h`。
+上游依据：[固定版本 BrowserView 接口](https://github.com/chromiumembedded/cef/blob/708dc140cbc3286826a8abef89dc23a44ff9ea72/include/views/cef_browser_view_delegate.h) 和
+[运行时类型](https://github.com/chromiumembedded/cef/blob/708dc140cbc3286826a8abef89dc23a44ff9ea72/include/internal/cef_types_runtime.h)。
 [CEF Views 接口](https://github.com/chromiumembedded/cef/blob/master/include/views/cef_browser_view_delegate.h)
 
 创建隐藏 Chrome 窗口后直接搬走其 NSView，与直接管理 WebContents 并不等价。
 目前没有证据证明这种跨窗口搬运能稳定处理焦点、尺寸、弹窗与关闭生命周期，
 不能把隐藏窗口当作已经完成的嵌入方案。
 
-## 建议的下一步验证
+## 当时建议的验证
 
 优先在独立实验中验证 CEF Chrome Views 是否能承载 Cio 外壳；同时检查定制
 CEF 对设置页的必要后端依赖。先避免整个浏览器迁移。实验应满足：
@@ -93,6 +94,5 @@ CEF 对设置页的必要后端依赖。先避免整个浏览器迁移。实验�
 4. 保留现有 56 pt 外壳尺寸、原生交通灯、统一玻璃背景和圆角约束。
 
 如果标准 Views 不能保留这一外壳、定制 CEF 的依赖范围又接近全浏览器宿主，
-再评估 Mori 式 Chromium 桥接。仓库已有 `Scripts/build_cef_codecs.sh` 可参考
-固定版本的引擎构建流程，但它尚未支持设置页补丁；不能直接执行该脚本并
-认为设置页问题已解决。
+再评估 Mori 式 Chromium 桥接。这是迁移前的判断；后续已采用直接 Chromium
+桥接并完成原版设置页嵌入，原 CEF 编译脚本已移除。

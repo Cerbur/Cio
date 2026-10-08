@@ -23,6 +23,12 @@ def main():
     parser.add_argument("--mock-keychain", action="store_true",
                         help="Use Chromium's test keychain only for these disposable test profiles")
     args = parser.parse_args()
+    configuration = os.environ.get("CONFIGURATION", "Debug")
+    if configuration not in ("Debug", "Release"):
+        parser.error("CONFIGURATION must be Debug or Release")
+    executable = ROOT / "build/DerivedData/Build/Products" / configuration / "Cio.app/Contents/MacOS/Cio"
+    if not executable.is_file():
+        parser.error(f"{executable} missing; build with CONFIGURATION={configuration} Scripts/build.sh")
     work = ROOT / "build/verification/native-runtime"
     work.mkdir(parents=True, exist_ok=True)
     # Keep test data outside Documents: changing an ad-hoc Debug signature can
@@ -31,7 +37,6 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
-    executable = ROOT / "build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio"
     try:
         for name, url in (("normal", base + "/native-bridge"),
                           ("page", base + "/native-bridge"),

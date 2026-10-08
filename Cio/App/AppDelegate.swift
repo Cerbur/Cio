@@ -29,9 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var terminator: ApplicationRuntime.Terminator?
   private var terminationReady = false
 
-  /// Cancel this request so the native key event and any enclosing CEF call
+  /// Cancel this request so the native key event and any enclosing Chromium call
   /// return completely. terminateLater enters a nested modal loop INSIDE
-  /// terminate(_:); a timer firing there is not proof that CEF is off-stack.
+  /// terminate(_:); a timer firing there is not proof that Chromium is off-stack.
   /// Once cleanup finishes, issue a new termination request and allow it.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     let runtime = ApplicationRuntime.shared
@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     let runtime = ApplicationRuntime.shared
     runtime.record("appkit:will-terminate")
-    // The Terminator calls CefShutdown only after every typed OnBeforeClose
+    // The Terminator calls native engine shutdown only after every typed OnBeforeClose
     // callback has released its session. Never bypass that ordering here.
     if !runtime.hasLiveBrowsers {
       runtime.shutdownBrowserEngine()

@@ -297,7 +297,7 @@ class Attempt:
             raise RuntimeError("Ninja completed but Chromium.app executable is missing")
         self.phase = "complete"
         self.record("success", app=str(app), stock_chromium_built=True)
-        print(f"\nBuilt stock Chromium: {app}\nCio still uses its existing CEF backend.")
+        print(f"\nBuilt stock Chromium: {app}\nRun CONFIGURATION=Debug Scripts/build.sh to compile Cio's native overlay and package the app.")
 
 
 def main():

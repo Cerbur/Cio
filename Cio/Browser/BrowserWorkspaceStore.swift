@@ -428,7 +428,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     return selectedTabID == id
   }
 
-  /// Requests a runtime close. The domain tab remains visible until CEF
+  /// Requests a runtime close. The domain tab remains visible until Chromium
   /// accepts the request, because a beforeunload dialog may cancel it.
   func closeTab(id: UUID) {
     guard !isTerminating, workspace.tab(withID: id) != nil,
@@ -591,7 +591,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     publishWorkspace()
   }
 
-  /// Commits the pure-domain removal after CEF acceptance, or immediately for a
+  /// Commits the pure-domain removal after Chromium acceptance, or immediately for a
   /// lazy tab that has no live browser. Runtime ownership remains in the
   /// manager until OnBeforeClose; this method never releases it early.
   private func commitTabClose(id: UUID, reason: WorkspaceTabCloseReason) {
@@ -641,7 +641,7 @@ final class BrowserWorkspaceStore: ObservableObject {
       {
         // When the selected tab was the Space's last tab, its replacement is
         // created in the domain immediately but its Chromium runtime waits for
-        // the closing session's OnBeforeClose. Creating a new CEF view from
+        // the closing session's OnBeforeClose. Creating a new Chromium view from
         // inside the old DoClose callback can re-enter the view hierarchy and
         // strand the closing browser.
         ensureSelectedPresentationSessions()
@@ -718,7 +718,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   /// Saves only when the durable projection changed since the last successful
   /// write. The synchronous save is small and is also repeated at termination
-  /// so the final committed URL/title cannot be lost behind a CEF callback.
+  /// so the final committed URL/title cannot be lost behind a Chromium callback.
   private func persistIfNeeded(comparedTo previous: WorkspaceSessionSnapshot? = nil) {
     let current = sessionSnapshot
     if let previous, previous == current {

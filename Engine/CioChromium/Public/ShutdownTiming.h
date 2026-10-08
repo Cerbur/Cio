@@ -5,7 +5,7 @@
 //  Shared monotonic clock for shutdown-latency measurements.
 //
 //  Why this exists: the termination sequence spans three languages (AppKit /
-//  Swift, the Objective-C++ bridge, and CEF's C++ callbacks), and a latency
+//  Swift, the Objective-C++ bridge, and Chromium's C++ callbacks), and a latency
 //  measurement is only meaningful on one clock. Swift and the bridge both
 //  timestamp against this epoch, which is a monotonic clock - never the wall
 //  clock, which can jump.
@@ -46,7 +46,7 @@ void NBShutdownTimingReport(NSString *name, double milliseconds);
 ///
 /// Starts a repeating main-thread timer. While it fires, the run loop is alive;
 /// the moment the gap between prints grows, the main thread is blocked. This is
-/// what distinguishes "the run loop is stuck inside a CEF call" from "the run
+/// what distinguishes "the run loop is stuck inside a Chromium call" from "the run
 /// loop is fine but something never arrives". No-op when timing is disabled.
 void NBShutdownTimingStartLivenessWatchdog(void);
 void NBShutdownTimingStopLivenessWatchdog(void);

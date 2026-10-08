@@ -20,11 +20,11 @@ enum BrowserMain {
   static func main() {
     let subprocessExitCode = ChromiumProcessHost.executeSubprocess()
     if subprocessExitCode >= 0 {
-      // This process is a CEF sub-process and has already done its work.
+      // This process is a Chromium sub-process and has already done its work.
       exit(subprocessExitCode)
     }
 
-    // The address-field parser needs neither CEF nor a run loop, so it is
+    // The address-field parser needs neither Chromium nor a run loop, so it is
     // answered before Chromium is initialized.
     if NavigationInputProbe.isRequested() {
       NavigationInputProbe.run()
@@ -93,7 +93,7 @@ enum BrowserMain {
     // -applicationShouldTerminate: having run (for example a failed launch).
     // It keeps pumping until every typed OnBeforeClose callback arrives; there
     // is deliberately no timeout that could turn a live-browser state into
-    // CefShutdown.
+    // native engine shutdown.
     if runtime.hasLiveBrowsers {
       AppLog.cef.error("run loop returned with a live browser; requesting closure")
       drainBrowserClosure(runtime: runtime)
@@ -125,7 +125,7 @@ enum BrowserMain {
 
   /// Milestone 1 integration check: builds the real window and surface host,
   /// loads the configured page, waits for Chromium to report the load finished,
-  /// then closes the browser and shuts CEF down.
+  /// then closes the browser and shuts Chromium down.
   ///
   /// Running "Cio --browser-self-test" exits 0 only when the page
   /// loaded, no navigation error was reported and the browser was destroyed.
@@ -152,7 +152,7 @@ enum BrowserMain {
       NSApp.appearance = NSAppearance(named: .aqua)
     }
     // AppKit's applicationDidFinishLaunching starts the normal message pump,
-    // but SwiftUI can report the window first. The self-test must pump CEF
+    // but SwiftUI can report the window first. The self-test must pump Chromium
     // before waiting for OnAfterCreated/OnLoadEnd; otherwise it can tear down
     // a perfectly initialized browser without ever delivering its callbacks.
     runtime.startMessagePump()
@@ -210,7 +210,7 @@ enum BrowserMain {
 
     // Exercise the real application termination coordinator. It cancels the
     // initial request, closes every live browser, waits for typed OnBeforeClose
-    // callbacks, shuts CEF down once, and asks AppKit to terminate again.
+    // callbacks, shuts Chromium down once, and asks AppKit to terminate again.
     let closeStart = Date()
     runtime.onMainWindowAppeared = nil
     // The ordinary self-test runs inside SwiftUI's `.onAppear` callback and
@@ -219,7 +219,7 @@ enum BrowserMain {
     if CommandLine.arguments.contains("--appearance-self-test") {
       NSApplication.shared.terminate(nil)
       // Let the normal application run loop unwind the close request and pump
-      // CEF. A nested RunLoop.run here prevents OnBeforeClose from arriving.
+      // Chromium. A nested RunLoop.run here prevents OnBeforeClose from arriving.
       let closeDeadline = Date().addingTimeInterval(30)
       Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
         let finished = MainActor.assumeIsolated {
@@ -259,9 +259,9 @@ enum BrowserMain {
   }
 
   /// Requests force-close semantics only as part of application termination,
-  /// then keeps the CEF message pump alive until every session has reached its
+  /// then keeps the Chromium message pump alive until every session has reached its
   /// typed close callback. This intentionally has no deadline or fallback to
-  /// CefShutdown.
+  /// native engine shutdown.
   private static func drainBrowserClosure(runtime: ApplicationRuntime) {
     runtime.startLivenessWatchdog()
     defer { runtime.stopLivenessWatchdog() }
@@ -309,7 +309,7 @@ enum BrowserMain {
 
   private static func scheduleToolingHooksIfRequested(runtime: ApplicationRuntime) {
     // "--terminate-in-pump-after=<seconds>" reproduces the Cmd+Q stack: it
-    // requests termination from inside a CEF message pump call.
+    // requests termination from inside a Chromium message pump call.
     let inPumpPrefix = "--terminate-in-pump-after="
     if let argument = CommandLine.arguments.first(where: { $0.hasPrefix(inPumpPrefix) }),
       let delay = TimeInterval(argument.dropFirst(inPumpPrefix.count)), delay > 0
@@ -420,9 +420,9 @@ enum BrowserMain {
     AppLog.session.info("tooling: opened \(total, privacy: .public) tabs")
   }
 
-  /// Headless CEF lifecycle check used by tooling. Running
-  /// "Cio --cef-self-test" initializes CEF, pumps its message loop
-  /// briefly, shuts CEF down and exits with 0 only if all of that succeeded.
+  /// Headless Chromium lifecycle check used by tooling. Running
+  /// "Cio --cef-self-test" initializes Chromium, pumps its message loop
+  /// briefly, shuts Chromium down and exits with 0 only if all of that succeeded.
   private static func runSelfTestIfRequested(runtime: ApplicationRuntime) -> Bool {
     guard CommandLine.arguments.contains("--cef-self-test") else { return false }
 
@@ -437,7 +437,7 @@ enum BrowserMain {
       }
       // The workspace still owns its initial BrowserSession even though no
       // Chromium view was attached. Close that typed runtime before the hard
-      // CefShutdown guard is reached; a session object is still live ownership
+      // native engine shutdown guard is reached; a session object is still live ownership
       // from the application's perspective.
       if runtime.hasLiveBrowsers {
         drainBrowserClosure(runtime: runtime)

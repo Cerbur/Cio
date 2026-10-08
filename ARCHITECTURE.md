@@ -67,6 +67,8 @@ BrowserMain performs subprocess handoff before UI work, initializes the hosted C
 
 Scripts/package_native_chromium.py bundles Chromium Framework.framework, its four standard Helpers (browser/utility, Alerts, GPU and Renderer) and all component dylibs. Every image has bundle-relative runtime paths. The packager signs nested code; Xcode seals the outer app. Scripts/verify_bundle.sh validates the static dependency graph, native exports, signatures and licenses without starting the app. NativeLoader copies a legacy CEF profile only while it is inactive, preserving the original directory.
 
+The old CEF implementation, custom Helper and CEF build/install/package scripts have been removed. No active source, target or package requires CEF headers, a CEF framework or libcef_dll_wrapper. Legacy diagnostic labels and download callback names remain compatible with existing callers; they identify native-engine events and translated values, not a second backend. Profile migration is data compatibility only.
+
 ## Domain, selection and persistence
 
 WorkspaceCollection owns ordered Spaces, domain tab identities, membership, selected Space/tab, top pins, space pins, temporary tabs, split groups and the bounded recently-closed stack. BrowserSpace, BrowserTab, BrowserSplitLayout and snapshot values contain no Chromium runtime objects.

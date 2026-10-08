@@ -113,25 +113,11 @@ echo
 echo "2. bundle structure and identity"
 if [ -d "$APP" ]; then pass "Release app exists"; else fail "Release app exists"; fi
 if [ -x "$EXECUTABLE" ]; then pass "Release executable exists"; else fail "Release executable exists"; fi
-FRAMEWORK="$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
-if [ -d "$FRAMEWORK" ]; then pass "CEF framework is packaged"; else fail "CEF framework is packaged"; fi
-
-EXPECTED_HELPERS=(
-  "Cio Helper.app"
-  "Cio Helper (Alerts).app"
-  "Cio Helper (GPU).app"
-  "Cio Helper (Plugin).app"
-  "Cio Helper (Renderer).app"
-)
-for helper in "${EXPECTED_HELPERS[@]}"; do
-  helper_path="$APP/Contents/Frameworks/$helper"
-  helper_exec="$helper_path/Contents/MacOS/${helper%.app}"
-  if [ -d "$helper_path" ] && [ -x "$helper_exec" ]; then
-    pass "helper packaged: $helper"
-  else
-    fail "helper packaged: $helper"
-  fi
-done
+if CONFIGURATION=Release "$REPO_ROOT/Scripts/verify_bundle.sh" > "$WORK_DIR/native-bundle.log" 2>&1; then
+  pass "native Chromium framework, four Helpers, linkage, signatures and licenses"
+else
+  fail "native Chromium bundle validation (see $WORK_DIR/native-bundle.log)"
+fi
 
 APP_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
 APP_BUILD="$(plutil -extract CFBundleVersion raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
@@ -166,10 +152,10 @@ for entitlement in \
 done
 
 echo
-echo "Entitlement evidence (local ad-hoc CEF candidate)"
-echo "  com.apple.security.cs.allow-jit: required by CEF/V8 executable JIT; retest after M9 Developer ID signing"
-echo "  com.apple.security.cs.allow-unsigned-executable-memory: not required by this installed CEF build; isolated removal still passed CEF/V8 page execution and beforeunload integration"
-echo "  com.apple.security.cs.disable-library-validation: required by the ad-hoc nested CEF framework; retest after M9 Developer ID signing"
+echo "Entitlement policy (local ad-hoc Chromium candidate)"
+echo "  com.apple.security.cs.allow-jit: Chromium/V8 executable JIT"
+echo "  com.apple.security.cs.disable-library-validation: local ad-hoc nested Chromium runtime"
+echo "  Retest the entitlement policy when adopting Developer ID signing."
 
 echo
 echo "3. Release fixture and deterministic launch"

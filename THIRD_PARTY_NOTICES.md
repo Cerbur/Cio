@@ -6,8 +6,10 @@ Cio 外壳与自有桥接代码使用根目录 LICENSE。第三方实现保留�
 | --- | --- | --- |
 | Google Chromium 152.0.7977.83 | 使用官方精简源码编译，应用 Cio 的原生桥接补丁，作为当前浏览器引擎打包 | Chromium BSD 及各依赖许可证；实际构建生成的 credits |
 | Mori | 复制并修改两个 BrowserWindow 文件，以承载 Cio 的 AppKit 窗口 | MIT，Copyright (c) 2026 Mori contributors |
-| CEF | 原有实现保留在 Engine/CioChromium/CEF，供历史参考；不参与当前构建或打包 | 原有 CEF BSD 许可 |
 | Arc | 仅公开资料和本机行为调研；没有复制、链接或分发其实现 | 未使用私有代码或 SDK |
+
+旧 CEF 接入已移除，不作为源码依赖或运行时分发；历史代码可以从 Git 历史查阅。
+旧 profile 的迁移兼容和诊断接口名称不包含 CEF 的实现或二进制。
 
 ## Chromium 来源与修改
 

@@ -2,7 +2,8 @@
 
 当前构建后端是 `chromium-native`。Cio 的 Swift/AppKit 外壳通过
 `CioChromium.framework` 的 Objective-C 接口连接 GN 编译的原生 Browser、
-Profile 和 WebContents。原有 CEF 实现仍保存在源码中，不参与当前构建或打包。
+Profile 和 WebContents。原有 CEF 后端、Helper、构建脚本与本地依赖已移除。
+只保留旧 profile 的一次性迁移和历史诊断接口名称兼容，不需要安装或链接 CEF。
 
 ## 固定版本与构建
 

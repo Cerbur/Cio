@@ -29,7 +29,7 @@ Individual entry points:
 | --- | --- |
 | verify_unit_tests.sh | Standalone XCTest and local package tests |
 | verify_bundle.sh | Individual App/framework/Helper signatures, identities and linkage |
-| verify_runtime.sh | Legacy CEF runtime acceptance (not a native-engine validation gate) |
+| verify_runtime.sh | Native Chromium bundle and isolated runtime acceptance |
 | verify_rendering.sh | Real application page load, callbacks and typed shutdown |
 | verify_navigation.sh | Parser/probe, navigation, reload/stop, redaction and quit ordering |
 | verify_tabs.sh | Multi-browser quit, real main menu and URL privacy |
@@ -57,11 +57,10 @@ Cio/
   App/                    entry point, scene, native menus and runtime
   Diagnostics/            existing self-tests and navigation/sidebar probes
   Browser/                workspace policy, sessions and Chromium containers
-  Helper/                 legacy CEF entry point (not built)
   Resources/              Info.plist and signing entitlements
   Tests/                  standalone logic/native-model tests
 Engine/
-  CioChromium/           public interface, native loader and GN bridge; legacy CEF source
+  CioChromium/           public interface, native loader, shared containers and GN bridge
   Chromium/              migration status and pinned source reference
 Packages/
   CioModel/
@@ -88,7 +87,7 @@ Packages/
       Animation/          shared motion, tuning and preferences
 SchemeTemplates/Cio.xcscheme
 Scripts/                  reproducible build and verification tools
-ThirdParty/               upstream notices; ignored legacy CEF products
+ThirdParty/               upstream license notices
 project.yml               sole Xcode project definition
 AGENTS.md                 shell, native-control, animation and validation constraints
 ARCHITECTURE.md            current ownership, lifetime and interaction design
@@ -110,6 +109,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the current design and lifetime detai
 ## Diagnostic compatibility
 
 Self-tests and probes live in Cio/Diagnostics. Historical numbered script entry points and trace labels remain tooling compatibility names; current implementation contracts are responsibility-based. CLI switches remain unchanged, including --navigation-self-test, --tabs-self-test, --spaces-self-test, --parse-navigation-input=, --session-restore-self-test=, --m7-self-test= and --m8-self-test=.
+
+The retired CEF backend, custom CEF Helper, setup/build/package scripts and local CEF binaries have been removed. Legacy `cef:` trace labels, `--cef-self-test` and download callback field names remain compatible with existing diagnostic callers; they do not load or depend on CEF. The loader retains one-time copying of an inactive legacy profile and preserves its original directory. `Scripts/verify_runtime.sh --mock-keychain` now checks the native bundle and runs the native Chromium acceptance driver with disposable profiles.
 
 ```bash
 build/DerivedData/Build/Products/Debug/Cio.app/Contents/MacOS/Cio --parse-navigation-input="https://example.com/"

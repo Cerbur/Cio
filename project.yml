@@ -74,7 +74,6 @@ targets:
       - path: Cio
         excludes:
           - "Resources/Info.plist"
-          - "Helper/**"
           # Unit tests are their own standalone target.
           - "Tests/**"
     settings:

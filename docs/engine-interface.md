@@ -1,6 +1,6 @@
 # CioEngine interface and current callers
 
-The protocols refer to the existing App objects. No navigation/workspace state is copied, and no relay publisher, queue, Task, close coordinator or CEF dependency is added. The App retains BrowserSession/BrowserSessionManager, concrete typed close callbacks, the runtime registry and all CEF lifetime policy. The UI never needs CloseBrowser or a close callback: it calls the existing workspace closeTab operation. Original default-argument conveniences forward to full protocol requirements.
+The protocols refer to the existing App objects. No navigation/workspace state is copied, and no relay publisher, queue, Task, close coordinator or Chromium dependency is added. The App retains BrowserSession/BrowserSessionManager, concrete typed close callbacks, the runtime registry and all native Chromium lifetime policy. The UI never needs CloseBrowser or a close callback: it calls the existing workspace closeTab operation. Original default-argument conveniences forward to full protocol requirements.
 
 ## BrowserSessionProtocol
 
@@ -40,7 +40,7 @@ The protocols refer to the existing App objects. No navigation/workspace state i
 | cancelAddressEditing | ToolbarAddressFieldView native Escape action |
 | releaseFocusBeforeTabRemoval | BrowserWorkspaceStore.commitTabClose before domain removal |
 
-NavigationState remains the existing pure snapshot returned by the concrete App session. It moves into Engine with unchanged fields/defaults; it is not an unused requirement on the UI protocol. BrowserDownloadUpdate and SiteInformation are CEF-free translated values. Download identifiers remain scalar correlation values, never CEF objects.
+NavigationState remains the existing pure snapshot returned by the concrete App session. It moves into Engine with unchanged fields/defaults; it is not an unused requirement on the UI protocol. BrowserDownloadUpdate and SiteInformation are engine-independent translated values. Download identifiers remain scalar correlation values, never native browser objects.
 
 ## BrowserAddressEditing
 

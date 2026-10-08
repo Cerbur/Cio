@@ -161,10 +161,10 @@ if codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
 else
   fail "code signature verification failed"
 fi
-if [ -f "$PROFILE_DIR/Logs/cef.log" ]; then
-  pass "CEF wrote its log file"
+if CONFIGURATION="$CONFIGURATION" "$REPO_ROOT/Scripts/verify_bundle.sh" > "$WORK_DIR/rendering-native-bundle.log" 2>&1; then
+  pass "native Chromium bundle is complete and free of CEF dependencies"
 else
-  fail "CEF log file was not created"
+  fail "native Chromium bundle validation (see $WORK_DIR/rendering-native-bundle.log)"
 fi
 
 echo

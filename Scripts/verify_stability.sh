@@ -245,9 +245,9 @@ fi
 
 echo
 echo "9. static hardening gates"
-check_contains "ordinary close uses cancelable CloseBrowser(false)" "force_close=*/false" "$REPO_ROOT/Engine/CioChromium/CEF/BrowserBridge.mm"
-check_contains "termination force-closes explicitly" "force_close=*/true" "$REPO_ROOT/Engine/CioChromium/CEF/BrowserBridge.mm"
-check_contains "CEF shutdown has a live-browser guard" "guard !workspaceStore.hasLiveSessions" "$REPO_ROOT/Cio/App/ApplicationRuntime.swift"
+check_contains "ordinary close uses native Chromium unload controller" "UnloadController::From(browser_)->OnWindowClosing()" "$REPO_ROOT/Engine/CioChromium/Native/CioBrowserWindow.mm"
+check_contains "termination explicitly skips unload warnings" "set_force_skip_warning_user_on_close(true)" "$REPO_ROOT/Engine/CioChromium/Native/BrowserBridge.mm"
+check_contains "native shutdown has a live-browser guard" "guard !hasLiveBrowsers" "$REPO_ROOT/Cio/App/ApplicationRuntime.swift"
 
 check_contains "renderer termination has a recoverable UI" "renderer-crash-reload" "$REPO_ROOT/Packages/CioUI/Sources/CioUI/UI/Main/BrowserMainViewController.swift"
 if git diff --check; then pass "git diff --check"; else fail "git diff --check"; fi

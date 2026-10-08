@@ -6,9 +6,9 @@
 //  (ARCHITECTURE.md section 7).
 //
 //  Deliberately not Codable and never persisted: the persisted domain model is
-//  the separate BrowserTab type, which contains no CEF object and no session.
+//  the separate BrowserTab type, which contains no Chromium object and no session.
 //
-//  This class owns no CEF type: everything goes through BrowserBridge.
+//  This class owns no Chromium type: everything goes through BrowserBridge.
 //
 //  Milestone 2 added the UI-facing navigation state (section 20 of
 //  ARCHITECTURE.md) and the address-field editing state. Milestone 3 adds the
@@ -111,7 +111,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   /// True while this session's page content is supposed to own the keyboard.
   ///
-  /// This is the state the *asynchronous* half of Chromium answers to. CEF
+  /// This is the state the *asynchronous* half of Chromium answers to. Chromium
   /// creates a browser after the tab may already have been hidden again, or
   /// after the user moved the keyboard into the native address field, so "my
   /// browser was just created" is not by itself a reason to take AppKit's first
@@ -132,14 +132,14 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   ///
   /// Delivered exactly once, after Chromium reported OnBeforeClose. The manager
   /// releases the runtime container here and nowhere else, so a session cannot
-  /// be discarded before CEF has finished with it.
+  /// be discarded before Chromium has finished with it.
   var onClosed: ((BrowserSession) -> Void)?
 
-  /// CEF accepted an ordinary user close after beforeunload completed. The
+  /// Chromium accepted an ordinary user close after beforeunload completed. The
   /// workspace commits the domain removal only after this signal.
   var onCloseAccepted: ((BrowserSession) -> Void)?
 
-  /// CEF cancelled an ordinary close, usually because the user rejected the
+  /// Chromium cancelled an ordinary close, usually because the user rejected the
   /// beforeunload confirmation. The workspace remains unchanged.
   var onCloseCancelled: ((BrowserSession) -> Void)?
 
@@ -163,7 +163,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   var onTitleChanged: ((BrowserSession) -> Void)?
 
   /// Download events remain value-only at the Swift boundary. The destination
-  /// request is synchronous from CEF's perspective but does not retain a CEF
+  /// request is synchronous from Chromium's perspective but does not retain a Chromium
   /// callback in Swift.
   var onDownloadRequested: ((BrowserSession, UInt32, URL, String, DownloadMetadata) -> String)?
   var onDownloadUpdated: ((BrowserSession, BrowserDownloadUpdate) -> Void)?
@@ -172,7 +172,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// arrives after OnLoadEnd with the visit that just completed.
   private(set) var lastSuccessfulMainFrameURL: URL?
 
-  /// CEF can deliver OnLoadEnd and a title for its built-in error document
+  /// Chromium can deliver OnLoadEnd and a title for its built-in error document
   /// after OnLoadError. Keep that failed navigation separate from the last
   /// committed page so it cannot create a history row or overwrite the last
   /// successful page's title.
@@ -400,9 +400,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     devToolsWindow?.makeKeyAndOrderFront(nil)
   }
 
-  /// Starts a download through CEF's browser host. This is used only by the
-  /// deterministic real-CEF verifier; normal user downloads enter through
-  /// page actions and the same CefDownloadHandler callbacks.
+  /// Starts a download through Chromium's browser host. This is used only by the
+  /// deterministic real-Chromium verifier; normal user downloads enter through
+  /// page actions and the same native download callbacks.
   func startDownload(_ url: URL) {
     bridge?.startDownloadURL(url.absoluteString)
   }
@@ -420,7 +420,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   /// Reload when the page is idle, stop when it is loading (Milestone 2,
-  /// section 11). The decision comes from CEF's loading state, never from a
+  /// section 11). The decision comes from Chromium's loading state, never from a
   /// timer.
   func reloadOrStop() {
     if isLoading {
@@ -436,7 +436,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   /// Releases the keyboard from this session's page content.
   ///
-  /// CEF focus is released through the bridge, which clears AppKit's first
+  /// Chromium focus is released through the bridge, which clears AppKit's first
   /// responder only when it belongs to that browser's own view
   /// (NBResponderBelongsToView), so releasing one tab never disturbs the native
   /// address field's field editor. A session whose browser is still being
@@ -465,7 +465,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   /// Completes the close by releasing the Chromium view, which is what
-  /// destroys the browser. Used when CEF does not deliver DoClose (see
+  /// destroys the browser. Used when Chromium does not deliver DoClose (see
   /// BrowserBridge.releaseBrowserView). Safe to call more than once.
   func releaseBrowserView() {
     guard !isClosed else { return }
@@ -482,7 +482,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   func close(terminating: Bool = false) {
     guard !isClosed else { return }
     if terminating {
-      // Termination must retain an ordinary close that CEF has accepted but
+      // Termination must retain an ordinary close that Chromium has accepted but
       // has not yet completed with OnBeforeClose. The workspace may already
       // have installed a last-tab replacement by then, while this runtime
       // still remains live and must stay in the close barrier until its typed
@@ -490,7 +490,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       guard closeState != .applicationTerminating else { return }
       let closeWasAlreadyAccepted = closeState == .accepted
       closeState = .applicationTerminating
-      // CEF has already entered its normal close sequence. Calling
+      // Chromium has already entered its normal close sequence. Calling
       // CloseBrowser(true) again at this point can interrupt the pending
       // platform-view teardown; keep pumping until its typed OnBeforeClose
       // arrives. Termination still force-closes the open/beforeunload-pending
@@ -569,7 +569,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   /// Applies a Chromium navigation callback to the published state.
   ///
-  /// This is the single place where CEF state becomes UI state, so the
+  /// This is the single place where Chromium state becomes UI state, so the
   /// main-frame URL can never move the text the user is editing: the address
   /// model only mirrors the committed URL while the field is not being edited
   /// (Milestone 2, section 6).
@@ -687,7 +687,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     }
     emit("browser:created(count=\(browserCreationCount))")
     // Clicking and typing must reach the page without an extra click first
-    // (ARCHITECTURE.md section 18). CEF takes focus from there on - but CEF
+    // (ARCHITECTURE.md section 18). Chromium takes focus from there on - but Chromium
     // creates a browser asynchronously, so by now this tab may already have been
     // hidden again, or the user may have moved the keyboard into the native
     // address field. Taking the keyboard is only correct while this session is
@@ -731,7 +731,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     // Chromium repeats the main-frame URL on several events; only act when it
     // actually changed so the log and the address field stay quiet. The first
     // callback is still meaningful when a restored session was pre-populated
-    // with the same URL before CEF existed: it confirms the live main frame and
+    // with the same URL before Chromium existed: it confirms the live main frame and
     // preserves the Milestone 2 lifecycle event.
     let isFirstMainFrameURL = !didReceiveMainFrameURL
     didReceiveMainFrameURL = true
@@ -879,27 +879,11 @@ extension BrowserSession: BrowserBridgeDelegate {
     onDownloadUpdated?(self, update)
   }
 
-  /// Chromium is asking for the keyboard (`CefFocusHandler::OnSetFocus`).
-  ///
-  /// Chromium asks when a browser component starts navigating, which happens
-  /// asynchronously - after the tab may have been hidden again, and after the
-  /// application already decided whether that page should own the keyboard
-  /// (Milestone 3 focus fix). The answer is therefore the same predicate the
-  /// creation path uses:
-  ///
-  ///   * a surface that is not the visible selected one never takes the
-  ///     keyboard, so a background tab that starts loading cannot steal it;
-  ///   * the visible selected surface takes it while the keyboard is meant to be
-  ///     in page content - either because the page has it already (a click into
-  ///     the page makes the Chromium view first responder first) or because a
-  ///     selection transition handed it over;
-  ///   * while the native address field owns the keyboard, the request is
-  ///     cancelled, so the field keeps it.
-  ///
-  /// The CEF source is recorded but deliberately not part of the decision: CEF
-  /// reports a "system" request for view-level focus changes too, including the
-  /// one that follows a newly created browser, so it cannot be read as "the user
-  /// asked for this".
+  /// The native bridge asks whether Chromium may take keyboard focus.
+  /// Only the visible selected surface may take it, while page content owns
+  /// or is intended to own the keyboard. Background loads and requests while
+  /// the native address editor owns focus must not steal it. The historical
+  /// source flag is logged for diagnostics; it does not change this policy.
   func browserBridge(_ bridge: BrowserBridge, allowsFocusRequestFromSystem fromSystem: Bool)
     -> Bool
   {
@@ -912,7 +896,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   }
 
   /// Chromium asked for a popup. The bridge already cancelled the unmanaged
-  /// native CEF window; the URL is handed to the runtime owner so it can open as
+  /// native Chromium window; the URL is handed to the runtime owner so it can open as
   /// a managed tab instead (Milestone 3 section 26).
   func browserBridge(_ bridge: BrowserBridge, didRequestNewTabWithURL url: String) {
     guard acceptsCallback(from: bridge) else { return }
@@ -940,7 +924,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     onCloseAccepted?(self)
   }
 
-  /// CEF can deliver queued callbacks after a browser has started closing. The
+  /// Chromium can deliver queued callbacks after a browser has started closing. The
   /// bridge identity and the session's closed bit together reject callbacks
   /// from a stale runtime before they can mutate navigation, focus, history or
   /// download state.
@@ -949,7 +933,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   }
 }
 
-// Closing the detached inspector follows the same asynchronous CEF teardown as
+// Closing the detached inspector follows the same asynchronous Chromium teardown as
 // the frontend's Close button and the application menu shortcut.
 extension BrowserSession: NSWindowDelegate {
   func windowShouldClose(_ sender: NSWindow) -> Bool {

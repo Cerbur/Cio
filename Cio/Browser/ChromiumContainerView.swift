@@ -2,15 +2,15 @@
 //  ChromiumContainerView.swift
 //  Cio
 //
-//  AppKit container that hosts one CEF browser view (ARCHITECTURE.md section 9).
+//  AppKit container that hosts one Chromium browser view (ARCHITECTURE.md section 9).
 //  Chromium supplies page/inspector geometry to stable native child hosts;
 //  BrowserSession owns the browser and detached inspector window lifetimes.
 //
 //  Milestone 3: the container is created and destroyed by
 //  BrowserSessionManager, one per live BrowserSession, and a tab switch only
 //  changes -isHidden. The container is never removed from the hierarchy while
-//  its session is alive, because removing it would deallocate the CEF host view
-//  and therefore destroy the CefBrowser (Milestone 3 section 11).
+//  its session is alive, because removing it would deallocate the Chromium host view
+//  and therefore destroy the WebContents (Milestone 3 section 11).
 //
 
 import CioUI
@@ -29,7 +29,7 @@ protocol ChromiumContainerViewDelegate: AnyObject {
 
 /// Chromium's AdvancedApp owns the splitter, device toolbar and responsive
 /// viewport. Its inspected-page placeholder is covered by our stable page host.
-/// The real page continues receiving native input and rendering through CEF.
+/// The real page continues receiving native input and rendering through Chromium.
 final class ChromiumContainerView: NSView {
   weak var delegate: ChromiumContainerViewDelegate?
   let pageContentView = NSView()
@@ -121,7 +121,7 @@ final class ChromiumContainerView: NSView {
   /// Hiding is exactly that - a hide. The view stays a subview of the surface
   /// host inside its stable page viewport, so the Chromium view it hosts is not
   /// deallocated and switching back
-  /// does not create a second CefBrowser.
+  /// does not create a second WebContents.
   func setSurfaceVisible(_ visible: Bool) {
     guard isSurfaceVisible != visible else { return }
     isSurfaceVisible = visible

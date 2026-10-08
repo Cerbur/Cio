@@ -11,15 +11,6 @@ xcuserdata/
 # Generated Xcode project (regenerate with: xcodegen generate)
 Cio.xcodeproj/
 
-# CEF binary distribution (fetch with: Scripts/fetch_cef.sh)
-ThirdParty/CEF/
-ThirdParty/.cache/
-ThirdParty/.cef-install-*/
-
-# CEF wrapper build products
-ThirdParty/libcef_dll_wrapper.a
-ThirdParty/wrapper-build/
-
 # Local Swift Package build state
 **/.build/
 **/.swiftpm/

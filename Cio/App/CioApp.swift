@@ -3,7 +3,7 @@
 //  Cio
 //
 //  The SwiftUI application. Note the absence of @main: the process entry point
-//  is BrowserMain so that the CEF sub-process hand-off can run before any UI
+//  is BrowserMain so that the Chromium sub-process hand-off can run before any UI
 //  code (see ARCHITECTURE.md section 11).
 //
 //  A single `Window` scene, not a `WindowGroup`. The runtime owns exactly one

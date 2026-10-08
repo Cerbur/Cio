@@ -1,6 +1,6 @@
 # CioUI injection audit
 
-CioUI imports only system frameworks, CioEngine and CioModel. App remains the composition root and owns every CEF object, session, container, bridge and lifecycle callback.
+CioUI imports only system frameworks, CioEngine and CioModel. App remains the composition root and owns sessions, containers and bridge lifecycle callbacks; the native bridge owns Chromium objects.
 
 | Boundary | Original operation preserved |
 | --- | --- |
