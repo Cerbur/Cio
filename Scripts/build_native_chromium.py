@@ -45,10 +45,19 @@ def prepare():
     patch("chrome/BUILD.gn", '      "app/chrome_main_mac.mm",\n',
           '      "app/chrome_main_mac.mm",\n'
           '      "browser/ui/cio/CioNativeRuntime.mm",\n'
+          '      "browser/ui/cio/CioHostedMessagePump.mm",\n'
           '      "browser/ui/cio/BrowserBridge.mm",\n'
           '      "browser/ui/cio/CioBrowserWindow.mm",\n'
           '      "browser/ui/cio/CioDialogs.mm",\n'
           '      "browser/ui/cio/CioRoot.mm",\n')
+    # The component build does not export CrApplication's constructors or its
+    # pool policy. Export the three entry points the hosted subclass uses,
+    # without changing the message-pump header or stock Chromium behavior.
+    pump = "base/message_loop/message_pump_apple.mm"
+    for declaration in ("MessagePumpCrApplication::MessagePumpCrApplication() = default;",
+                        "MessagePumpCrApplication::~MessagePumpCrApplication() = default;",
+                        "bool MessagePumpCrApplication::ShouldCreateAutoreleasePool() {"):
+        patch(pump, declaration, "BASE_EXPORT " + declaration)
     patch("chrome/app/chrome_main.cc", '#include "chrome/app/chrome_main_mac.h"',
           '#include "chrome/app/chrome_main_mac.h"\n'
           '#include "chrome/browser/ui/cio/CioNativeRuntime.h"')

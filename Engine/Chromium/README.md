@@ -32,6 +32,11 @@ Scripts/verify_bundle.sh
 - `Native/CioNativeRuntime.mm` 保持 Chromium 的 BrowserMainRunner 和
   ContentMainRunner 存活，将任务调度接到 Cio 的 AppKit 循环，并在页面关闭、
   cookie 刷新完成后依序关闭。BrowserCrApplication 提供 Chromium 所需事件接口。
+- `Native/CioHostedMessagePump.*` 继承 Chromium 的 CrApplication 消息泵，
+  保留原生菜单的私有 run-loop 模式注册与事件期间的 autorelease 保护。
+  显式 Chromium Run 只处理 CF sources；退出嵌套菜单时延后停止当前 pass，
+  不停止 Cio 的 NSApplication 主循环。组件构建补丁导出继承所需的三个符号。
+  UI pump 工厂仅在主线程创建宿主消息泵；后台 UI 线程使用标准 NSRunLoop pump。
 - `Native/CioBrowserWindow.*` 连接已有 Cio NSWindow，阻止创建 Chromium 自有外壳。
   这两个文件从 Mori 的 MIT 实现修改而来；未导入 Mori 的 SwiftUI 应用。
 - `Native/BrowserBridge.mm` 将页面视图嵌入 Cio 容器，转发导航、标题、图标、
@@ -63,6 +68,21 @@ Objective-C 接口改变时也必须同步更新 CioChromium 接口版本和 UI 
 Views 气泡没有完整映射到 AppKit。DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
+
+语言下拉菜单回归检查：`python3 Scripts/verify_hosted_message_pump.py`。
+它使用应用实际的宿主消息泵源码与固定 Chromium base 库，覆盖菜单作用域
+反复进入、模式恢复、菜单期间任务执行、主线程/后台 UI 线程工厂分流，
+以及嵌套原生循环中的延后退出。
+2026-10-08 修复前，该检查触发 `DCHECK failed: g_app_pump`；用户语言设置页
+的原生 `<select>` 同样在 `ScopedPumpMessagesInPrivateModes` 处中止。
+原先继承 CFRunLoop 消息泵没有注册 Chromium 的应用菜单泵，这是宿主接入
+缺陷；仅打开设置页的旧 smoke check 无法覆盖点击原生下拉框的路径。
+修复后 Debug 构建和上述回归检查通过；
+`python3 Scripts/verify_native_runtime.py --mock-keychain` 的六组检查全部通过。
+新构建 Debug 实例的 computer-use 验收通过：翻译目标菜单打开、选择简体中文、
+取消后再次打开、正常退出与重启保留；普通 HTML `<select>` 的鼠标/键盘选择
+及 `onchange` 均正常。验收后已恢复原来的 English 翻译目标和语言设置页。
+本轮构建、回归与运行日志在 `build/verification/hosted-message-pump/`。
 
 2026-10-08：stock Chromium、原生桥接目标和最终 Cio Debug 构建均成功。
 `Scripts/verify_bundle.sh` 确认 519 个组件库、四个辅助进程、dyld 依赖闭包、

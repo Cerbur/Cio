@@ -1,5 +1,6 @@
 #include "chrome/browser/ui/cio/CioNativeRuntime.h"
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
+#include "chrome/browser/ui/cio/CioHostedMessagePump.h"
 #import "chrome/browser/ui/cio/CioNativeExports.h"
 
 #include <algorithm>
@@ -33,13 +34,6 @@
 extern "C" int ChromeMain(int, const char **);
 
 namespace {
-class HostedMessagePump final : public base::MessagePumpCFRunLoop {
- protected:
-  bool ShouldCreateAutoreleasePool() override {
-    // Match CrApplication's lifetime protection during AppKit event tracking.
-    return !base::message_pump_apple::IsHandlingSendEvent();
-  }
-};
 struct Runtime {
   std::unique_ptr<ChromeMainDelegate> delegate;
   std::unique_ptr<content::ContentMainRunner> content;
@@ -117,9 +111,7 @@ int CioNativeStart(int argc, const char **argv) {
   if (hosted && !base::MessagePump::IsMessagePumpForUIFactoryOveridden()) {
     // AppKit owns event dispatch. Chromium polls its CF sources without
     // starting another NSApplication event loop inside a Cio timer/gesture.
-    base::MessagePump::OverrideMessagePumpForUIFactory(+[]() -> std::unique_ptr<base::MessagePump> {
-      return std::make_unique<HostedMessagePump>();
-    });
+    base::MessagePump::OverrideMessagePumpForUIFactory(&cio::CreateHostedMessagePump);
   }
   int result = ChromeMain(argc, argv);
   if (State().initialized) {
