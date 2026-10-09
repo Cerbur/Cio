@@ -26,6 +26,13 @@ public final class BrowserSurfaceHostView: NSView {
   private var paneDropIndex: Int?
   private var isPreparingSplitDrop = false
   private var deferredRevealTabIDs = Set<UUID>()
+  var containerFeedback: @MainActor (BrowserDragHaptics.Feedback) -> Void = BrowserDragHaptics.perform
+  private enum FeedbackTarget: Equatable {
+    case compression(BrowserSplitLayout.Side, incomingPaneCount: Int)
+    case replacement(BrowserSplitLayout.Side)
+    case paneOrder([UUID])
+  }
+  private var feedbackTarget: FeedbackTarget?
 
   /// Every drag source hands off one card to the same native page reveal. The
   /// layout is committed first without an intermediate automatic restoration.
@@ -456,10 +463,42 @@ public final class BrowserSurfaceHostView: NSView {
         next[id]?.renderFrame = CGRect(origin: placement.frame.origin, size: size)
       }
     }
+    updateContainerFeedback(hasPreview: previewFrame != nil && !next.isEmpty,
+                            hasMaterial: previewHasMaterial)
     setDividerFrames(dividerFrames)
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
     updatePreviewFrame(previewFrame, hasMaterial: previewHasMaterial,
                        animated: animatedPresentation && deferredRevealTabIDs.isEmpty)
+  }
+
+  /// The page container owns feedback, so native links, sidebar cards and
+  /// pane drags share it. Layout ticks and animation completions cannot pulse
+  /// again for an unchanged logical destination; cancellation silently resets.
+  private func updateContainerFeedback(hasPreview: Bool, hasMaterial: Bool) {
+    let next: FeedbackTarget?
+    if let id = liftedPaneID, let split, split.contains(id) {
+      next = .paneOrder(split.movingPane(id, to: paneDropIndex ?? split.tabIDs.firstIndex(of: id)!).tabIDs)
+    } else if hasPreview, let target = previewTarget {
+      next = hasMaterial ? .compression(target.side, incomingPaneCount: split == nil ? incomingPaneCount : 1)
+        : .replacement(target.side)
+    } else {
+      next = nil
+    }
+    guard next != feedbackTarget else { return }
+    let previous = feedbackTarget
+    feedbackTarget = next
+    switch next {
+    case .compression:
+      containerFeedback(.compression)
+    case .replacement:
+      containerFeedback(.replacement)
+    case .paneOrder(let ids):
+      // Lifting in its original slot does not displace a neighbouring pane.
+      // Moving back into that slot after a reorder does.
+      if previous != nil || ids != split?.tabIDs { containerFeedback(.compression) }
+    case nil:
+      break
+    }
   }
 
   /// Grow the native drop region from the outer edge while the survivor loses

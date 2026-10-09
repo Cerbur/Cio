@@ -21,6 +21,31 @@ struct SidebarTabPanelItem: Identifiable, Equatable {
 }
 
 struct SidebarTabPanelLayout {
+  /// Compare logical slots, never animated frames. Every drag source and
+  /// ordinary reorder reaches this same container-owned feedback decision.
+  struct FeedbackSnapshot: Equatable {
+    struct Slot: Equatable {
+      let row: Int
+      let column: Int
+      let member: Int
+      let memberCount: Int
+    }
+    let slots: [UUID: Slot]
+    let hasGap: Bool
+
+    func feedback(from previous: Self) -> BrowserDragHaptics.Feedback? {
+      // Removing a reservation restores space; its commit already received
+      // feedback when the neighbours first made room for the destination.
+      guard !(previous.hasGap && !hasGap) else { return nil }
+      let ids = Set(slots.keys), previousIDs = Set(previous.slots.keys)
+      // Source lift/closure alone removes space, rather than compressing it.
+      guard hasGap || !ids.isStrictSubset(of: previousIDs) else { return nil }
+      return slots.contains { id, slot in
+        previous.slots[id].map { $0 != slot } ?? false
+      } ? .compression : nil
+    }
+  }
+
   struct RowDestination: Equatable {
     let id: SpaceTabPanelRow.ID
     let members: [UUID]
@@ -34,6 +59,20 @@ struct SidebarTabPanelLayout {
 
   var destinations: [RowDestination] {
     rows.map { RowDestination(id: $0.id, members: $0.tabIDs) }
+  }
+
+  var feedbackSnapshot: FeedbackSnapshot {
+    var slots: [UUID: FeedbackSnapshot.Slot] = [:]
+    let columns = max(1, columns)
+    for (index, row) in rows.enumerated() {
+      for (member, id) in row.tabIDs.enumerated() {
+        slots[id] = .init(row: index / columns, column: index % columns,
+                         member: member, memberCount: row.tabIDs.count)
+      }
+    }
+    return FeedbackSnapshot(slots: slots, hasGap: rows.contains {
+      if case .gap = $0.id { return true }; return false
+    })
   }
 
   var height: CGFloat {

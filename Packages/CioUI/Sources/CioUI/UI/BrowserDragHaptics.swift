@@ -1,13 +1,13 @@
 import AppKit
 
-/// Native trackpad feedback at drag target boundaries, independent of animation speed.
+/// Native feedback emitted by container layout/preview transitions, independent
+/// of the input source and animation speed.
 @MainActor
 enum BrowserDragHaptics {
-  static func compression() {
-    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-  }
+  enum Feedback: Equatable { case compression, replacement }
 
-  static func replacement() {
-    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+  static func perform(_ feedback: Feedback) {
+    let pattern: NSHapticFeedbackManager.FeedbackPattern = feedback == .compression ? .alignment : .levelChange
+    NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
   }
 }

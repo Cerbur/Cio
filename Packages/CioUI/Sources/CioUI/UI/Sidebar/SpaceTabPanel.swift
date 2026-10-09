@@ -9,6 +9,7 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
   var rowHeight = BrowserLayout.sidebarTabRowHeight
   var rowSpacing = BrowserLayout.sidebarRowSpacing
   var columnSpacing = BrowserLayout.sidebarTopPinSpacing
+  var containerFeedback: @MainActor (BrowserDragHaptics.Feedback) -> Void = BrowserDragHaptics.perform
   @ViewBuilder let content: (SpaceTabPanelRow) -> Content
   @ViewBuilder let tabContent: (SpaceTabPanelRow, UUID) -> TabContent
   @ViewBuilder let rowBackground: (SpaceTabPanelRow) -> RowBackground
@@ -46,6 +47,9 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
     // Focus/title updates cannot restart a layout flight. Member order is part
     // of the destination, so swapping panes also moves their retained controls.
     .animation(drag.panelLayoutAnimation, value: layout.destinations)
+    .onChange(of: layout.feedbackSnapshot) { previous, current in
+      if let feedback = current.feedback(from: previous) { containerFeedback(feedback) }
+    }
   }
 
   @ViewBuilder

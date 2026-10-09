@@ -60,6 +60,14 @@ resized once when a split commits. Other browser regions retain native Chromium 
 behavior. The normal native link drag image hands off to the shared page reveal
 and toolbar clock when the split commits.
 
+Haptic feedback belongs to the containers. `SpaceTabPanel` compares logical tab
+slots and emits native alignment feedback when a reservation or reorder moves
+existing controls. `BrowserSurfaceHostView` emits alignment for split compression
+and pane reordering, and level-change feedback for replacement. Input coordinators
+only choose destinations; native webpage links and sidebar cards share the same
+feedback path. Repeated layout ticks, title/focus updates, slots that do not move
+existing controls and reservation cleanup do not repeat feedback.
+
 Space Pin collapse still snapshots the hidden tab IDs. Selecting another tab
 does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native

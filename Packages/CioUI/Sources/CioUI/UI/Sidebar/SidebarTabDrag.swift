@@ -807,13 +807,6 @@ public final class SidebarTabDrag {
       resolved = spaceTarget(for: id, in: layout)
     }
     if resolved != target {
-      // Opening or moving a slot displaces its neighbours. Lifting in place,
-      // leaving the sidebar and entering an empty tier do not compress tabs.
-      if let resolved, layout.tabIDs(in: resolved.tier).contains(where: {
-        !liftedSourceTabIDs.contains($0) && !paneSourceTabIDs.contains($0)
-      }) {
-        BrowserDragHaptics.compression()
-      }
       withAnimation(reduceMotion ? nil : .smooth(duration: Values.targetDuration)) {
         target = resolved
       }

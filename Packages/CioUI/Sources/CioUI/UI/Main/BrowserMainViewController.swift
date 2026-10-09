@@ -391,7 +391,6 @@ final class BrowserMainViewController: NSViewController {
         // The lifted pane still occupies a slot until the drop commits. Moving
         // above the content into the toolbar must not expand its neighbours.
         let index = group.dropPaneIndex(at: local.x, in: browser.bounds, previous: self.panePreviewIndex)
-        let previousIndex = self.panePreviewIndex
         self.panePreviewIndex = index
         // The toolbar presents the same slot as the content beneath it. Both
         // must commit that slot instead of treating a toolbar drop as cancel.
@@ -401,31 +400,17 @@ final class BrowserMainViewController: NSViewController {
         let canDrop = dropBounds.contains(local)
         self.paneDropIndex = canDrop ? index : nil
         self.runtime.surfaceDriver.previewPaneDrag(id, index: index)
-        if canDrop, index != previousIndex {
-          BrowserDragHaptics.compression()
-        }
         return
       }
       let canSplit = self.runtime.presentedInternalPanel == nil
         && self.runtime.workspaceStore.canSplit(with: id) && browser.bounds.contains(local)
       let count = self.runtime.workspaceStore.splitGroup(containing: id)?.tabIDs.count ?? 1
-      let previousTarget = self.splitDropTarget
       self.splitDropTarget = canSplit ? (self.runtime.workspaceStore.activeSplit?.dropTarget(
         at: local.x, in: browser.bounds, previous: self.splitDropTarget)
         ?? BrowserSplitLayout.DropTarget(side: BrowserSplitLayout.dropSide(
           at: local.x, in: browser.bounds, previous: self.splitDropTarget?.side,
           incomingPaneCount: count))) : nil
       self.runtime.surfaceDriver.previewSplit(at: self.splitDropTarget, incomingPaneCount: count)
-      if let target = self.splitDropTarget, target != previousTarget {
-        // Single-page centre drops replace the displayed tab without using
-        // the split model's replacesPane flag or compressing the page.
-        let replacesSinglePage = self.runtime.workspaceStore.activeSplit == nil && target.side == .middle
-        if target.replacesPane || replacesSinglePage {
-          BrowserDragHaptics.replacement()
-        } else {
-          BrowserDragHaptics.compression()
-        }
-      }
     }
     drag.onSplitReveal = { [weak self] frame, onCompletion in
       guard let self, let overlay = self.dragOverlay else {

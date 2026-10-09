@@ -89,6 +89,7 @@ final class BrowserSurfaceDropTests: XCTestCase {
     window.isReleasedWhenClosed = false
     defer { window.close() }
     let host = BrowserSurfaceHostView(frame: window.contentView!.bounds)
+    host.containerFeedback = { _ in }
     window.contentView = host
     // Exercise the real host and animation handoff without showing a window
     // or creating any browser runtimes.
