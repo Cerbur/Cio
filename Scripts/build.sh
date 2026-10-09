@@ -6,6 +6,12 @@
 #
 #   Scripts/build.sh [extra xcodebuild arguments]
 #
+# Optional shell configuration (for example in ~/.zshrc):
+#   export CIO_CODE_SIGN_IDENTITY="Apple Development: ..."
+#   export CIO_DEVELOPMENT_TEAM="..."
+# The signing identity may be a Keychain certificate name or SHA-1 fingerprint.
+# Unset values leave project.yml's local ad-hoc signing defaults in place.
+#
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,13 +30,23 @@ xcodegen generate
 # before xcodebuild reads it.
 "$REPO_ROOT/Scripts/sync_scheme.sh"
 
-xcodebuild \
-  -project "$REPO_ROOT/Cio.xcodeproj" \
-  -scheme Cio \
-  -configuration "$CONFIGURATION" \
-  -derivedDataPath "$DERIVED_DATA" \
-  "$@" \
-  build
+build_arguments=(
+  -project "$REPO_ROOT/Cio.xcodeproj"
+  -scheme Cio
+  -configuration "$CONFIGURATION"
+  -derivedDataPath "$DERIVED_DATA"
+)
+if [[ -n "${CIO_CODE_SIGN_IDENTITY:-}" ]]; then
+  # Package resource bundles otherwise retain automatic signing and reject a
+  # specific certificate, even though the app project uses manual signing.
+  build_arguments+=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$CIO_CODE_SIGN_IDENTITY")
+  printf 'Signing with configured Keychain identity: %s\n' "$CIO_CODE_SIGN_IDENTITY"
+fi
+if [[ -n "${CIO_DEVELOPMENT_TEAM:-}" ]]; then
+  build_arguments+=("DEVELOPMENT_TEAM=$CIO_DEVELOPMENT_TEAM")
+fi
+# Explicit command-line build settings take precedence over shell defaults.
+xcodebuild "${build_arguments[@]}" "$@" build
 
 APP_EXECUTABLE="$DERIVED_DATA/Build/Products/$CONFIGURATION/Cio.app/Contents/MacOS/Cio"
 if command -v pgrep >/dev/null 2>&1; then

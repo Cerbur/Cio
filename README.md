@@ -15,6 +15,16 @@ CONFIGURATION=Debug Scripts/build.sh
 
 The build incrementally compiles the native Chromium bridge, regenerates Cio.xcodeproj, installs the shared scheme and packages/signs Chromium, its component libraries and four standard Helpers. The product is build/DerivedData/Build/Products/Debug/Cio.app. Use CONFIGURATION=Release with the same script for Release. Source, toolchains, binaries and generated projects stay under ignored build directories.
 
+For a stable local signing identity, add the following to `~/.zshrc`, using a certificate name from `security find-identity -v -p codesigning`:
+
+```bash
+export CIO_CODE_SIGN_IDENTITY="Apple Development: your certificate name"
+# Optional: the development team's ID from your Apple Developer account.
+# export CIO_DEVELOPMENT_TEAM="YOUR_TEAM_ID"
+```
+
+Open a new terminal or run `source ~/.zshrc`, then build with the same command above. The script reads these exported variables and uses the selected Keychain identity for the app, frameworks and Helpers. A certificate's SHA-1 fingerprint is also accepted. With no variables configured, signing uses the project's ad-hoc defaults. Explicit build settings passed to `Scripts/build.sh` override the environment. Keep personal certificate names and team IDs in shell configuration rather than `project.yml`.
+
 Scripts/package_native_chromium.py closes the runtime dependency graph using bundle-relative paths. Scripts/verify_bundle.sh checks native exports, libraries, signatures and licenses without launching the app. See [the native engine guide](Engine/Chromium/README.md) for profiles, updates, codecs and current UI limitations.
 
 ## Verify
