@@ -411,6 +411,10 @@ final class BrowserMainViewController: NSViewController {
         if first >= 0, end <= group.tabIDs.count {
           splitLandingTabIDs = Array(group.tabIDs[first..<end])
         }
+      } else if committed, let selectedID = self.runtime.workspaceStore.selectedTabID {
+        // A centre drop onto a single page selects the incoming tab without
+        // creating a split. It still needs the deferred card-to-page reveal.
+        splitLandingTabIDs = [selectedID]
       }
       return committed
     }

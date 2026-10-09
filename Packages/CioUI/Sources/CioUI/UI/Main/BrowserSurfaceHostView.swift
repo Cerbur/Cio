@@ -216,7 +216,7 @@ public final class BrowserSurfaceHostView: NSView {
   public func present(containers: [UUID: BrowserSurfaceAttachment], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
     let pairChanged = self.split?.tabIDs != split?.tabIDs
     let nextVisibleIDs = Set(split?.tabIDs ?? selectedTabID.map { [$0] } ?? [])
-    if pairChanged {
+    if pairChanged || (isCommittingSplitPreview && self.selectedTabID != selectedTabID) {
       // Both directions of a split switch share replacement's departure.
       // Include the outgoing single page so it does not abruptly vanish while
       // the incoming split cards are still small.
@@ -318,10 +318,14 @@ public final class BrowserSurfaceHostView: NSView {
     return committed
   }
 
-  /// Read final geometry rather than the in-flight survivor crop. The drag
-  /// overlay uses window coordinates to expand into one pane or an incoming pair.
+  /// Read final geometry rather than the in-flight survivor crop. Single-page
+  /// replacement also hands the card off, expanding into the full content area.
   public func splitLandingFrame(for tabIDs: [UUID]) -> CGRect? {
-    guard window != nil, !tabIDs.isEmpty, let split else { return nil }
+    guard window != nil, !tabIDs.isEmpty else { return nil }
+    guard let split else {
+      guard let selectedTabID, tabIDs == [selectedTabID] else { return nil }
+      return convert(bounds, to: nil)
+    }
     let frames = split.paneFrames(in: bounds).panes
     var frame: CGRect?
     for id in tabIDs {
