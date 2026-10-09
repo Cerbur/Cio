@@ -13,6 +13,7 @@ public final class BrowserSurfaceHostView: NSView {
   private var split: BrowserSplitLayout?
   private var isCovered = false
   private var previewTarget: BrowserSplitLayout.DropTarget?
+  private var previewRenderSizes: [UUID: CGSize] = [:]
   private var isCommittingSplitPreview = false
   private var resizingFraction: CGFloat?
   private var resizingSecondFraction: CGFloat?
@@ -40,6 +41,7 @@ public final class BrowserSurfaceHostView: NSView {
     liftedPaneID = nil
     paneDropIndex = nil
     previewTarget = nil
+    previewRenderSizes.removeAll()
     applySurfaceLayout(animatedPresentation: true, animatedVisibility: false)
     let source = convert(windowFrame, from: nil)
     let group = splitLandingFrame(for: tabIDs).map { convert($0, from: nil) }
@@ -146,6 +148,16 @@ public final class BrowserSurfaceHostView: NSView {
     var frame: CGRect
     var toolbarVisible: Bool = true
     var roundedEdge: RoundedEdge = .none
+    /// Hover crops a live page at its committed render size. Only a drop may
+    /// resize Chromium and cause the document to reflow.
+    var renderFrame: CGRect?
+
+    var viewportFrame: CGRect { renderFrame ?? frame }
+    var geometry: BrowserSplitRevealTransition.Geometry {
+      var result = BrowserSplitRevealTransition.Geometry.page(viewportFrame)
+      result.outline = frame
+      return result
+    }
   }
   private var placements: [UUID: PagePlacement] = [:]
   private var targets: [UUID: PagePlacement] = [:]
@@ -277,6 +289,13 @@ public final class BrowserSurfaceHostView: NSView {
 
   public func previewSplit(at target: BrowserSplitLayout.DropTarget?, incomingPaneCount: Int = 1) {
     guard previewTarget != target || self.incomingPaneCount != incomingPaneCount else { return }
+    if target != nil, previewTarget == nil {
+      let ids = split?.tabIDs ?? selectedTabID.map { [$0] } ?? []
+      previewRenderSizes = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
+        pages[id].map { (id, $0.surface.nativeView.frame.size) }
+      })
+    }
+    if target == nil { previewRenderSizes.removeAll() }
     previewTarget = target
     self.incomingPaneCount = incomingPaneCount
     applySurfaceLayout(animatedPresentation: true)
@@ -303,6 +322,7 @@ public final class BrowserSurfaceHostView: NSView {
   public func commitSplitPreview(keepingLiftedPaneHidden: Bool = false, _ commit: () -> Bool) -> Bool {
     let hadPreview = previewTarget != nil || liftedPaneID != nil
     previewTarget = nil
+    previewRenderSizes.removeAll()
     if !keepingLiftedPaneHidden { liftedPaneID = nil }
     paneDropIndex = nil
     isCommittingSplitPreview = hadPreview
@@ -429,6 +449,12 @@ public final class BrowserSurfaceHostView: NSView {
       deferredRevealTabIDs.formUnion(next.keys.filter {
         targets[$0]?.toolbarVisible != true || pages[$0]?.splitTransition.isReturning == true
       })
+    }
+    if previewTarget != nil {
+      for (id, size) in previewRenderSizes where size.width > 0 && size.height > 0 {
+        guard let placement = next[id], placement.toolbarVisible else { continue }
+        next[id]?.renderFrame = CGRect(origin: placement.frame.origin, size: size)
+      }
     }
     setDividerFrames(dividerFrames)
     updatePresentationLayout(next, animated: animatedPresentation, animatedVisibility: animatedVisibility)
@@ -563,10 +589,10 @@ public final class BrowserSurfaceHostView: NSView {
         continue
       }
       let returning = page.splitTransition.isReturning
-      let changed = targets[id]?.frame != placement.frame || targets[id]?.toolbarVisible != true
+      let changed = targets[id] != placement
       guard returning || changed else { continue }
       if canAnimate && (animated || returning) {
-        entries[id] = page.splitTransition.source(in: placement.frame)
+        entries[id] = page.splitTransition.source(in: placement.viewportFrame)
       }
       page.splitTransition.cancel()
     }
@@ -578,7 +604,7 @@ public final class BrowserSurfaceHostView: NSView {
       let layoutDirection: BrowserSplitRevealTransition.Direction = retainedSidebarPaneID != nil ? .sidebarSurvivor : .layout
       let duration = layoutDirection == .sidebarSurvivor && source.glassOpacity == 0
         ? retainedSidebarCollapseDuration.map { $0 * (1 - BrowserSplitRevealTransition.sidebarDetachFraction) } : nil
-      startFlight(id, pane: placement.frame, from: source, to: .page(placement.frame),
+      startFlight(id, pane: placement.viewportFrame, from: source, to: placement.geometry,
         direction: source.glassOpacity > 0 ? .enter : layoutDirection, duration: duration)
     }
     applyPlacements(next, animatedVisibility: animatedVisibility && window != nil,
@@ -612,18 +638,27 @@ public final class BrowserSurfaceHostView: NSView {
         page.hide(animated: false)
         continue
       }
-      guard var placement = next[id], placement.toolbarVisible else {
+      guard let placement = next[id], placement.toolbarVisible else {
         page.hide(animated: animatedVisibility)
         continue
       }
-      if let flightFrame = page.splitTransition.frame {
-        // Preview settling must not resize this viewport or Chromium while
-        // their common parent is running the compositor reveal.
-        placement.frame = flightFrame
+      let viewportFrame = page.splitTransition.frame ?? placement.viewportFrame
+      if !page.splitTransition.isAnimating {
+        applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge)
+        if placement.renderFrame != nil {
+          let crop = placement.frame.offsetBy(dx: -viewportFrame.minX, dy: -viewportFrame.minY)
+          let mask = (page.viewport.layer?.mask as? CAShapeLayer) ?? CAShapeLayer()
+          mask.frame = CGRect(origin: .zero, size: viewportFrame.size)
+          mask.fillColor = NSColor.black.cgColor
+          mask.path = CGPath(roundedRect: crop, cornerWidth: BrowserLayout.contentCornerRadius,
+                             cornerHeight: BrowserLayout.contentCornerRadius, transform: nil)
+          page.viewport.layer?.mask = mask
+        } else {
+          page.viewport.layer?.mask = nil
+        }
       }
-      if !page.splitTransition.isAnimating { applyCornerClipping(to: page.viewport, roundedEdge: placement.roundedEdge) }
       page.surface.setSurfaceVisible(true)
-      page.layout(in: self, chromeHost: chromeOverlayHost, frame: placement.frame,
+      page.layout(in: self, chromeHost: chromeOverlayHost, frame: viewportFrame,
                   toolbarVisible: placement.toolbarVisible && !isCovered,
                   toolbarLayoutFrame: placement.frame,
                   animatedVisibility: animatedVisibility, animatedLayout: animatedLayout)

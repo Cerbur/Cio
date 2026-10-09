@@ -3,6 +3,48 @@ import CioModel
 import XCTest
 
 final class SpaceTabPanelRowTests: XCTestCase {
+  @MainActor
+  func testWebPagePreviewReservesTemporaryRowAndHandoffKeepsNeighboursInPlace() throws {
+    let space = UUID(), pinned = UUID(), left = UUID(), right = UUID(), other = UUID(), incoming = UUID()
+    let group = BrowserSplitLayout(leftTabID: left, rightTabID: right)
+    let drag = SidebarTabDrag()
+    drag.reduceMotion = true
+    drag.spaceFrame = CGRect(x: 0, y: 0, width: 200, height: 600)
+    drag.layoutProvider = {
+      SidebarTabDragLayout(spaceID: space, globalTabIDs: [], globalPinnedTabCount: 0,
+        groupedTabIDs: Set(group.tabIDs), spacePinTabIDs: [pinned],
+        temporaryTabIDs: [left, right, other], tileSize: .zero, topInset: 0)
+    }
+    func rows(_ ids: [UUID]) -> [SpaceTabPanelRow] {
+      SpaceTabPanelRow.make(spaceID: space, pinnedIDs: [pinned], temporaryIDs: ids,
+        groups: [group], drop: drag.panelDropTarget.map { .init(tier: $0.tier, before: $0.before) })
+    }
+    drag.previewWebPageDrop(before: left)
+    let reserved = rows([left, right, other])
+    let reservedFrames = SidebarTabPanelLayout(rows: reserved).frames(width: 200)
+    let gap = try XCTUnwrap(reserved.first { $0.id == .gap(space) })
+    let gapFrame = try XCTUnwrap(reservedFrames[.row(gap.id)])
+    for row in reserved {
+      drag.register(row, frame: try XCTUnwrap(reservedFrames[.row(row.id)]), token: UUID())
+    }
+    XCTAssertEqual(drag.webPageDropTarget(at: CGPoint(x: gapFrame.midX, y: gapFrame.midY)),
+                   SidebarTabDropTarget(tier: .temporary(space), before: left))
+    XCTAssertEqual(reserved.flatMap(\.tabIDs), [pinned, left, right, other])
+    XCTAssertEqual(reserved.filter { $0.id == .gap(space) }.count, 1)
+    // Replace the virtual slot and create the real background tab together.
+    drag.clearWebPageDropPreview()
+    let committedFrames = SidebarTabPanelLayout(rows: rows([incoming, left, right, other])).frames(width: 200)
+    XCTAssertEqual(committedFrames[.tab(incoming)], gapFrame)
+    for id in [pinned, left, right, other] {
+      XCTAssertEqual(committedFrames[.tab(id)], reservedFrames[.tab(id)])
+    }
+    XCTAssertNil(drag.panelDropTarget)
+    XCTAssertNil(drag.webPageDropTarget(at: CGPoint(x: 201, y: gapFrame.midY)))
+    drag.previewWebPageDrop(before: nil)
+    drag.clearWebPageDropPreview()
+    XCTAssertFalse(rows([left, right, other]).contains { $0.id == .gap(space) })
+  }
+
   func testCommittingDraggedTabIntoGroupDoesNotHideExistingMembers() throws {
     let space = UUID(), existing = UUID(), incoming = UUID(), other = UUID()
     let source = Set([incoming])

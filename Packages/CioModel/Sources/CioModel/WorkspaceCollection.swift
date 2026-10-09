@@ -582,6 +582,25 @@ public struct WorkspaceCollection: Equatable, Sendable {
 
   // MARK: - Tab lifecycle
 
+  /// Commit the new temporary tab and optional split together. A rejected drop
+  /// must not leave behind a tab or change the current selection.
+  @discardableResult
+  public mutating func insertDroppedWebPage(
+    _ tab: BrowserTab, before targetID: UUID? = nil, splittingOnRight: Bool = false
+  ) -> Bool {
+    if splittingOnRight {
+      guard selectedTabID != nil, (activeSplit?.tabIDs.count ?? 1) < 3 else { return false }
+    }
+    var candidate = self
+    let anchor = targetID.flatMap { candidate.splitGroup(containing: $0)?.leftTabID ?? $0 }
+    let insertion = anchor.flatMap { candidate.index(of: $0, in: selectedSpaceID) }
+      ?? (selectedSpace?.tabIDs.count ?? 0)
+    guard candidate.insertTab(tab, in: selectedSpaceID, at: insertion, select: false) else { return false }
+    if splittingOnRight, !candidate.createSplit(with: tab.id, on: .right) { return false }
+    self = candidate
+    return true
+  }
+
   /// New tabs go at the front unless a popup supplies a source tab.
   public func newTabInsertionIndex(in spaceID: UUID, after sourceTabID: UUID? = nil) -> Int {
     sourceTabID

@@ -312,6 +312,30 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   // MARK: - Tab lifecycle
 
+  @discardableResult
+  func openDroppedWebPage(_ url: URL, before tabID: UUID?, splittingOnRight: Bool) -> UUID? {
+    guard !isTerminating, !isSpotlightPresented,
+          ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+          let host = url.host, !host.isEmpty else { return nil }
+    if splittingOnRight {
+      let visibleIDs = activeSplit?.tabIDs ?? selectedTabID.map { [$0] } ?? []
+      guard !visibleIDs.isEmpty, visibleIDs.count < 3,
+            !visibleIDs.contains(where: { sessionManager.isClosing(tabID: $0) }) else { return nil }
+    }
+    let tab = BrowserTab(url: url)
+    var inserted = false
+    withSelectionTransition {
+      inserted = workspace.insertDroppedWebPage(tab, before: tabID, splittingOnRight: splittingOnRight)
+      guard inserted else { return }
+      _ = sessionManager.createSession(for: tab.id, initialURL: url, initialTitle: "")
+      if splittingOnRight { ensureSelectedPresentationSessions() }
+    }
+    guard inserted else { return nil }
+    if splittingOnRight { engineSelectedSession?.focusPage() }
+    logTabCreated(tab.id, url: url)
+    return tab.id
+  }
+
   /// Creates a tab at the front of the currently selected Space.
   @discardableResult
   func createTab(url: URL? = nil, select: Bool = true, title: String = "") -> UUID? {

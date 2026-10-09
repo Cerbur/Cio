@@ -38,6 +38,10 @@ public protocol BrowserWorkspaceProtocol: BrowserEngineObservable {
   @discardableResult
   func loadInSelectedTab(_ url: URL) -> Bool
 
+  /// Sidebar drops stay in the background; right-edge drops join the visible group.
+  @discardableResult
+  func openDroppedWebPage(_ url: URL, before tabID: UUID?, splittingOnRight: Bool) -> UUID?
+
   @discardableResult
   func moveTab(
     _ id: UUID,

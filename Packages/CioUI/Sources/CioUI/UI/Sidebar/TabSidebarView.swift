@@ -235,7 +235,7 @@ struct TabSidebarView: View {
       spaceID: space.id, pinnedIDs: pinnedTabs.map(\.id), temporaryIDs: temporaryTabs.map(\.id),
       groups: space.splitGroups, liftedID: tabDrag.sidebarLiftedTabID,
       liftedIDs: tabDrag.sidebarLiftedTabIDs,
-      drop: (tabDrag.isDragging ? tabDrag.target : nil).map { .init(tier: $0.tier, before: $0.before) },
+      drop: tabDrag.panelDropTarget.map { .init(tier: $0.tier, before: $0.before) },
       paneCollapse: tabDrag.paneCollapse)
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil

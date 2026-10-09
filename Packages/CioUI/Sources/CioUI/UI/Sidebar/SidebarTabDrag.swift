@@ -94,6 +94,8 @@ public final class SidebarTabDrag {
   private(set) var startedFromStableTab = false
   /// Where the lifted tab would land; that tier shows a gap there.
   private(set) var target: SidebarTabDropTarget?
+  private(set) var webPagePreviewTarget: SidebarTabDropTarget?
+  var panelDropTarget: SidebarTabDropTarget? { isDragging ? target : webPagePreviewTarget }
   private(set) var style = Style.row
   private(set) var size = CGSize.zero
   /// The pointer's position; the block keeps `grab` under it.
@@ -159,6 +161,33 @@ public final class SidebarTabDrag {
   @ObservationIgnored private var lastDrop: (tabID: UUID, time: TimeInterval)?
 
   // MARK: - Geometry
+
+  /// Native webpage links always create temporary background tabs, including
+  /// drops near pins. Use registered rows to avoid inserting inside a group.
+  func webPageDropTarget(at point: CGPoint) -> SidebarTabDropTarget? {
+    guard tabID == nil, let layout = layoutProvider?(),
+          visibleSpaceFrame.contains(point) else { return nil }
+    let tier = WorkspaceCollection.TabTier.temporary(layout.spaceID)
+    if let target = webPagePreviewTarget, target.tier == tier,
+       panelRows[.gap(layout.spaceID)]?.frame.contains(point) == true { return target }
+    let before = panelRows.values
+      .filter { $0.row.tier == tier && !$0.row.tabIDs.isEmpty }
+      .sorted { $0.frame.minY < $1.frame.minY }
+      .first { point.y < $0.frame.midY }?.row.tabIDs.first
+    return SidebarTabDropTarget(tier: tier, before: before)
+  }
+
+  func previewWebPageDrop(before tabID: UUID?) {
+    guard self.tabID == nil, let layout = layoutProvider?() else { return }
+    setWebPagePreview(SidebarTabDropTarget(tier: .temporary(layout.spaceID), before: tabID))
+  }
+
+  func clearWebPageDropPreview() { setWebPagePreview(nil) }
+
+  private func setWebPagePreview(_ target: SidebarTabDropTarget?) {
+    guard webPagePreviewTarget != target else { return }
+    withAnimation(panelLayoutAnimation) { webPagePreviewTarget = target }
+  }
 
   // PROBE-BEGIN (temporary)
   public static weak var probeInstance: SidebarTabDrag?

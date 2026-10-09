@@ -13,6 +13,8 @@ public enum BrowserLayout {
   public static let chromeThickness: CGFloat = 56
   public static let mainViewEdgeInset: CGFloat = 4
   public static let contentCornerRadius: CGFloat = 14
+  public static let webPageSplitDropWidthFraction: CGFloat = 1.0 / 5
+  public static let webPageSplitDragDistance: CGFloat = 48
   public static let sidebarContentInset = sidebarRowSpacing
   public static let sidebarTopPinSpacing: CGFloat = 9
   public static let sidebarTabRowHeight: CGFloat = 36

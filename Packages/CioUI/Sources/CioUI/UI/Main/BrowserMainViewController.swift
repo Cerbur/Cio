@@ -21,6 +21,7 @@ final class BrowserMainViewController: NSViewController {
   private let runtime: BrowserUIContext
   private let sidebarChromeLayout: SidebarChromeLayout
   private var dragOverlay: NSView?
+  private let webPageDropView = BrowserWebPageDropView()
   private var sidebarCollapseView: BrowserSidebarCollapseView?
   private weak var overlayDrag: SidebarTabDrag?
   private var splitDropTarget: BrowserSplitLayout.DropTarget?
@@ -104,6 +105,63 @@ final class BrowserMainViewController: NSViewController {
       spaceSplitController.view.bottomAnchor.constraint(
         equalTo: container.bottomAnchor),
     ])
+    installWebPageDropView(in: container)
+  }
+
+  private func installWebPageDropView(in container: NSView) {
+    webPageDropView.frame = container.bounds
+    webPageDropView.autoresizingMask = [.width, .height]
+    container.addSubview(webPageDropView, positioned: .above, relativeTo: nil)
+    webPageDropView.destinationAtWindowPoint = { [weak self] point in
+      guard let self, self.runtime.presentedInternalPanel == nil,
+            !self.runtime.workspaceStore.isSpotlightPresented,
+            self.overlayDrag?.tabID == nil else { return nil }
+      let browser = self.browserItem.viewController.view
+      if BrowserWebPageDrop.isRightSplitZone(browser.convert(point, from: nil), in: browser.bounds) {
+        // Own the URL drop even when full so Chromium cannot navigate an
+        // existing pane as a fallback for this rejected split insertion.
+        return self.runtime.workspaceStore.selectedTabID != nil
+          && (self.runtime.workspaceStore.activeSplit?.tabIDs.count ?? 1) < 3
+          ? .rightSplit : .unavailableRightSplit
+      }
+      if !self.sidebarItem.isCollapsed {
+        let sidebar = self.sidebarItem.viewController.view
+        if let target = self.overlayDrag?.webPageDropTarget(at: sidebar.convert(point, from: nil)) {
+          return .tab(before: target.before)
+        }
+      }
+      return nil
+    }
+    webPageDropView.onPreview = { [weak self] destination in
+      if case .tab(let before) = destination {
+        self?.overlayDrag?.previewWebPageDrop(before: before)
+      } else {
+        self?.overlayDrag?.clearWebPageDropPreview()
+      }
+      self?.runtime.surfaceDriver.previewSplit(at: destination == .rightSplit ? .init(side: .right) : nil)
+    }
+    webPageDropView.onDrop = { [weak self] url, destination, source in
+      guard let self else { return false }
+      switch destination {
+      case .unavailableRightSplit:
+        return false
+      case .tab(let before):
+        // Remove the reservation in the same transaction that inserts its tab,
+        // so neighbours keep their reserved positions across the handoff.
+        self.overlayDrag?.clearWebPageDropPreview()
+        return self.runtime.workspaceStore.openDroppedWebPage(url, before: before, splittingOnRight: false) != nil
+      case .rightSplit:
+        var incomingID: UUID?
+        let committed = self.runtime.surfaceDriver.commitSplitDrop {
+          incomingID = self.runtime.workspaceStore.openDroppedWebPage(url, before: nil, splittingOnRight: true)
+          return incomingID != nil
+        }
+        if committed, let incomingID {
+          self.runtime.surfaceDriver.revealSplitPages(for: [incomingID], from: source, onCompletion: {})
+        }
+        return committed
+      }
+    }
   }
   override func viewDidLoad() {
     super.viewDidLoad()

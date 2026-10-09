@@ -46,6 +46,20 @@ Sidebar split entry captures the page reveal duration and curve, while ordinary
 reorders use the named Sidebar motion. Dropping on the browser retains the
 existing split-preview callbacks.
 
+Native webpage-link drops use `BrowserWebPageDropView`. Dropping into the Space
+tab list creates an unpinned background tab at the indicated row boundary and
+keeps the displayed tab stable. Hover reserves the same animated row gap as an
+incoming split pane; commit replaces the gap without moving its neighbours.
+The browser's rightmost fifth previews and adds
+a new right pane; a three-pane group rejects this drop without replacing pages
+or creating a leftover tab. The trigger uses committed browser bounds even
+during preview compression and requires 48 pt of rightward movement from the
+mouse-down position (first entry for external drags). Preview only animates the
+outer crop: Chromium retains its committed size through cancellation and is
+resized once when a split commits. Other browser regions retain native Chromium drag
+behavior. The normal native link drag image hands off to the shared page reveal
+and toolbar clock when the split commits.
+
 Space Pin collapse still snapshots the hidden tab IDs. Selecting another tab
 does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native
