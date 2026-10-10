@@ -42,6 +42,7 @@ final class SidebarChromeLayout: ObservableObject {
 private final class SpacePageSwipeState: ObservableObject {
   @Published private(set) var offset: CGFloat = 0
   private(set) var displacement: CGFloat = 0
+  private var readyDestinationIndex: Int?
 
   func scroll(_ delta: CGFloat, selectedIndex: Int, count: Int, width: CGFloat) {
     let atFirst = selectedIndex == 0 && delta > 0
@@ -49,9 +50,19 @@ private final class SpacePageSwipeState: ObservableObject {
     let resistance: CGFloat = atFirst || atLast ? 0.22 : 1
     displacement = max(-width, min(width, displacement + delta * resistance))
     offset = displacement
+
+    // Use the release decision so feedback only marks a reachable Space.
+    let destination = SpacePaging.destinationIndex(current: selectedIndex, count: count,
+      displacement: displacement, width: width)
+    let readyDestination = destination == selectedIndex ? nil : destination
+    if let readyDestination, readyDestination != readyDestinationIndex {
+      BrowserDragHaptics.perform(.spaceSwitchReady)
+    }
+    readyDestinationIndex = readyDestination
   }
 
   func reset() {
+    readyDestinationIndex = nil
     displacement = 0
     offset = 0
   }
