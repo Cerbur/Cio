@@ -19,6 +19,8 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   var rendererCrashed: Bool { get }
   var hasFinishedFirstLoad: Bool { get }
   var siteInformation: SiteInformation { get }
+  var extensionActions: [BrowserExtensionAction] { get }
+  var extensionActionsPublisher: AnyPublisher<[BrowserExtensionAction], Never> { get }
 
   /// Projects the session's existing addressField without replacing it.
   var engineAddressField: any BrowserAddressEditing { get }
@@ -47,6 +49,9 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   func submitAddressField(searchEngine: any SearchEngine)
   func cancelAddressEditing()
   func releaseFocusBeforeTabRemoval()
+  func executeExtensionAction(_ identifier: String)
+  func openExtensionManager()
+  func openExtensionStore()
 }
 
 public extension BrowserSessionProtocol {

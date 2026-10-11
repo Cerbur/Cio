@@ -60,6 +60,9 @@ struct ToolbarAddressFieldView: View {
   var onReloadOrStop: (any BrowserSessionProtocol) -> Void
   var onSiteInformationToggle: (any BrowserSessionProtocol) -> Void
   var onCertificate: (SiteInformation) -> Void
+  var onExtension: (String) -> Void
+  var onManageExtensions: () -> Void
+  var onAddExtension: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var session: (any BrowserSessionProtocol)? {
@@ -90,7 +93,10 @@ struct ToolbarAddressFieldView: View {
           addressField(for: session, width: width)
           if siteInformation.isPresented {
             AddressSiteInformationView(state: siteInformation,
-                                       onCertificate: onCertificate)
+                                       onCertificate: onCertificate,
+                                       onExtension: onExtension,
+                                       onManageExtensions: onManageExtensions,
+                                       onAddExtension: onAddExtension)
               .transition(reduceMotion ? .opacity
                 : .scale(scale: 0.92, anchor: .topLeading).combined(with: .opacity))
           } else if rowCount > 0 {

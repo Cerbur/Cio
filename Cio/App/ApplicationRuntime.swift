@@ -116,6 +116,7 @@ final class ApplicationRuntime: ObservableObject {
   var onMainWindowAppeared: (() -> Void)?
 
   private var nativeActionObservations: Set<AnyCancellable> = []
+  private let extensionInstallCoordinator = ExtensionInstallCoordinator()
   private var messagePumpTimer: Timer?
   private var terminationWatchdogTimer: Timer?
   private var terminationWatchdogStartedAt: Date?
@@ -141,6 +142,10 @@ final class ApplicationRuntime: ObservableObject {
           self.workspaceStore.createTab(url: url, title: "设置")
         }
       }.store(in: &nativeActionObservations)
+    NotificationCenter.default.publisher(for: Notification.Name("CioOpenExtensionManager"))
+      .sink { [weak self] _ in MainActor.assumeIsolated {
+        self?.openExtensionsPage()
+      }}.store(in: &nativeActionObservations)
     NotificationCenter.default.publisher(for: Notification.Name("CioFocusAddress"))
       .sink { [weak self] _ in MainActor.assumeIsolated {
         self?.workspaceStore.selectedSession?.requestAddressFieldFocus()
@@ -215,6 +220,15 @@ final class ApplicationRuntime: ObservableObject {
   func showDownloads() {
     workspaceStore.selectedSession?.blur()
     presentedInternalPanel = .downloads
+  }
+
+  func openExtensionsPage(store: Bool = false) {
+    guard engineStatus.isReady, !workspaceStore.isTerminating,
+          let url = URL(string: store ? "https://chromewebstore.google.com/" : "chrome://extensions/")
+    else { return }
+    presentedInternalPanel = nil
+    workspaceStore.dismissSpotlight(focusPage: false)
+    workspaceStore.createTab(url: url, title: store ? "Chrome 应用商店" : "扩展程序")
   }
 
   func toggleSpotlight() {

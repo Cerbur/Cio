@@ -1,5 +1,6 @@
 #import "chrome/browser/ui/cio/BrowserBridge.h"
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
+#include "chrome/browser/ui/cio/CioTabExtensions.h"
 
 #include <map>
 #include <deque>
@@ -147,6 +148,7 @@ class PageObserver final : public content::WebContentsObserver {
   raw_ptr<content::WebContents> _devtools;
   std::unique_ptr<PageObserver> _observer;
   std::unique_ptr<PageObserver> _devtoolsObserver;
+  std::unique_ptr<cio::TabExtensions> _extensions;
   int _identifier;
   BOOL _closed;
   BOOL _closing;
@@ -190,6 +192,7 @@ class PageObserver final : public content::WebContentsObserver {
     _identifier = gNextIdentifier++;
     _pageView = _contents->GetNativeView().GetNativeNSView();
     _pageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _extensions = std::make_unique<cio::TabExtensions>(_browser, _contents, self);
     [self reparentToView:_parent];
     [self.delegate browserBridgeDidCreateBrowser:self];
   }
@@ -216,7 +219,17 @@ class PageObserver final : public content::WebContentsObserver {
 }
 - (void)setFocus:(BOOL)focused {
   if (!_contents) return;
-  if (focused && [self nativeCanFocus]) _contents->Focus();
+  // Navigation/selection callbacks must not steal the extension popup's
+  // keyboard. AppKit's transient dismissal returns focus when it closes.
+  if (focused && _extensions && _extensions->HasPopup()) return;
+  if (focused && [self nativeCanFocus]) {
+    // Every Cio tab owns a Browser. Keep Chromium's last-active window order
+    // aligned with the selected pane so extension APIs resolve its active tab.
+    for (auto& [browser, bridge] : Browsers())
+      if (browser != _browser) browser->DidBecomeInactive();
+    _browser->DidBecomeActive();
+    _contents->Focus();
+  }
   else if (!focused) {
     if (auto* widget = _contents->GetRenderWidgetHostView())
       widget->GetRenderWidgetHost()->Blur();
@@ -241,6 +254,7 @@ class PageObserver final : public content::WebContentsObserver {
 }
 - (void)resizeToBounds:(NSRect)bounds {
   if (!_contents) return;
+  if (_extensions) bounds = _extensions->Layout(bounds);
   _pageView.frame = NSMakeRect(0, 0, bounds.size.width, bounds.size.height);
   auto* widget = _contents->GetRenderWidgetHostView();
   if (widget) widget->SetSize(gfx::Size(bounds.size.width, bounds.size.height));
@@ -248,6 +262,7 @@ class PageObserver final : public content::WebContentsObserver {
 - (void)reparentToView:(NSView *)view {
   if (_closed) return;
   _parent = view;
+  if (_extensions) _extensions->Reparent(view);
   if (view.window) gWindow = view.window;
   if (_pageView && _pageView.superview != view) { [_pageView removeFromSuperview]; [view addSubview:_pageView]; }
   [self resizeToBounds:view.bounds];
@@ -269,6 +284,7 @@ class PageObserver final : public content::WebContentsObserver {
   }
   [self setFocus:NO];
   [self closeDevTools];
+  _extensions.reset();
   if (_browser) BrowserWindow::FromBrowser(_browser)->Close();
   else [self nativeClosed];
 }
@@ -292,6 +308,7 @@ class PageObserver final : public content::WebContentsObserver {
   [self nativeAcceptClose];
   _closed = YES;
   _contents = nullptr;
+  _extensions.reset();
   if (_browser) Browsers().erase(_browser);
   _browser = nullptr;
   [_pageView removeFromSuperview]; _pageView = nil;
@@ -339,6 +356,19 @@ class PageObserver final : public content::WebContentsObserver {
   info.certificateChain = chain;
   return info;
 }
+- (NSArray<NSDictionary<NSString*, id>*>*)extensionActions {
+  return _extensions ? _extensions->Snapshot() : @[];
+}
+- (void)executeExtensionAction:(NSString*)identifier {
+  if (_extensions && !_closing && _parent.window && !_parent.isHiddenOrHasHiddenAncestor)
+    _extensions->Execute(identifier);
+}
+- (void)openExtensionManager {
+  if (!_closing) [self.delegate browserBridge:self didRequestNewTabWithURL:@"chrome://extensions/"];
+}
+- (void)openExtensionStore {
+  if (!_closing) [self.delegate browserBridge:self didRequestNewTabWithURL:@"https://chromewebstore.google.com/category/extensions"];
+}
 - (void)startDownloadURL:(NSString *)url {
   if (!_contents) return;
   constexpr auto annotation = net::DefineNetworkTrafficAnnotation("cio_user_download", R"(
@@ -373,6 +403,7 @@ class PageObserver final : public content::WebContentsObserver {
 }
 - (void)nativeRefreshDevTools {
   if (!_contents) return;
+  if (_extensions) _extensions->UpdateVisibility();
   const bool hidden = !_parent.window || _parent.isHiddenOrHasHiddenAncestor;
   if (hidden && _contents->GetVisibility() == content::Visibility::VISIBLE) _contents->WasHidden();
   else if (!hidden && _contents->GetVisibility() == content::Visibility::HIDDEN) _contents->WasShown();

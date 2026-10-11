@@ -138,6 +138,7 @@ AppDelegate.applicationShouldTerminate
   -> default run-loop step: flush snapshot, request all live closes
   -> typed WebContents destruction callbacks remove sessions and wake the coordinator
   -> live count reaches zero
+  -> commit Chromium Profile preferences, flush cookies
   -> CioNativeShutdown once
   -> retry NSApp.terminate
   -> terminateNow

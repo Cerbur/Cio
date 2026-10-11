@@ -118,6 +118,7 @@ NS_SWIFT_UI_ACTOR
                          errorCode:(NSInteger)errorCode;
 
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
+- (void)browserBridgeDidChangeExtensions:(BrowserBridge *)bridge;
 - (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
 - (void)browserBridge:(BrowserBridge *)bridge didSetInspectedPageBounds:(NSRect)bounds;
 - (void)browserBridge:(BrowserBridge *)bridge didSetDevToolsDocked:(BOOL)docked;
@@ -169,6 +170,14 @@ __attribute__((visibility("default")))
 /// Reads the visible entry on Chromium's UI thread. Certificates are DER bytes;
 /// no Chromium objects escape the bridge and no second network request is made.
 - (nullable BrowserConnectionInfo *)connectionInfo;
+
+/// Current-tab action snapshots (id, name, title, enabled and PNG icon bytes).
+/// Includes enabled user extensions with toolbar actions; Chromium supplies
+/// badges, dynamic icons and per-tab availability.
+- (NSArray<NSDictionary<NSString *, id> *> *)extensionActions;
+- (void)executeExtensionAction:(NSString *)identifier;
+- (void)openExtensionManager;
+- (void)openExtensionStore;
 
 /// Starts a download through the browser's real Chromium download pipeline. The
 /// verification harness uses this to avoid making download correctness depend

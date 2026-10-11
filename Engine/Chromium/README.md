@@ -48,6 +48,23 @@ Scripts/verify_bundle.sh
   的 cookie 过期和清理策略约束。系统语言仅用于第一次初始化，以后尊重 Chrome Settings 的修改。
 - `chrome://settings`、语言、cookie、站点权限与隐私设置使用相同 Profile，
   作为普通 Cio 标签打开。
+- Extensions 菜单在 Cio 标签中打开 `chrome://extensions/` 或 Chrome 应用商店。
+  安装仍使用 Chromium 的商店 API、权限确认、CRX 验签及 Profile 中的扩展目录；
+  普通安装通过 `CioExtensionInstallRequest` 把名称、权限及全部详细说明交给
+  `CioUI/ExtensionInstallSheet`，以系统 Liquid Glass、原生按钮和滚动列表呈现。
+  引擎持有原始 prompt 和一次性回调，保留防误触等待、遮挡检查及取消语义；
+  原标签、主窗口或 Profile 关闭时取消请求。图标暂用 SF Symbols 占位。
+  `Native/CioExtensionUI.*` 对家长批准、企业审批等特殊确认继续使用 Chromium
+  原始窗口，并挂到 Cio 主窗口的 AppKit sheet，避免原生标题栏遮挡内容。
+  安装结果提示也接到 AppKit，避免访问不存在的 Chrome 工具栏。
+  安装成功请求提交 Profile 偏好；正常退出先等待偏好提交，再刷新 Cookie 和关闭引擎。
+  扩展启用状态与权限由 Chromium 自身保存，不另建 Cio 扩展清单。
+- 地址栏图标展开的网站信息包含当前标签页的扩展网格，以及管理和商店入口。
+  `Native/CioTabExtensions.*` 观察 Chromium 的 registry、action dispatcher 和图标变化，
+  使用 `ExtensionActionViewModel` 执行点击和 activeTab 授权。弹窗和侧栏保留真正的
+  `ExtensionViewHost`、popup/side-panel view type 与所属 Browser；AppKit 承载 transient
+  popover 或标签页右侧面板，支持 `action.openPopup`、`sidePanel.open/close/setOptions`。
+  隐藏标签页会关闭弹窗、隐藏侧栏；卸载、停用或关闭标签页时释放对应宿主。
 
 ## 打包与升级边界
 

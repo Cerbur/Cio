@@ -175,8 +175,15 @@ void CioNativeFlushCookies(void (^completion)(BOOL)) {
       ? ProfileManager::GetLastUsedProfileIfLoaded() : nullptr;
   if (!profile) { completion(NO); return; }
   void (^callback)(BOOL) = [completion copy];
-  profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
-      ->FlushCookieStore(base::BindOnce([](void (^done)(BOOL)) { done(YES); }, callback));
+  // The host waits for this boundary before shutting down Chromium. Include
+  // extension enablement, permissions and other pending Profile preferences,
+  // rather than relying on their delayed writer during engine teardown.
+  profile->GetPrefs()->CommitPendingWrite(base::BindOnce(
+      [](Profile* profile, void (^done)(BOOL)) {
+        profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
+            ->FlushCookieStore(base::BindOnce(
+                [](void (^callback)(BOOL)) { callback(YES); }, done));
+      }, profile, callback));
 }
 void CioNativeSetDarkAppearance(BOOL dark) {
   auto* theme = ui::NativeTheme::GetInstanceForNativeUi();

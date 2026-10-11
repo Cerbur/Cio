@@ -49,6 +49,8 @@ def prepare():
           '      "browser/ui/cio/BrowserBridge.mm",\n'
           '      "browser/ui/cio/CioBrowserWindow.mm",\n'
           '      "browser/ui/cio/CioDialogs.mm",\n'
+          '      "browser/ui/cio/CioExtensionUI.mm",\n'
+          '      "browser/ui/cio/CioTabExtensions.mm",\n'
           '      "browser/ui/cio/CioRoot.mm",\n')
     # The component build does not export CrApplication's constructors or its
     # pool policy. Export the three entry points the hosted subclass uses,
@@ -142,6 +144,9 @@ def prepare():
           '_CioNativePump\n_CioNativeFlushCookies\n_CioNativeSetDarkAppearance\n'
           '_OBJC_CLASS_$_BrowserBridge\n_OBJC_METACLASS_$_BrowserBridge\n'
           '_OBJC_CLASS_$_BrowserConnectionInfo\n_OBJC_METACLASS_$_BrowserConnectionInfo\n')
+    patch(exports, '_ChromeMain\n',
+          '_ChromeMain\n_OBJC_CLASS_$_CioExtensionInstallRequest\n'
+          '_OBJC_METACLASS_$_CioExtensionInstallRequest\n')
 
     patch("chrome/browser/ui/prefs/prefs_tab_helper.cc", "  WebPreferences pref_defaults;",
           '  registry->RegisterBooleanPref("cio.language_defaults_initialized", false);\n'
@@ -150,6 +155,82 @@ def prepare():
           "bool ProfileImpl::ShouldRestoreOldSessionCookies() {",
           "bool ProfileImpl::ShouldRestoreOldSessionCookies() {\n"
           '  if (base::CommandLine::ForCurrentProcess()->HasSwitch("cio-embedded-browser")) return true;')
+    # A reinstall / repeated install notification can encounter a pin already
+    # restored from prefs. SetActionVisibility requires a state transition;
+    # preserve that invariant instead of pinning an already-pinned action.
+    patch("chrome/browser/ui/toolbar/toolbar_actions_model.cc",
+          '  if (is_pinned_by_policy || is_pinned_by_feature) {\n'
+          '    SetActionVisibility(extension->id(), true);',
+          '  if ((is_pinned_by_policy || is_pinned_by_feature) &&\n'
+          '      !IsActionPinned(extension->id())) {\n'
+          '    SetActionVisibility(extension->id(), true);')
+
+    side_panel_util = "chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc"
+    patch(side_panel_util, '#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"',
+          '#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"\n'
+          '#include "build/build_config.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioExtensionPanelHooks.h"\n#endif')
+    for signature, browser, toggle, close, contextual in (
+        ('void ToggleExtensionSidePanel(BrowserWindowInterface* browser_window,\n                              const ExtensionId& extension_id) {', 'browser_window', True, False, False),
+        ('void OpenGlobalExtensionSidePanel(BrowserWindowInterface& browser_window,\n                                  content::WebContents* web_contents,\n                                  const ExtensionId& extension_id) {', '&browser_window', False, False, False),
+        ('void OpenContextualExtensionSidePanel(BrowserWindowInterface& browser_window,\n                                      content::WebContents& web_contents,\n                                      const ExtensionId& extension_id) {', '&browser_window', False, False, True),
+        ('void CloseGlobalExtensionSidePanel(BrowserWindowInterface* browser_window,\n                                   const ExtensionId& extension_id) {', 'browser_window', False, True, False),
+        ('void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,\n                                       content::WebContents* web_contents,\n                                       const ExtensionId& extension_id) {', 'browser_window', False, True, True),
+    ):
+        flags = ', '.join(str(flag).lower() for flag in (toggle, close, contextual))
+        patch(side_panel_util, signature, signature + '\n#if BUILDFLAG(IS_MAC)\n'
+              f'  if (cio::HandleExtensionSidePanel({browser}, extension_id, {flags})) return;\n'
+              '#endif')
+
+    action_api = "chrome/browser/extensions/api/extension_action/extension_action_api.cc"
+    patch(action_api, '#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"',
+          '#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"\n'
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioExtensionPanelHooks.h"\n#endif')
+    signature = ('bool OpenPopupInBrowser(BrowserWindowInterface& browser,\n'
+                 '                        const Extension& extension,\n'
+                 '                        std::string* error,\n'
+                 '                        ShowPopupCallback callback) {')
+    patch(action_api, signature, signature + '\n#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::HandleExtensionPopup(&browser, extension.id(), &callback)) return true;\n'
+          '#endif')
+
+    install_dialog = "chrome/browser/ui/views/extensions/extension_install_dialog_view.cc"
+    patch(install_dialog, '#include "chrome/browser/ui/views/extensions/extension_install_dialog_view.h"',
+          '#include "chrome/browser/ui/views/extensions/extension_install_dialog_view.h"\n'
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioExtensionUI.h"\n#endif')
+    patch(install_dialog,
+          '  gfx::NativeWindow parent_window = show_params->GetParentWindow();',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowExtensionInstallPrompt(show_params, done_callback, prompt)) return;\n'
+          '#endif\n'
+          '  gfx::NativeWindow parent_window = show_params->GetParentWindow();')
+    patch(install_dialog,
+          '  constrained_window::CreateBrowserModalDialogViews(std::move(dialog),\n'
+          '                                                    parent_window)\n'
+          '      ->Show();',
+          '  auto* widget = constrained_window::CreateBrowserModalDialogViews(\n'
+          '      std::move(dialog), parent_window);\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowExtensionInstallSheet(widget)) return;\n'
+          '#endif\n'
+          '  widget->Show();')
+
+    extension_ui = "chrome/browser/ui/extensions/extension_install_ui_desktop.cc"
+    patch(extension_ui, '#include "build/build_config.h"',
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioExtensionUI.h"\n#endif')
+    patch(extension_ui, '  // Extensions aren\'t enabled by default in incognito so we confirm',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowExtensionInstalled(profile(), extension.get())) return;\n'
+          '#endif\n\n'
+          '  // Extensions aren\'t enabled by default in incognito so we confirm')
+    patch(extension_ui, '  BrowserWindowInterface* const browser =',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowExtensionInstallError(error)) return;\n'
+          '#endif\n\n'
+          '  BrowserWindowInterface* const browser =')
     browser = "chrome/browser/ui/browser.cc"
     patch(browser, '#include "chrome/browser/ui/browser.h"',
           '#include "chrome/browser/ui/browser.h"\n#if BUILDFLAG(IS_MAC)\n'

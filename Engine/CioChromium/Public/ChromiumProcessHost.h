@@ -40,7 +40,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// instances have been closed and before the process exits. Idempotent.
 + (void)shutdown;
 
-/// Asynchronously flushes Chromium's shared cookie store. Keep pumping Chromium
+/// Asynchronously commits Profile preferences (including extension state), then
+/// flushes Chromium's shared cookie store. Keep pumping Chromium
 /// until completion, then schedule shutdown outside the Chromium callback stack.
 + (void)flushCookiesWithCompletion:(void (^)(BOOL success))completion;
 

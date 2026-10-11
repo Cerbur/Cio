@@ -477,6 +477,9 @@ final class BrowserToolbarController: NSObject {
       session.urlPublisher.removeDuplicates().dropFirst()
         .sink { [weak self] _ in self?.siteInformation.dismiss() }
         .store(in: &selectedSessionObservations)
+      session.extensionActionsPublisher
+        .sink { [weak self] actions in self?.siteInformation.refreshExtensions(actions) }
+        .store(in: &selectedSessionObservations)
       session.isLoadingPublisher.removeDuplicates().dropFirst()
         .sink { [weak self, weak session] loading in
           guard let self, let session else { return }
@@ -533,6 +536,21 @@ final class BrowserToolbarController: NSObject {
       },
       onCertificate: { [weak self] information in
         self?.showCertificate(information)
+      },
+      onExtension: { [weak self] identifier in
+        guard let self, let session = self.boundSession else { return }
+        self.siteInformation.dismiss()
+        session.executeExtensionAction(identifier)
+      },
+      onManageExtensions: { [weak self] in
+        guard let self, let session = self.boundSession else { return }
+        self.siteInformation.dismiss()
+        session.openExtensionManager()
+      },
+      onAddExtension: { [weak self] in
+        guard let self, let session = self.boundSession else { return }
+        self.siteInformation.dismiss()
+        session.openExtensionStore()
       }))
     addressView.safeAreaRegions = []
     addressView.clipsToBounds = false
@@ -583,7 +601,7 @@ final class BrowserToolbarController: NSObject {
     addressPresentation.isFocused = false
     session.addressFieldFocusChanged(false)
     session.blur()
-    siteInformation.present(session.siteInformation)
+    siteInformation.present(session.siteInformation, extensions: session.extensionActions)
   }
 
   private func focusBoundPageIfActive() {

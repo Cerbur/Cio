@@ -5,14 +5,16 @@ import SwiftUI
 @MainActor
 final class AddressSiteInformationState: ObservableObject {
   enum Page: Hashable { case overview, security }
-  static let contentHeight: CGFloat = 260
+  static let contentHeight: CGFloat = 400
   @Published private(set) var information: SiteInformation?
+  @Published private(set) var extensions: [BrowserExtensionAction] = []
   @Published var page = Page.overview
   var isPresented: Bool { information != nil }
 
-  func present(_ information: SiteInformation) {
+  func present(_ information: SiteInformation, extensions: [BrowserExtensionAction]) {
     page = .overview
     self.information = information
+    self.extensions = extensions
   }
 
   func refresh(_ information: SiteInformation) {
@@ -21,6 +23,10 @@ final class AddressSiteInformationState: ObservableObject {
   }
 
   func dismiss() { information = nil }
+
+  func refreshExtensions(_ extensions: [BrowserExtensionAction]) {
+    self.extensions = extensions
+  }
 
   func width(in availableWidth: CGFloat, focused: Bool) -> CGFloat {
     let idle = availableWidth * AddressCapsuleLayout.unfocusedWidthRatio
@@ -39,6 +45,9 @@ final class AddressSiteInformationState: ObservableObject {
 struct AddressSiteInformationView: View {
   @ObservedObject var state: AddressSiteInformationState
   let onCertificate: (SiteInformation) -> Void
+  let onExtension: (String) -> Void
+  let onManageExtensions: () -> Void
+  let onAddExtension: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
@@ -48,7 +57,13 @@ struct AddressSiteInformationView: View {
         Divider()
         Group {
           if state.page == .overview {
-            overview(information)
+            ScrollView {
+              VStack(alignment: .leading, spacing: 20) {
+                extensions
+                Divider()
+                overview(information)
+              }
+            }
           } else {
             security(information)
           }
@@ -62,6 +77,53 @@ struct AddressSiteInformationView: View {
       .frame(height: AddressSiteInformationState.contentHeight, alignment: .top)
       .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.informationPageDuration), value: state.page)
       .accessibilityIdentifier("address-site-information")
+    }
+  }
+
+  private var extensions: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("Extensions").font(.system(size: 17, weight: .semibold))
+        Spacer()
+        Button("Manage", action: onManageExtensions)
+          .buttonStyle(.plain).foregroundStyle(.secondary)
+          .help("管理扩展程序")
+          .accessibilityIdentifier("site-information-manage-extensions")
+      }
+      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
+        ForEach(state.extensions) { action in
+          Button { onExtension(action.id) } label: {
+            Group {
+              if let icon = NSImage(data: action.iconPNG) {
+                Image(nsImage: icon).resizable().interpolation(.high).frame(width: 32, height: 32)
+              } else {
+                Image(systemName: "puzzlepiece.extension").font(.system(size: 24))
+              }
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+          }
+          .buttonStyle(.borderless)
+          .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+          .disabled(!action.isEnabled)
+          .help(action.title.isEmpty ? action.name : action.title)
+          .accessibilityLabel(action.name)
+          .accessibilityIdentifier("site-information-extension-\(action.id)")
+        }
+        Button(action: onAddExtension) {
+          Image(systemName: "plus").font(.system(size: 23, weight: .medium))
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.borderless)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+        .help("从 Chrome 网上应用店添加扩展程序")
+        .accessibilityLabel("添加扩展程序")
+        .accessibilityIdentifier("site-information-add-extension")
+      }
+      if state.extensions.isEmpty {
+        Text("暂无已启用的扩展程序").font(.system(size: 12)).foregroundStyle(.secondary)
+      }
     }
   }
 

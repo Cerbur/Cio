@@ -65,6 +65,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   @Published private(set) var canGoForward = false
   @Published private(set) var lastErrorCode: Int?
   @Published private(set) var rendererCrashed = false
+  @Published private(set) var extensionActions: [BrowserExtensionAction] = []
 
   /// True once the Chromium browser object exists.
   @Published private(set) var hasBrowser = false
@@ -222,6 +223,29 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   // MARK: - View attachment
+
+  func executeExtensionAction(_ identifier: String) {
+    guard !isClosed, extensionActions.contains(where: { $0.id == identifier && $0.isEnabled }) else { return }
+    // A deferred focusPage() would run after the transient popup opens and
+    // dismiss it. Restore the page's focus policy synchronously for this user
+    // action; the extension host owns the next first-responder handoff.
+    wantsPageFocus = true
+    bridge?.setFocus(true)
+    bridge?.executeExtensionAction(identifier)
+  }
+
+  func openExtensionManager() { bridge?.openExtensionManager() }
+  func openExtensionStore() { bridge?.openExtensionStore() }
+
+  func browserBridgeDidChangeExtensions(_ bridge: BrowserBridge) {
+    guard self.bridge === bridge, !isClosed else { return }
+    extensionActions = bridge.extensionActions().compactMap { value in
+      guard let id = value["id"] as? String, let name = value["name"] as? String,
+            let title = value["title"] as? String, let enabled = value["enabled"] as? Bool,
+            let icon = value["icon"] as? Data else { return nil }
+      return BrowserExtensionAction(id: id, name: name, title: title, isEnabled: enabled, iconPNG: icon)
+    }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
 
   /// Binds the session to the AppKit container that will host the Chromium
   /// view. The browser itself is created once the container is in a window.
@@ -950,6 +974,7 @@ extension BrowserSession: NSWindowDelegate {
 
 // Protocol projections retain the original session, editor and @Published streams.
 extension BrowserSession: BrowserSessionProtocol {
+  var extensionActionsPublisher: AnyPublisher<[BrowserExtensionAction], Never> { $extensionActions.eraseToAnyPublisher() }
   var engineAddressField: any BrowserAddressEditing { addressField }
   var canGoBackPublisher: AnyPublisher<Bool, Never> { $canGoBack.eraseToAnyPublisher() }
   var canGoForwardPublisher: AnyPublisher<Bool, Never> { $canGoForward.eraseToAnyPublisher() }

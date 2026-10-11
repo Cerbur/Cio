@@ -50,6 +50,11 @@ struct BrowserCommands: Commands {
         .keyboardShortcut("l", modifiers: .command)
     }
 
+    CommandMenu("Extensions") {
+      Button("Manage Extensions…") { runtime.openExtensionsPage() }
+      Button("Chrome Web Store…") { runtime.openExtensionsPage(store: true) }
+    }
+
     CommandMenu("Develop") {
       Button("View Page Source") { workspace.selectedSession?.viewPageSource() }
         .keyboardShortcut("u", modifiers: [.command, .option])
