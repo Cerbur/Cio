@@ -68,7 +68,7 @@ class NativeInstallPrompt final
 
   void Finish(bool accepted) {
     if (!callback_) return;
-    if (accepted && (!ready_ || !CanInteract())) return;
+    if (accepted && (!ready_ || !cio::CanInteractWithExtensionPrompt(window_))) return;
     accepted = accepted && !params_->WasParentDestroyed();
     ready_timer_.Stop();
     registry_.Reset();
@@ -108,20 +108,6 @@ class NativeInstallPrompt final
     Finish(false);
   }
  private:
-  bool CanInteract() const {
-    NSWindow* window = window_;
-    if (!window || !window.isKeyWindow || !window.sheetParent ||
-        !(window.occlusionState & NSWindowOcclusionStateVisible)) return false;
-    // Views' PiP input protector cannot observe an AppKit sheet. Reject
-    // acceptance while another Cio floating window overlaps this sheet,
-    // preserving the same protection from obscured confirmation controls.
-    for (NSWindow* other in NSApp.orderedWindows) {
-      if (other == window) break;
-      if (other.isVisible && other.level > NSNormalWindowLevel &&
-          NSIntersectsRect(other.frame, window.frame)) return false;
-    }
-    return true;
-  }
   std::unique_ptr<ExtensionInstallPromptShowParams> params_;
   extensions::ExtensionInstallPromptClient::DoneCallback callback_;
   std::unique_ptr<extensions::InstallPromptData> prompt_;
@@ -218,6 +204,19 @@ void PresentInstalledExtension(base::WeakPtr<Profile> profile, std::string id) {
 @end
 
 namespace cio {
+bool CanInteractWithExtensionPrompt(NSWindow* window) {
+  if (!window || !window.isKeyWindow || !window.sheetParent ||
+      !(window.occlusionState & NSWindowOcclusionStateVisible)) return false;
+  // Views' PiP protector cannot observe an AppKit sheet. Reject interaction
+  // while another Cio floating window obscures its confirmation controls.
+  for (NSWindow* other in NSApp.orderedWindows) {
+    if (other == window) break;
+    if (other.isVisible && other.level > NSNormalWindowLevel &&
+        NSIntersectsRect(other.frame, window.frame)) return false;
+  }
+  return true;
+}
+
 bool ShowExtensionInstallPrompt(
     std::unique_ptr<ExtensionInstallPromptShowParams>& params,
     extensions::ExtensionInstallPromptClient::DoneCallback& callback,

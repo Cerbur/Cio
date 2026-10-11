@@ -2,32 +2,37 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Presents shell UI without taking ownership of Chromium's install decision.
+/// Presents shell UI without taking ownership of Chromium's extension decision.
 /// AppKit owns sheet modality and its animation; SwiftUI uses system glass,
 /// typography, scrolling, buttons and accessibility.
 @MainActor
-public final class ExtensionInstallSheet {
-  private let panel: InstallPanel
-  private let state = InstallSheetState()
+public final class ExtensionConfirmationSheet {
+  public enum Action: Sendable { case install, remove }
+  private let panel: ConfirmationPanel
+  private let state = ConfirmationState()
   private var observations = Set<AnyCancellable>()
   private var finished = false
   private var presented = false
   private let onCancel: () -> Void
 
-  public init(name: String, permissionsHeading: String, permissions: [String],
+  public init(name: String, action: Action, message: String? = nil,
+              reportAbuseLabel: String? = nil,
+              permissionsHeading: String = "", permissions: [String] = [],
               acceptLabel: String, cancelLabel: String,
-              onAccept: @escaping () -> Void, onCancel: @escaping () -> Void) {
+              onAccept: @escaping (Bool) -> Void, onCancel: @escaping () -> Void) {
     self.onCancel = onCancel
-    panel = InstallPanel(contentRect: .zero, styleMask: [.borderless],
+    panel = ConfirmationPanel(contentRect: .zero, styleMask: [.borderless],
                          backing: .buffered, defer: false)
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = true
     panel.isReleasedWhenClosed = false
-    panel.title = "将“\(name)”添加到 Cio？"
+    panel.identifier = NSUserInterfaceItemIdentifier("extension-confirmation-sheet")
+    panel.title = action == .install ? "将“\(name)”添加到 Cio？" : "从 Cio 移除“\(name)”？"
     panel.onCancel = onCancel
-    let content = ExtensionInstallContent(
-      name: name, permissionsHeading: permissionsHeading, permissions: permissions,
+    let content = ExtensionConfirmationContent(
+      title: panel.title, action: action, message: message, reportAbuseLabel: reportAbuseLabel,
+      permissionsHeading: permissionsHeading, permissions: permissions,
       acceptLabel: acceptLabel, cancelLabel: cancelLabel, state: state,
       onAccept: onAccept, onCancel: onCancel)
     let host = NSHostingView(rootView: content)
@@ -72,25 +77,29 @@ public final class ExtensionInstallSheet {
 }
 
 @MainActor
-private final class InstallPanel: NSPanel {
+private final class ConfirmationPanel: NSPanel {
   var onCancel: (() -> Void)?
   override var canBecomeKey: Bool { true }
   override func cancelOperation(_ sender: Any?) { onCancel?() }
 }
 
 @MainActor
-private final class InstallSheetState: ObservableObject {
+private final class ConfirmationState: ObservableObject {
   @Published var canAccept = false
+  @Published var reportAbuse = false
 }
 
-private struct ExtensionInstallContent: View {
-  let name: String
+private struct ExtensionConfirmationContent: View {
+  let title: String
+  let action: ExtensionConfirmationSheet.Action
+  let message: String?
+  let reportAbuseLabel: String?
   let permissionsHeading: String
   let permissions: [String]
   let acceptLabel: String
   let cancelLabel: String
-  @ObservedObject var state: InstallSheetState
-  let onAccept: () -> Void
+  @ObservedObject var state: ConfirmationState
+  let onAccept: (Bool) -> Void
   let onCancel: () -> Void
 
   private static let width: CGFloat = 380
@@ -114,7 +123,7 @@ private struct ExtensionInstallContent: View {
       HStack(spacing: 16) {
         Image(systemName: "app.dashed")
           .foregroundStyle(.tint)
-        Image(systemName: "arrow.left")
+        Image(systemName: action == .install ? "arrow.left" : "arrow.right")
           .font(.body)
           .foregroundStyle(.tertiary)
         Image(systemName: "puzzlepiece.extension")
@@ -125,10 +134,17 @@ private struct ExtensionInstallContent: View {
       .frame(height: 48)
       .accessibilityHidden(true)
 
-      Text("将“\(name)”添加到 Cio？")
+      Text(title)
         .font(.title3.weight(.semibold))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityAddTraits(.isHeader)
+
+      if let message {
+        Text(message)
+          .font(.body)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
 
       if !permissions.isEmpty {
         VStack(alignment: .leading, spacing: 12) {
@@ -155,13 +171,22 @@ private struct ExtensionInstallContent: View {
         }
       }
 
+      if let reportAbuseLabel {
+        Toggle(reportAbuseLabel, isOn: $state.reportAbuse)
+          .toggleStyle(.checkbox)
+          .font(.body)
+      }
+
       HStack(spacing: 12) {
         Spacer(minLength: 0)
         Button(cancelLabel, action: onCancel)
           .buttonStyle(.glass)
           .keyboardShortcut(.defaultAction)
-        Button(acceptLabel, action: onAccept)
+        Button(acceptLabel, role: action == .remove ? .destructive : nil) {
+          onAccept(state.reportAbuse)
+        }
           .buttonStyle(.glassProminent)
+          .tint(action == .remove ? .red : .accentColor)
           .disabled(!state.canAccept)
       }
       .controlSize(.large)

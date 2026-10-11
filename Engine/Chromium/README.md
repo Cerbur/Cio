@@ -51,12 +51,15 @@ Scripts/verify_bundle.sh
 - Extensions 菜单在 Cio 标签中打开 `chrome://extensions/` 或 Chrome 应用商店。
   安装仍使用 Chromium 的商店 API、权限确认、CRX 验签及 Profile 中的扩展目录；
   普通安装通过 `CioExtensionInstallRequest` 把名称、权限及全部详细说明交给
-  `CioUI/ExtensionInstallSheet`，以系统 Liquid Glass、原生按钮和滚动列表呈现。
+  `CioUI/ExtensionConfirmationSheet`，以系统 Liquid Glass、原生按钮和滚动列表呈现。
   引擎持有原始 prompt 和一次性回调，保留防误触等待、遮挡检查及取消语义；
   原标签、主窗口或 Profile 关闭时取消请求。图标暂用 SF Symbols 占位。
   `Native/CioExtensionUI.*` 对家长批准、企业审批等特殊确认继续使用 Chromium
   原始窗口，并挂到 Cio 主窗口的 AppKit sheet，避免原生标题栏遮挡内容。
   安装结果提示也接到 AppKit，避免访问不存在的 Chrome 工具栏。
+  移除确认由 `Native/CioExtensionRemoval.*` 继承 Chromium 原卸载对话框，保留
+  卸载策略、指标、举报选项和原始 delegate，只把确认界面交给同一玻璃组件。
+  安装与移除均通过 AppKit 的 sheet 定位回调在主窗口内容区域居中。
   安装成功请求提交 Profile 偏好；正常退出先等待偏好提交，再刷新 Cookie 和关闭引擎。
   扩展启用状态与权限由 Chromium 自身保存，不另建 Cio 扩展清单。
 - 地址栏图标展开的网站信息包含当前标签页的扩展网格，以及管理和商店入口。

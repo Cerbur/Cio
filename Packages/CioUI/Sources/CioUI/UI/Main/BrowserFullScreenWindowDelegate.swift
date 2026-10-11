@@ -19,6 +19,19 @@ final class BrowserFullScreenWindowDelegate: NSObject, NSWindowDelegate {
     }
   }
 
+  func window(_ window: NSWindow, willPositionSheet sheet: NSWindow,
+              using rect: NSRect) -> NSRect {
+    guard sheet.identifier?.rawValue == "extension-confirmation-sheet",
+          let content = window.contentView else {
+      return sceneDelegate?.window?(window, willPositionSheet: sheet, using: rect) ?? rect
+    }
+    // AppKit places the sheet below this attachment rectangle. Derive its
+    // attachment edge from the content center and the actual sheet height.
+    let bounds = content.convert(content.bounds, to: nil)
+    return NSRect(x: bounds.minX, y: bounds.midY + sheet.frame.height / 2,
+                  width: bounds.width, height: 0)
+  }
+
   func window(
     _ window: NSWindow,
     willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions

@@ -116,7 +116,7 @@ final class ApplicationRuntime: ObservableObject {
   var onMainWindowAppeared: (() -> Void)?
 
   private var nativeActionObservations: Set<AnyCancellable> = []
-  private let extensionInstallCoordinator = ExtensionInstallCoordinator()
+  private let extensionConfirmationCoordinator = ExtensionConfirmationCoordinator()
   private var messagePumpTimer: Timer?
   private var terminationWatchdogTimer: Timer?
   private var terminationWatchdogStartedAt: Date?

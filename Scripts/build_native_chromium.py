@@ -50,6 +50,7 @@ def prepare():
           '      "browser/ui/cio/CioBrowserWindow.mm",\n'
           '      "browser/ui/cio/CioDialogs.mm",\n'
           '      "browser/ui/cio/CioExtensionUI.mm",\n'
+          '      "browser/ui/cio/CioExtensionRemoval.mm",\n'
           '      "browser/ui/cio/CioTabExtensions.mm",\n'
           '      "browser/ui/cio/CioRoot.mm",\n')
     # The component build does not export CrApplication's constructors or its
@@ -147,6 +148,9 @@ def prepare():
     patch(exports, '_ChromeMain\n',
           '_ChromeMain\n_OBJC_CLASS_$_CioExtensionInstallRequest\n'
           '_OBJC_METACLASS_$_CioExtensionInstallRequest\n')
+    patch(exports, '_ChromeMain\n',
+          '_ChromeMain\n_OBJC_CLASS_$_CioExtensionRemovalRequest\n'
+          '_OBJC_METACLASS_$_CioExtensionRemovalRequest\n')
 
     patch("chrome/browser/ui/prefs/prefs_tab_helper.cc", "  WebPreferences pref_defaults;",
           '  registry->RegisterBooleanPref("cio.language_defaults_initialized", false);\n'
@@ -216,6 +220,19 @@ def prepare():
           '  if (cio::ShowExtensionInstallSheet(widget)) return;\n'
           '#endif\n'
           '  widget->Show();')
+
+    uninstall_dialog = "chrome/browser/ui/extensions/extension_uninstall_dialog_impl.cc"
+    patch(uninstall_dialog, '#include "chrome/browser/extensions/extension_uninstall_dialog.h"',
+          '#include "chrome/browser/extensions/extension_uninstall_dialog.h"\n'
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioExtensionRemoval.h"\n#endif')
+    patch(uninstall_dialog,
+          '  return std::make_unique<ExtensionUninstallDialogImpl>(profile, parent,',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (auto dialog = cio::CreateExtensionUninstallDialog(profile, parent, delegate))\n'
+          '    return dialog;\n'
+          '#endif\n'
+          '  return std::make_unique<ExtensionUninstallDialogImpl>(profile, parent,')
 
     extension_ui = "chrome/browser/ui/extensions/extension_install_ui_desktop.cc"
     patch(extension_ui, '#include "build/build_config.h"',

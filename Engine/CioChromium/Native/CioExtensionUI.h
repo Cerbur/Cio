@@ -3,6 +3,9 @@
 #include "extensions/browser/extension_install_prompt_client.h"
 
 class Profile;
+#ifdef __OBJC__
+@class NSWindow;
+#endif
 class ExtensionInstallPromptShowParams;
 namespace views { class Widget; }
 namespace extensions {
@@ -12,6 +15,10 @@ class InstallPromptData;
 }
 
 namespace cio {
+#ifdef __OBJC__
+// Native confirmations share the key/visibility and floating-window guard.
+bool CanInteractWithExtensionPrompt(NSWindow* window);
+#endif
 // Returns false outside the hosted runtime, leaving stock Chrome UI intact.
 bool ShowExtensionInstalled(Profile* profile, const extensions::Extension* extension);
 bool ShowExtensionInstallError(const extensions::CrxInstallError& error);
