@@ -128,6 +128,15 @@ def prepare():
           '    // Cio has no Chrome Views reading side panel. Do not install a\n'
           '    // controller whose tab-detach handler requires that panel.\n'
           '  } else if (features::IsImmersiveReadAnythingEnabled()) {')
+    # Embedded find UI is per tab. The stock macOS helper observes the global
+    # find pasteboard even when FindBar.HasGlobalFindPasteboard() is false.
+    find_platform = "chrome/browser/ui/find_bar/find_bar_platform_helper_mac.mm"
+    patch(find_platform, '#include <string_view>',
+          '#include <string_view>\n#include "base/command_line.h"')
+    patch(find_platform, '  return std::make_unique<FindBarPlatformHelperMac>(find_bar_controller);',
+          '  if (base::CommandLine::ForCurrentProcess()->HasSwitch("cio-embedded-browser"))\n'
+          '    return nullptr;  // Cio retains each tab query independently.\n'
+          '  return std::make_unique<FindBarPlatformHelperMac>(find_bar_controller);')
     keychain = "components/os_crypt/common/keychain_password_mac.mm"
     patch(keychain, '#include <atomic>', '#include <atomic>\n#include "base/command_line.h"')
     patch(keychain, '  static KeychainNameContainerType service_name(kDefaultServiceName);',

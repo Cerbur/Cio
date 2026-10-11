@@ -35,6 +35,7 @@ final class ChromiumContainerView: NSView {
   let pageContentView = NSView()
   let devToolsHostView = NSView()
   let devToolsEmulationHostView = NSView()
+  let findBar = BrowserFindBarView(frame: .zero)
   private var inspectedPageBounds: CGRect?
   private(set) var isDevToolsVisible = false
   private(set) var isSurfaceVisible = true
@@ -50,6 +51,8 @@ final class ChromiumContainerView: NSView {
     }
     devToolsHostView.isHidden = true
     devToolsEmulationHostView.isHidden = true
+    addSubview(findBar, positioned: .above, relativeTo: nil)
+    findBar.installEscapeRouting(for: pageContentView)
     updateBackgroundColor()
     ApplicationRuntime.shared.record("appkit:chromium-container-created")
     AppLog.browser.debug("ChromiumContainerView created")
@@ -113,6 +116,10 @@ final class ChromiumContainerView: NSView {
     devToolsEmulationHostView.frame = bounds
     let rect = isDevToolsVisible ? (inspectedPageBounds ?? bounds).intersection(bounds) : bounds
     pageContentView.frame = rect.isNull ? .zero : rect
+    let pageBounds = pageContentView.frame
+    let findWidth = max(0, min(366, pageBounds.width - 12))
+    findBar.frame = CGRect(x: pageBounds.maxX - findWidth - 6, y: pageBounds.minY + 6,
+      width: findWidth, height: BrowserFindBarView.height(for: findWidth))
     delegate?.containerViewDidResize(self)
   }
 

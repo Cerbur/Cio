@@ -55,6 +55,23 @@ struct BrowserCommands: Commands {
       Button("Chrome Web Store…") { runtime.openExtensionsPage(store: true) }
     }
 
+    CommandGroup(after: .textEditing) {
+      Divider()
+      Button("Find in Page…") {
+        workspace.dismissSpotlight(focusPage: false)
+        workspace.selectedSession?.showFindBar()
+      }
+      .keyboardShortcut("f", modifiers: .command)
+      .disabled(!canFindInPage)
+
+      Button("Find Next") { workspace.selectedSession?.findNext() }
+        .keyboardShortcut("g", modifiers: .command)
+        .disabled(!canFindInPage)
+      Button("Find Previous") { workspace.selectedSession?.findPrevious() }
+        .keyboardShortcut("g", modifiers: [.command, .shift])
+        .disabled(!canFindInPage)
+    }
+
     CommandMenu("Develop") {
       Button("View Page Source") { workspace.selectedSession?.viewPageSource() }
         .keyboardShortcut("u", modifiers: [.command, .option])
@@ -124,6 +141,12 @@ struct BrowserCommands: Commands {
 
   private var selectedIsLoading: Bool {
     workspace.selectedSession?.isLoading ?? false
+  }
+
+  private var canFindInPage: Bool {
+    runtime.presentedInternalPanel == nil && workspace.selectedSession?.isClosed == false
+      && workspace.selectedSession?.rendererCrashed == false
+      && workspace.selectedSession?.hasBrowser == true
   }
 
   private var selectedIsSpacePin: Bool {

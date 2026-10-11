@@ -46,7 +46,7 @@
       "platform": "macOS-arm64",
       "configuration": "release-component-no-symbols",
       "backend_identifier": "chromium-native",
-      "interface_version": 1,
+      "interface_version": 2,
       "output": "build/DerivedData/Build/Products/Debug/Cio.app",
       "app_build_command": "CONFIGURATION=Debug Scripts/build.sh",
       "app_build_log": "build/verification/native-bridge/rebuild-address-routing.log",

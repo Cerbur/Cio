@@ -1,6 +1,10 @@
 #import "chrome/browser/ui/cio/BrowserBridge.h"
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
 #include "chrome/browser/ui/cio/CioTabExtensions.h"
+#include "chrome/browser/ui/find_bar/find_bar.h"
+#include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "components/find_in_page/find_tab_helper.h"
+#include "components/find_in_page/find_types.h"
 
 #include <map>
 #include <deque>
@@ -16,6 +20,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/unload_controller.h"
@@ -71,6 +76,9 @@
 - (void)nativeRefreshDevTools;
 - (void)nativeDevToolsClosed;
 - (content::WebContents*)nativeContents;
+- (void)nativeFindResult:(const find_in_page::FindNotificationDetails&)result
+                  query:(const std::u16string&)query;
+- (void)nativeFindInvalidated;
 @end
 
 namespace {
@@ -100,8 +108,16 @@ class PageObserver final : public content::WebContentsObserver {
   void TitleWasSet(content::NavigationEntry*) override {
     if (!devtools_) [bridge_ nativeTitleChanged];
   }
+  void DidStartNavigation(content::NavigationHandle* handle) override {
+    if (!devtools_ && handle->IsInPrimaryMainFrame() && !handle->IsSameDocument())
+      [bridge_ nativeFindInvalidated];
+  }
   void DidFinishNavigation(content::NavigationHandle* handle) override {
-    if (!devtools_ && handle->IsInPrimaryMainFrame()) [bridge_ nativeNavigationFinished:handle];
+    if (!devtools_ && handle->IsInPrimaryMainFrame()) {
+      if (handle->HasCommitted() && !handle->IsSameDocument())
+        [bridge_ nativeFindInvalidated];
+      [bridge_ nativeNavigationFinished:handle];
+    }
   }
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override {
     if (!devtools_ && frame == web_contents()->GetPrimaryMainFrame())
@@ -156,10 +172,12 @@ class PageObserver final : public content::WebContentsObserver {
   BOOL _terminationRequested;
   BOOL _devtoolsRequested;
   BOOL _devtoolsClosing;
+  NSInteger _findGeneration;
+  int _findRequestID;
 }
 @synthesize delegate = _delegate;
 - (instancetype)initWithParentView:(NSView *)view {
-  if ((self = [super init])) { _parent = view; _identifier = -1; }
+  if ((self = [super init])) { _parent = view; _identifier = -1; _findRequestID = -1; }
   return self;
 }
 - (BOOL)isClosed { return _closed; }
@@ -212,6 +230,60 @@ class PageObserver final : public content::WebContentsObserver {
 - (void)viewPageSource {
   if (_contents) [self.delegate browserBridge:self didRequestNewTabWithURL:
       [@"view-source:" stringByAppendingString:base::SysUTF8ToNSString(_contents->GetLastCommittedURL().spec())]];
+}
+- (void)showFindBarWithQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation {
+  if (!_contents || _closed || _closing) return;
+  auto* controller = _browser->GetFeatures().GetFindBarController();
+  auto* helper = find_in_page::FindTabHelper::FromWebContents(_contents);
+  // Do not use Show()'s prepopulation: Cio's session is the query owner.
+  controller->find_bar()->SetFindTextAndSelectedRange(
+      base::SysNSStringToUTF16(query), gfx::Range(0, query.length));
+  helper->set_find_ui_active(true);
+  controller->find_bar()->Show(false, true);
+  [self findQuery:query forward:forward generation:generation];
+}
+- (void)findQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation {
+  if (!_contents || _closed || _closing) return;
+  auto* helper = find_in_page::FindTabHelper::FromWebContents(_contents);
+  auto* controller = _browser->GetFeatures().GetFindBarController();
+  _findGeneration = generation;
+  _findRequestID = -1;
+  const auto text = base::SysNSStringToUTF16(query);
+  controller->find_bar()->SetFindTextAndSelectedRange(text, gfx::Range(0, text.size()));
+  controller->OnUserChangedFindText(text);
+  helper->StartFinding(text, forward, false /* match case */, true /* select match */);
+  // FindTabHelper discards previous query sessions. Exact request correlation
+  // also discards late ordinals from repeated Next/Previous in the same session.
+  if (!text.empty()) _findRequestID = helper->current_find_request_id();
+}
+- (void)closeFindBar {
+  if (!_contents || _closed) return;
+  _findRequestID = -1;
+  _browser->GetFeatures().GetFindBarController()->EndFindSession(
+      find_in_page::SelectionAction::kKeep, find_in_page::ResultAction::kKeep);
+}
+- (void)setFindBarFocused:(BOOL)focused {
+  if (_contents) {
+    if (auto* helper = find_in_page::FindTabHelper::FromWebContents(_contents))
+      helper->set_find_ui_focused(focused);
+  }
+}
+- (void)nativeFindResult:(const find_in_page::FindNotificationDetails&)result
+                  query:(const std::u16string&)query {
+  if (!_contents || _closed || _closing || _findRequestID < 0 ||
+      result.request_id() != _findRequestID) return;
+  [self.delegate browserBridge:self didFindQuery:base::SysUTF16ToNSString(query)
+      generation:_findGeneration requestIdentifier:result.request_id()
+      activeMatch:result.active_match_ordinal() matchCount:result.number_of_matches()
+      finalUpdate:result.final_update()];
+}
+- (void)nativeFindInvalidated {
+  _findRequestID = -1;
+  if (_contents) {
+    if (auto* helper = find_in_page::FindTabHelper::FromWebContents(_contents))
+      helper->StopFinding(find_in_page::SelectionAction::kClear);
+  }
+  [self.delegate browserBridgeDidInvalidateFindResults:self];
 }
 - (BOOL)nativeCanFocus {
   return !_closed && !_closing && _parent.window && !_parent.isHiddenOrHasHiddenAncestor &&
@@ -307,6 +379,7 @@ class PageObserver final : public content::WebContentsObserver {
   _closing = YES;
   [self nativeAcceptClose];
   _closed = YES;
+  _findRequestID = -1;
   _contents = nullptr;
   _extensions.reset();
   if (_browser) Browsers().erase(_browser);
@@ -468,6 +541,32 @@ void RefreshDevTools() {
 bool CanFocusBrowser(Browser* browser) {
   auto found = Browsers().find(browser);
   return found != Browsers().end() && [found->second nativeCanFocus];
+}
+void ShowFindBar(Browser* browser, bool focus) {
+  auto found = Browsers().find(browser);
+  if (found != Browsers().end())
+    [found->second.delegate browserBridge:found->second didShowFindBarWithFocus:focus];
+}
+void HideFindBar(Browser* browser) {
+  auto found = Browsers().find(browser);
+  if (found != Browsers().end())
+    [found->second.delegate browserBridgeDidHideFindBar:found->second];
+}
+void RestoreFindFocus(Browser* browser) {
+  auto found = Browsers().find(browser);
+  if (found != Browsers().end())
+    [found->second.delegate browserBridgeRestoreFocusAfterFind:found->second];
+}
+bool FindBarHasFocus(Browser* browser) {
+  auto found = Browsers().find(browser);
+  return found != Browsers().end() &&
+      [found->second.delegate browserBridgeFindBarHasFocus:found->second];
+}
+void UpdateFindResult(Browser* browser,
+                      const find_in_page::FindNotificationDetails& result,
+                      const std::u16string& query) {
+  auto found = Browsers().find(browser);
+  if (found != Browsers().end()) [found->second nativeFindResult:result query:query];
 }
 }
 namespace {

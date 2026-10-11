@@ -228,42 +228,61 @@ CioBrowserWindow::CioBrowserWindow(Browser* browser)
 // --- CioFindBar --------------------------------------------------------------
 
 FindBarController* CioFindBar::GetFindBarController() const {
-  return nullptr;
+  return controller_;
 }
 
-void CioFindBar::SetFindBarController(FindBarController* find_bar_controller) {}
+void CioFindBar::SetFindBarController(FindBarController* find_bar_controller) {
+  controller_ = find_bar_controller;
+}
 
-void CioFindBar::Show(bool animate, bool focus) {}
+void CioFindBar::Show(bool animate, bool focus) {
+  visible_ = true;
+  cio::ShowFindBar(browser_, focus);
+}
 
-void CioFindBar::Hide(bool animate) {}
+void CioFindBar::Hide(bool animate) {
+  visible_ = false;
+  cio::HideFindBar(browser_);
+}
 
-void CioFindBar::SetFocusAndSelection() {}
+void CioFindBar::SetFocusAndSelection() {
+  selected_range_ = gfx::Range(0, text_.size());
+  cio::ShowFindBar(browser_, true);
+}
 
-void CioFindBar::ClearResults( const find_in_page::FindNotificationDetails& results) {}
+void CioFindBar::ClearResults( const find_in_page::FindNotificationDetails& results) {
+  // Cio retains the tab-local query when navigation dismisses the bar.
+  cio::UpdateFindResult(browser_, results, text_);
+}
 
 void CioFindBar::StopAnimation() {}
 
 void CioFindBar::MoveWindowIfNecessary() {}
 
-void CioFindBar::SetFindTextAndSelectedRange( const std::u16string& find_text, const gfx::Range& selected_range) {}
+void CioFindBar::SetFindTextAndSelectedRange( const std::u16string& find_text, const gfx::Range& selected_range) {
+  text_ = find_text;
+  selected_range_ = selected_range;
+}
 
 std::u16string_view CioFindBar::GetFindText() const {
-  return {};
+  return text_;
 }
 
 gfx::Range CioFindBar::GetSelectedRange() const {
-  return {};
+  return selected_range_;
 }
 
-void CioFindBar::UpdateUIForFindResult( const find_in_page::FindNotificationDetails& result, const std::u16string& find_text) {}
+void CioFindBar::UpdateUIForFindResult( const find_in_page::FindNotificationDetails& result, const std::u16string& find_text) {
+  cio::UpdateFindResult(browser_, result, find_text);
+}
 
 void CioFindBar::AudibleAlert() {}
 
 bool CioFindBar::IsFindBarVisible() const {
-  return false;
+  return visible_;
 }
 
-void CioFindBar::RestoreSavedFocus() {}
+void CioFindBar::RestoreSavedFocus() { cio::RestoreFindFocus(browser_); }
 
 bool CioFindBar::HasGlobalFindPasteboard() const {
   return false;
@@ -280,7 +299,7 @@ const FindBarTesting* CioFindBar::GetFindBarTesting() const {
 }
 
 bool CioFindBar::HasFocus() const {
-  return false;
+  return cio::FindBarHasFocus(browser_);
 }
 
 void CioFindBar::CloseOverlappingBubbles() {}
@@ -928,7 +947,7 @@ bool CioBrowserWindow::HandleKeyboardEvent( const input::NativeWebKeyboardEvent&
 }
 
 std::unique_ptr<FindBar> CioBrowserWindow::CreateFindBar() {
-  return std::make_unique<CioFindBar>();
+  return std::make_unique<CioFindBar>(browser_);
 }
 
 web_modal::WebContentsModalDialogHost*

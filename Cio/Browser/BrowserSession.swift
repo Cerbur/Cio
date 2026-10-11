@@ -105,6 +105,10 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// Editing state of the native address field. One per session, so a background
   /// tab's navigation callbacks can never move the selected tab's text.
   let addressField = AddressFieldModel()
+  @Published private(set) var findState = BrowserFindState()
+  private var findGeneration = 0
+  private var isEditingFindField = false
+  private var restorePageAfterFind = false
 
   /// True while the native address field owns the keyboard. Used to keep the
   /// toolbar's focus handling from fighting Chromium for first responder.
@@ -253,6 +257,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     if containerView === view {
       return
     }
+    configureFindBar(in: view)
     if let existing = containerView, existing !== view, bridge != nil {
       // The manager moved this session's surface to another container (for
       // example because SwiftUI re-created the representable's view): move the
@@ -326,7 +331,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   ///
   /// This is the state a selection transition captures from the outgoing session.
   var ownsPageKeyboard: Bool {
-    holdsAppKitKeyboardFocus || wantsPageFocus
+    holdsAppKitKeyboardFocus || wantsPageFocus || isEditingFindField
   }
 
   /// True while AppKit's keyboard focus is inside this session's Chromium
@@ -336,6 +341,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     guard let view = containerView, let window = view.window,
       let responder = window.firstResponder
     else { return false }
+    if view.findBar.hasKeyboardFocus { return false }
     if responder === view { return true }
     if let responderView = responder as? NSView {
       return responderView.isDescendant(of: view)
@@ -470,9 +476,11 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// is no longer selected may keep the keyboard.
   func blur() {
     wantsPageFocus = false
-    if holdsAppKitKeyboardFocus {
+    if holdsAppKitKeyboardFocus || containerView?.findBar.hasKeyboardFocus == true {
       containerView?.window?.makeFirstResponder(nil)
     }
+    isEditingFindField = false
+    bridge?.setFindBarFocused(false)
     bridge?.setFocus(false)
   }
 
@@ -483,6 +491,8 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   func releaseFocusBeforeTabRemoval() {
     wantsPageFocus = false
     isEditingAddressField = false
+    isEditingFindField = false
+    resetFindStateForClose()
     addressField.endEditing()
     containerView?.window?.makeFirstResponder(nil)
     bridge?.setFocus(false)
@@ -530,6 +540,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       notifyCloseAccepted()
       closeState = .closed
       isClosed = true
+      resetFindStateForClose()
       // Reported before the typed callback below so the lifecycle trace keeps
       // the "browser:closed" -> "termination:browsers-closed" order the
       // Milestone 2 verification checks.
@@ -562,7 +573,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// a session that no longer wants the keyboard must not have it handed over
   /// late.
   private var canTakePageFocus: Bool {
-    !isClosed && wantsPageFocus && containerView?.isSurfaceVisible == true
+    !isClosed && wantsPageFocus && !isEditingFindField && containerView?.isSurfaceVisible == true
   }
 
   /// Returns the keyboard to Chromium.
@@ -579,11 +590,105 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   func focusPage() {
     guard !isClosed, let view = containerView, view.isSurfaceVisible else { return }
     wantsPageFocus = true
+    isEditingFindField = false
+    bridge?.setFindBarFocused(false)
     view.window?.makeFirstResponder(view)
     DispatchQueue.main.async { [weak self] in
       guard let self, self.canTakePageFocus else { return }
       self.focus()
     }
+  }
+
+  // MARK: - Per-tab find
+
+  private func configureFindBar(in view: ChromiumContainerView) {
+    view.findBar.apply(findState)
+    view.findBar.onQueryChanged = { [weak self] in self?.setFindQuery($0) }
+    view.findBar.onNavigate = { [weak self] in self?.navigateFind(forward: $0) }
+    view.findBar.onClose = { [weak self] in self?.closeFindBar() }
+    view.findBar.onFocusChanged = { [weak self] in self?.findFieldFocusChanged($0) }
+  }
+
+  private func updateFindUI() { containerView?.findBar.apply(findState) }
+
+  func showFindBar() {
+    openFindBar(forward: true)
+  }
+
+  private func openFindBar(forward: Bool) {
+    guard closeState == .open, hasBrowser, !rendererCrashed, isSurfaceVisible else { return }
+    if let containerView { containerView.findBar.installEscapeRouting(for: containerView.pageContentView) }
+    if findState.isVisible {
+      findFieldFocusChanged(true)
+      containerView?.findBar.focusAndSelect()
+      return
+    }
+    findGeneration += 1
+    findState.isVisible = true
+    findState.isSearching = !findState.query.isEmpty
+    findState.activeMatch = 0
+    findState.matchCount = nil
+    updateFindUI()
+    bridge?.showFindBar(withQuery: findState.query, forward: forward, generation: findGeneration)
+  }
+
+  private func setFindQuery(_ query: String) {
+    guard closeState == .open, findState.isVisible else { return }
+    let normalized = query.replacingOccurrences(of: "\r", with: "")
+    guard normalized != findState.query else { return }
+    findState.query = normalized
+    findState.activeMatch = 0
+    findState.matchCount = nil
+    startFind(forward: true)
+  }
+
+  private func startFind(forward: Bool) {
+    findGeneration += 1
+    findState.isSearching = !findState.query.isEmpty
+    updateFindUI()
+    bridge?.findQuery(findState.query, forward: forward, generation: findGeneration)
+  }
+
+  func findNext() { navigateFind(forward: true) }
+  func findPrevious() { navigateFind(forward: false) }
+
+  private func navigateFind(forward: Bool) {
+    guard closeState == .open, hasBrowser, !rendererCrashed, isSurfaceVisible,
+          containerView?.findBar.hasMarkedText != true else { return }
+    if !findState.isVisible {
+      // ⌘G on a closed bar reuses this tab's query. An empty tab opens an editor.
+      openFindBar(forward: forward)
+      return
+    }
+    guard !findState.query.isEmpty else {
+      findFieldFocusChanged(true)
+      containerView?.findBar.focusAndSelect()
+      return
+    }
+    startFind(forward: forward)
+  }
+
+  func closeFindBar() {
+    guard findState.isVisible, closeState == .open else { return }
+    bridge?.closeFindBar()
+  }
+
+  private func findFieldFocusChanged(_ focused: Bool) {
+    isEditingFindField = focused
+    bridge?.setFindBarFocused(focused)
+    if focused {
+      wantsPageFocus = false
+      bridge?.setFocus(false)
+    }
+  }
+
+  private func resetFindStateForClose() {
+    findGeneration += 1
+    findState = BrowserFindState()
+    isEditingFindField = false
+    restorePageAfterFind = false
+    updateFindUI()
+    containerView?.findBar.removeEscapeRouting()
   }
 
   private func emit(_ event: String) {
@@ -611,6 +716,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
       loadingProgress = 0
     } else {
       loadingProgress = 1
+      if findState.isVisible, findState.isSearching, findState.matchCount == nil {
+        startFind(forward: true)
+      }
       if didStartLoading, !hasFinishedFirstLoad {
         hasFinishedFirstLoad = true
         emit(
@@ -654,6 +762,65 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 // MARK: - BrowserBridgeDelegate
 
 extension BrowserSession: BrowserBridgeDelegate {
+  func browserBridge(_ bridge: BrowserBridge, didShowFindBarWithFocus focus: Bool) {
+    guard acceptsCallback(from: bridge), closeState == .open else { return }
+    findState.isVisible = true
+    updateFindUI()
+    if focus, isSurfaceVisible {
+      findFieldFocusChanged(true)
+      containerView?.findBar.focusAndSelect()
+    }
+  }
+
+  func browserBridgeDidHideFindBar(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    restorePageAfterFind = findState.isVisible
+      && (containerView?.findBar.hasKeyboardFocus == true || holdsAppKitKeyboardFocus)
+    findGeneration += 1
+    findState.isVisible = false
+    findState.isSearching = false
+    findState.activeMatch = 0
+    findState.matchCount = nil
+    isEditingFindField = false
+    updateFindUI()
+  }
+
+  func browserBridgeRestoreFocus(afterFind bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    let shouldRestore = restorePageAfterFind
+    restorePageAfterFind = false
+    if shouldRestore, closeState == .open, isSurfaceVisible,
+       containerView?.window?.attachedSheet == nil, !isEditingAddressField {
+      focusPage()
+    }
+  }
+
+  func browserBridgeFindBarHasFocus(_ bridge: BrowserBridge) -> Bool {
+    acceptsCallback(from: bridge) && containerView?.findBar.hasKeyboardFocus == true
+  }
+
+  func browserBridgeDidInvalidateFindResults(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    findGeneration += 1
+    findState.activeMatch = 0
+    findState.matchCount = nil
+    findState.isSearching = findState.isVisible && !findState.query.isEmpty
+    updateFindUI()
+  }
+
+  func browserBridge(_ bridge: BrowserBridge, didFindQuery query: String,
+                     generation: Int, requestIdentifier: Int, activeMatch: Int,
+                     matchCount: Int, finalUpdate: Bool) {
+    guard acceptsCallback(from: bridge), closeState == .open,
+          findState.isVisible, !query.isEmpty, query == findState.query,
+          generation == findGeneration else { return }
+    if matchCount >= 0 { findState.matchCount = matchCount }
+    if activeMatch >= 0 { findState.activeMatch = activeMatch }
+    if findState.matchCount == 0 { findState.activeMatch = 0 }
+    findState.isSearching = !finalUpdate
+    updateFindUI()
+  }
+
   func browserBridge(_ bridge: BrowserBridge, didSetInspectedPageBounds bounds: NSRect) {
     guard acceptsCallback(from: bridge) else { return }
     containerView?.setInspectedPageBounds(bounds)
@@ -697,7 +864,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     devToolsWindow?.close()
     devToolsWindow = nil
     containerView?.hideDevToolsPane()
-    if closeState == .open, isSurfaceVisible, !isEditingAddressField { focusPage() }
+    if closeState == .open, isSurfaceVisible, !isEditingAddressField, !isEditingFindField { focusPage() }
   }
 
   func browserBridgeDidCreateBrowser(_ bridge: BrowserBridge) {
@@ -827,6 +994,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridgeDidCancelClose(_ bridge: BrowserBridge) {
     guard acceptsCallback(from: bridge), closeState == .userClosePending else { return }
     closeState = .open
+    if findState.isVisible, !findState.query.isEmpty { startFind(forward: true) }
     emit("browser:close-cancelled")
     onCloseCancelled?(self)
   }
@@ -838,6 +1006,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   ) {
     guard acceptsCallback(from: bridge) else { return }
     rendererCrashed = true
+    resetFindStateForClose()
     AppLog.browser.error(
       "renderer terminated (status=\(status, privacy: .public), code=\(errorCode, privacy: .public))")
     emit("renderer:terminated(status=\(status), code=\(errorCode))")
@@ -912,7 +1081,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     -> Bool
   {
     guard acceptsCallback(from: bridge) else { return false }
-    let allowed = !isClosed && isSurfaceVisible && ownsPageKeyboard
+    let allowed = !isClosed && isSurfaceVisible && !isEditingFindField && ownsPageKeyboard
     AppLog.browser.debug(
       "focus request id=\(self.tabID.uuidString, privacy: .public) source=\(fromSystem ? "system" : "navigation", privacy: .public) visible=\(self.isSurfaceVisible, privacy: .public) wants-page-focus=\(self.wantsPageFocus, privacy: .public) allowed=\(allowed, privacy: .public)"
     )
@@ -934,6 +1103,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     }
     closeState = .closed
     isClosed = true
+    resetFindStateForClose()
     hasBrowser = false
     // Order matters: the diagnostic trace first, then the typed ownership
     // callback the manager releases this session from.

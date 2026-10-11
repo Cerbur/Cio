@@ -120,6 +120,20 @@ NS_SWIFT_UI_ACTOR
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 - (void)browserBridgeDidChangeExtensions:(BrowserBridge *)bridge;
 - (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
+/// Per-WebContents find UI events. Results carry the application's generation
+/// as well as Chromium's request ID; no Chromium types cross this boundary.
+- (void)browserBridge:(BrowserBridge *)bridge didShowFindBarWithFocus:(BOOL)focus;
+- (void)browserBridgeDidHideFindBar:(BrowserBridge *)bridge;
+- (void)browserBridgeRestoreFocusAfterFind:(BrowserBridge *)bridge;
+- (BOOL)browserBridgeFindBarHasFocus:(BrowserBridge *)bridge;
+- (void)browserBridgeDidInvalidateFindResults:(BrowserBridge *)bridge;
+- (void)browserBridge:(BrowserBridge *)bridge
+    didFindQuery:(NSString *)query
+    generation:(NSInteger)generation
+    requestIdentifier:(NSInteger)requestIdentifier
+    activeMatch:(NSInteger)activeMatch
+    matchCount:(NSInteger)matchCount
+    finalUpdate:(BOOL)finalUpdate;
 - (void)browserBridge:(BrowserBridge *)bridge didSetInspectedPageBounds:(NSRect)bounds;
 - (void)browserBridge:(BrowserBridge *)bridge didSetDevToolsDocked:(BOOL)docked;
 - (void)browserBridge:(BrowserBridge *)bridge didRequestInspectNode:(NSInteger)backendNodeID;
@@ -156,6 +170,12 @@ __attribute__((visibility("default")))
 - (void)reload;
 - (void)stopLoading;
 - (void)viewPageSource;
+
+/// FindTabHelper owns matching, highlighting, frame traversal and wraparound.
+- (void)showFindBarWithQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation;
+- (void)findQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation;
+- (void)closeFindBar;
+- (void)setFindBarFocused:(BOOL)focused;
 
 /// Embeds Chromium's DevTools frontend in an application-owned native view.
 /// Returns NO when the request cannot be accepted (e.g. during teardown).

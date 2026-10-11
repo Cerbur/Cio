@@ -11,6 +11,8 @@
 #include <memory>
 
 #include "base/observer_list.h"
+#include "base/memory/raw_ptr.h"
+#include "ui/gfx/range/range.h"
 #include <string>
 #include <vector>
 
@@ -40,11 +42,11 @@ class ScreenshotCapturedBubble;
 class SharingHubBubbleView;
 }  // namespace sharing_hub
 
-// No-op FindBar: FindBarController derefs the FindBar unconditionally; the
-// real find UI is Cio's SwiftUI FindBar driving FindTabHelper directly.
+// Platform adapter for the tab-owned AppKit bar. Chromium's controller/helper
+// retain search and navigation semantics; Cio owns presentation and focus.
 class CioFindBar : public FindBar {
  public:
-  CioFindBar() = default;
+  explicit CioFindBar(Browser* browser) : browser_(browser) {}
   ~CioFindBar() override = default;
 
   FindBarController* GetFindBarController() const override;
@@ -69,6 +71,12 @@ class CioFindBar : public FindBar {
   bool HasFocus() const override;
   void CloseOverlappingBubbles() override;
   views::Widget* GetHostWidget() override;
+ private:
+  raw_ptr<Browser> browser_;
+  raw_ptr<FindBarController> controller_ = nullptr;
+  std::u16string text_;
+  gfx::Range selected_range_;
+  bool visible_ = false;
 };
 
 // No-op LocationBar: Browser dereferences GetLocationBar() unconditionally on
