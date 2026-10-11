@@ -76,6 +76,7 @@
 - (void)nativeRefreshDevTools;
 - (void)nativeDevToolsClosed;
 - (content::WebContents*)nativeContents;
+- (void)nativeAdoptExtensionTab:(content::WebContents*)contents active:(BOOL)active;
 - (void)nativeFindResult:(const find_in_page::FindNotificationDetails&)result
                   query:(const std::u16string&)query;
 - (void)nativeFindInvalidated;
@@ -499,6 +500,20 @@ class PageObserver final : public content::WebContentsObserver {
   [self reparentDevToolsToView:_devtoolsParent];
 }
 - (content::WebContents*)nativeContents { return _contents.get(); }
+- (void)nativeAdoptExtensionTab:(content::WebContents*)contents active:(BOOL)active {
+  if (_closed || _closing || !_browser || contents == _contents) return;
+  auto* strip = _browser->tab_strip_model();
+  int index = strip->GetIndexOfWebContents(contents);
+  if (index < 0) return;
+  GURL target = contents->GetVisibleURL();
+  if (!target.is_valid()) target = GURL("about:blank");
+  auto adopted = strip->DetachWebContentsAtForInsertion(index);
+  adopted->SetDelegate(nullptr);
+  adopted->WasHidden();
+  PendingPopups()[target.spec()].push_back(std::move(adopted));
+  [self.delegate browserBridge:self
+      didRequestExtensionTabWithURL:base::SysUTF8ToNSString(target.spec()) active:active];
+}
 - (void)nativeDevToolsClosed {
   _devtools = nullptr; _devtoolsRequested = NO;
   _devtoolsClosing = NO;
@@ -644,5 +659,16 @@ bool OpenNewTab(Browser* browser, const GURL& url) {
   BrowserBridge* bridge = found->second;
   [bridge.delegate browserBridge:bridge didRequestNewTabWithURL:base::SysUTF8ToNSString(url.spec())];
   return true;
+}
+void AdoptExtensionTab(Browser* browser, content::WebContents* contents, bool active) {
+  auto found = Browsers().find(browser);
+  if (found == Browsers().end() || !contents) return;
+  __weak BrowserBridge* bridge = found->second;
+  auto weak_contents = contents->GetWeakPtr();
+  // Finish tabs.create's return value/opener bookkeeping before moving the
+  // original page to its managed Cio session. Never mutate a tab-strip callback.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (weak_contents) [bridge nativeAdoptExtensionTab:weak_contents.get() active:active];
+  });
 }
 }

@@ -5,11 +5,20 @@
 #include <map>
 #include "base/no_destructor.h"
 #include "base/strings/sys_string_conversions.h"
+#include "chrome/browser/external_protocol/external_protocol_handler.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
+#include "components/prefs/pref_service.h"
+#include "components/url_formatter/elide_url.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/common/result_codes.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace {
 struct Dialog {
@@ -103,6 +112,23 @@ std::map<content::WebContents*, NSAlert*>& HungDialogs() {
   static base::NoDestructor<std::map<content::WebContents*, NSAlert*>> dialogs;
   return *dialogs;
 }
+
+// Cio's AppKit window has no NativeWidgetMac parent for Chrome Views sheets.
+// Observe the requesting page so a prompt cannot survive navigation or closure.
+class ExternalProtocolPrompt final : public content::WebContentsObserver {
+ public:
+  explicit ExternalProtocolPrompt(content::WebContents* contents)
+      : content::WebContentsObserver(contents), alert([[NSAlert alloc] init]) {}
+  void PrimaryPageChanged(content::Page&) override { Cancel(); }
+  void WebContentsDestroyed() override { Cancel(); }
+  void Cancel() {
+    cancelled = true;
+    if (alert.window.sheetParent)
+      [alert.window.sheetParent endSheet:alert.window returnCode:NSModalResponseCancel];
+  }
+  NSAlert* alert;
+  bool cancelled = false;
+};
 }
 
 namespace cio {
@@ -110,6 +136,60 @@ content::JavaScriptDialogManager* NativeJavaScriptDialogs() {
   if (!IsHostedBrowser()) return nullptr;
   static base::NoDestructor<DialogManager> manager;
   return manager.get();
+}
+bool ShowExternalProtocolDialog(content::WebContents* contents, const GURL& url,
+    const std::u16string& program_name, const std::optional<url::Origin>& origin,
+    content::WeakDocumentPtr initiator_document) {
+  if (!IsHostedBrowser()) return false;
+  NSWindow* window = CioMainWindow();
+  if (!window) return true;
+  auto prompt = std::make_shared<ExternalProtocolPrompt>(contents);
+  NSAlert* alert = prompt->alert;
+  alert.messageText = base::SysUTF16ToNSString(l10n_util::GetStringFUTF16(
+      IDS_EXTERNAL_PROTOCOL_TITLE, program_name));
+  alert.informativeText = base::SysUTF16ToNSString(
+      origin && !origin->opaque()
+          ? l10n_util::GetStringFUTF16(IDS_EXTERNAL_PROTOCOL_MESSAGE_WITH_INITIATING_ORIGIN,
+                url_formatter::FormatOriginForSecurityDisplay(*origin))
+          : l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_MESSAGE));
+  [alert addButtonWithTitle:base::SysUTF16ToNSString(l10n_util::GetStringFUTF16(
+      IDS_EXTERNAL_PROTOCOL_OK_BUTTON_TEXT, program_name))];
+  [alert addButtonWithTitle:base::SysUTF16ToNSString(
+      l10n_util::GetStringUTF16(IDS_EXTERNAL_PROTOCOL_CANCEL_BUTTON_TEXT))];
+  // Return must not open an external application accidentally.
+  alert.buttons[0].keyEquivalent = @"";
+  alert.buttons[1].keyEquivalent = @"\r";
+  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  NSButton* remember = nil;
+  if (profile->GetPrefs()->GetBoolean(prefs::kExternalProtocolDialogShowAlwaysOpenCheckbox) &&
+      ExternalProtocolHandler::MayRememberAllowDecisionsForThisOrigin(
+          origin ? &*origin : nullptr)) {
+    remember = [NSButton checkboxWithTitle:base::SysUTF16ToNSString(
+        l10n_util::GetStringFUTF16(IDS_EXTERNAL_PROTOCOL_CHECKBOX_PER_ORIGIN_TEXT,
+            url_formatter::FormatOriginForSecurityDisplay(*origin,
+                url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC)))
+        target:nil action:nil];
+    [remember sizeToFit];
+    alert.accessoryView = remember;
+  }
+  auto weak = contents->GetWeakPtr();
+  // Objective-C blocks retain C++ reference parameters as references. Own the
+  // request values after Chromium's one-shot presentation callback returns.
+  GURL target_url = url;
+  auto requesting_origin = origin;
+  [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
+    bool accepted = response == NSAlertFirstButtonReturn && !prompt->cancelled && weak;
+    bool remembered = accepted && remember && remember.state == NSControlStateValueOn;
+    ExternalProtocolHandler::RecordHandleStateMetrics(remembered,
+        accepted ? ExternalProtocolHandler::DONT_BLOCK : ExternalProtocolHandler::BLOCK);
+    if (!accepted) return;
+    if (remembered)
+      ExternalProtocolHandler::SetBlockState(target_url.GetScheme(), *requesting_origin,
+          ExternalProtocolHandler::DONT_BLOCK,
+          Profile::FromBrowserContext(weak->GetBrowserContext()));
+    ExternalProtocolHandler::LaunchUrlWithoutSecurityCheck(target_url, weak.get(), initiator_document);
+  }];
+  return true;
 }
 bool HideHungRenderer(content::WebContents* contents) {
   if (!IsHostedBrowser()) return false;

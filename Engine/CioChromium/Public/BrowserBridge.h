@@ -95,6 +95,9 @@ NS_SWIFT_UI_ACTOR
 /// No Chromium top-level window is created. URLs may contain authentication
 /// material and must be passed through URLLogSanitizer before logging.
 - (void)browserBridge:(BrowserBridge *)bridge didRequestNewTabWithURL:(NSString *)url;
+/// Adopt a tab created by chrome.tabs.create, preserving its WebContents and ID.
+- (void)browserBridge:(BrowserBridge *)bridge
+    didRequestExtensionTabWithURL:(NSString *)url active:(BOOL)active;
 
 /// Chromium is asking for the keyboard.
 ///

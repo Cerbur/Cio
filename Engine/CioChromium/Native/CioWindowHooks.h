@@ -1,8 +1,10 @@
 #pragma once
 #include <memory>
+#include <optional>
 #include <string>
 #include "base/functional/callback.h"
-namespace content { class WebContents; class JavaScriptDialogManager; }
+namespace content { class WebContents; class JavaScriptDialogManager; class WeakDocumentPtr; }
+namespace url { class Origin; }
 #ifdef __OBJC__
 #import <AppKit/AppKit.h>
 #endif
@@ -19,10 +21,14 @@ Browser* CioBrowser();
 void RefreshDevTools();
 void ShutdownDownloads();
 content::JavaScriptDialogManager* NativeJavaScriptDialogs();
+bool ShowExternalProtocolDialog(content::WebContents* contents, const GURL& url,
+    const std::u16string& program_name, const std::optional<url::Origin>& origin,
+    content::WeakDocumentPtr initiator_document);
 bool ShowHungRenderer(content::WebContents* contents, base::RepeatingClosure restart);
 bool HideHungRenderer(content::WebContents* contents);
 base::FilePath DownloadPath(download::DownloadItem* item);
 bool OpenNewTab(Browser* browser, const GURL& url);
+void AdoptExtensionTab(Browser* browser, content::WebContents* contents, bool active);
 bool AdoptPopup(Browser* browser, std::unique_ptr<content::WebContents>& contents, const GURL& url);
 bool CanFocusBrowser(Browser* browser);
 void ShowFindBar(Browser* browser, bool focus);

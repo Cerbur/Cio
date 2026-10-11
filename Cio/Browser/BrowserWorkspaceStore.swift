@@ -64,6 +64,9 @@ final class BrowserWorkspaceStore: ObservableObject {
     manager.onOpenNewTabRequest = { [weak self] session, url in
       self?.openPopupInNewTab(url: url, from: session)
     }
+    manager.onOpenExtensionTabRequest = { [weak self] session, url, active in
+      self?.openPopupInNewTab(url: url, from: session, activate: active)
+    }
     manager.onCloseAccepted = { [weak self] session in
       self?.commitAcceptedClose(for: session.tabID)
     }
@@ -680,13 +683,13 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   /// Popup routing always begins with the source runtime identity. The source
   /// tab's Space, not the currently selected Space, determines ownership.
-  private func openPopupInNewTab(url: String, from session: any BrowserSessionProtocol) {
+  private func openPopupInNewTab(url: String, from session: any BrowserSessionProtocol, activate: Bool = true) {
     guard !isTerminating, !url.isEmpty, let target = URL(string: url),
       let sourceSpaceID = workspace.globalPinnedTabIDs.contains(session.tabID)
         ? workspace.selectedSpaceID : workspace.spaceID(containing: session.tabID)
     else { return }
 
-    let shouldSelect = workspace.selectedTabID == session.tabID
+    let shouldSelect = activate && workspace.selectedTabID == session.tabID
     let loggedURL = URLLogSanitizer.sanitized(target)
     AppLog.session.info(
       "popup routed to source Space=\(sourceSpaceID.uuidString, privacy: .public) url=\(loggedURL, privacy: .public)"

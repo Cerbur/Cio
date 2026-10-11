@@ -68,6 +68,19 @@ Scripts/verify_bundle.sh
   `ExtensionViewHost`、popup/side-panel view type 与所属 Browser；AppKit 承载 transient
   popover 或标签页右侧面板，支持 `action.openPopup`、`sidePanel.open/close/setOptions`。
   隐藏标签页会关闭弹窗、隐藏侧栏；卸载、停用或关闭标签页时释放对应宿主。
+- `chrome.tabs.create` 的页面在扩展返回值与 opener 设置完成后，接管原始
+  WebContents 到 Cio 的受管标签页，保留 Chromium 标签 ID；前台/后台请求沿用
+  源 Space 的选择策略。避免扩展创建的页面只留在内部 Chromium 标签栏。
+- Native Messaging 保留 Chromium 的主机清单、允许来源、可执行路径与企业策略检查。
+  在 Cio 自有目录和 Chromium 系统目录均未注册主机时，仅宿主 macOS 进程继续查找
+  标准 Chromium / Chrome 用户注册目录，以及 Chrome 系统注册目录。禁止用户级
+  主机的策略同样作用于这些回退目录。清单由桌面应用安装并更新，Cio 不复制清单、
+  生成厂商私有注册表或假定桌面应用的安装路径。ChatGPT 扩展还需要桌面端完成
+  浏览器连接注册；仅安装桌面应用并不保证已注册 `com.openai.codexextension`。
+- 外部协议链接仍先通过 Chromium 的协议、来源和用户手势检查。需要确认时，
+  `Native/CioDialogs.mm` 使用原生 AppKit sheet，保留本地化提示、默认取消、
+  按来源记住选择和原始启动逻辑；请求页面导航或销毁时取消。避免 Chrome Views
+  子模态窗口依赖不存在的 NativeWidgetMac 父窗口而闪退。
 
 ## 打包与升级边界
 

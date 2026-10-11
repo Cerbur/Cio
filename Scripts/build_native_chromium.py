@@ -258,6 +258,57 @@ def prepare():
           '#endif\n\n'
           '  BrowserWindowInterface* const browser =')
     browser = "chrome/browser/ui/browser.cc"
+
+    extension_tabs = "chrome/browser/extensions/open_tab_helper.cc"
+    patch(extension_tabs, '#include "chrome/browser/extensions/open_tab_helper.h"',
+          '#include "chrome/browser/extensions/open_tab_helper.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(extension_tabs, '  return new_contents;\n}',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  cio::AdoptExtensionTab(browser.GetBrowserForMigrationOnly(), new_contents, active);\n'
+          '#endif\n\n  return new_contents;\n}')
+
+    # Keep Chromium's protocol policy/gesture checks and launch implementation;
+    # only replace its Views child-modal confirmation in the hosted AppKit shell.
+    external_protocol = "chrome/browser/ui/views/external_protocol_dialog.cc"
+    patch(external_protocol, '#include "build/build_config.h"',
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(external_protocol, '  // Windowing system takes ownership.',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowExternalProtocolDialog(web_contents, url, program_name,\n'
+          '          initiating_origin, initiator_document)) return;\n'
+          '#endif\n\n'
+          '  // Windowing system takes ownership.')
+
+    # Native installers know standard Chrome/Chromium directories, not Cio's
+    # custom user-data directory. Resolve their manifests without copying them
+    # or changing origin, executable, enterprise-policy or host validation.
+    native_hosts = "chrome/browser/extensions/api/messaging/launch_context_posix.cc"
+    patch(native_hosts, '  if (result.empty()) {\n'
+          '    error_message = "Can\'t find native messaging host " + host_name;',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (result.empty() && base::CommandLine::ForCurrentProcess()->\n'
+          '      HasSwitch("cio-embedded-browser")) {\n'
+          '    base::FilePath home;\n'
+          '    if (allow_user_level_hosts && base::PathService::Get(base::DIR_HOME, &home)) {\n'
+          '      for (const char* directory : {\n'
+          '          "Library/Application Support/Chromium/NativeMessagingHosts",\n'
+          '          "Library/Application Support/Google/Chrome/NativeMessagingHosts"}) {\n'
+          '        auto candidate = home.Append(directory).Append(host_name + ".json");\n'
+          '        if (base::PathExists(candidate)) { result = candidate; break; }\n'
+          '      }\n'
+          '    }\n'
+          '    if (result.empty()) {\n'
+          '      auto candidate = base::FilePath("/Library/Google/Chrome/NativeMessagingHosts")\n'
+          '          .Append(host_name + ".json");\n'
+          '      if (base::PathExists(candidate)) result = candidate;\n'
+          '    }\n'
+          '  }\n'
+          '#endif\n\n'
+          '  if (result.empty()) {\n'
+          '    error_message = "Can\'t find native messaging host " + host_name;')
+
     patch(browser, '#include "chrome/browser/ui/browser.h"',
           '#include "chrome/browser/ui/browser.h"\n#if BUILDFLAG(IS_MAC)\n'
           '#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
