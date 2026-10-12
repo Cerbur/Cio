@@ -13,6 +13,9 @@ CIO_NATIVE_EXPORT void CioNativeShutdown(void);
 CIO_NATIVE_EXPORT void CioNativePump(void);
 CIO_NATIVE_EXPORT void CioNativeFlushCookies(void (^completion)(BOOL));
 CIO_NATIVE_EXPORT void CioNativeSetDarkAppearance(BOOL dark);
+CIO_NATIVE_EXPORT NSDictionary* CioNativePasswordSettings(void);
+CIO_NATIVE_EXPORT NSString* CioNativeSetPasswordProvider(NSInteger provider);
+CIO_NATIVE_EXPORT void CioNativeRetryApplePasswords(void);
 #ifdef __cplusplus
 }
 #endif

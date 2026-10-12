@@ -54,6 +54,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// appearance. Page media queries are updated separately per browser.
 + (void)setDarkAppearance:(BOOL)dark;
 
+/// Reads the live Chromium Profile preferences and extension/transport state.
+/// provider: 0 = Apple, 1 = Chromium, 2 = off. No secrets cross this API.
++ (NSDictionary<NSString *, id> *)passwordSettings;
+/// Returns a policy/unavailability error, or nil on success.
++ (nullable NSString *)setPasswordProvider:(NSInteger)provider;
+/// Explicitly retry Apple's native connection; never changes authorization.
++ (void)retryApplePasswords;
+
 /// Whether Chromium initialization has completed successfully.
 @property(class, nonatomic, readonly) BOOL isInitialized;
 

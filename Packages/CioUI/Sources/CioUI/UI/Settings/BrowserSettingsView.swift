@@ -3,10 +3,25 @@ import SwiftUI
 /// Native Settings scene: sidebar categories and grouped system-style forms.
 public struct BrowserSettingsView: View {
   private let openChromiumSettings: @MainActor (URL) -> Bool
+  private let readPasswordSettings: @MainActor () -> (provider: Int, status: String)
+  private let setPasswordProvider: @MainActor (Int) -> String?
+  private let retryApplePasswords: @MainActor () -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var failedToOpenSettings = false
 
-  public init(openChromiumSettings: @escaping @MainActor (URL) -> Bool) {
+  @State private var passwordProvider = 0
+  @State private var passwordStatus = ""
+  @State private var passwordError: String?
+
+  public init(
+    readPasswordSettings: @escaping @MainActor () -> (provider: Int, status: String),
+    setPasswordProvider: @escaping @MainActor (Int) -> String?,
+    retryApplePasswords: @escaping @MainActor () -> Void,
+    openChromiumSettings: @escaping @MainActor (URL) -> Bool
+  ) {
+    self.readPasswordSettings = readPasswordSettings
+    self.setPasswordProvider = setPasswordProvider
+    self.retryApplePasswords = retryApplePasswords
     self.openChromiumSettings = openChromiumSettings
   }
   private enum Page: Hashable { case general }
@@ -66,6 +81,37 @@ public struct BrowserSettingsView: View {
           }
           .padding(.vertical, 6)
         }
+        Section("密码管理") {
+          Picker("密码管理器", selection: Binding(
+            get: { passwordProvider },
+            set: { value in
+              passwordError = setPasswordProvider(value)
+              refreshPasswordSettings()
+            }
+          )) {
+            Text("Apple iCloud 密码扩展").tag(0)
+            Text("Chromium 内置密码管理").tag(1)
+            Text("关闭密码保存与自动填充").tag(2)
+          }
+          Text(passwordStatus)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          if passwordProvider == 0 {
+            openButton("Apple 官方 iCloud 密码扩展", url: "https://chromewebstore.google.com/detail/icloud-passwords/pejdijmoenmkgeppbflobdenhhabjlaj", symbol: "key.icloud")
+            openButton("管理扩展／检查启用状态", url: "chrome://extensions/", symbol: "puzzlepiece.extension")
+            Button("手动重试 Apple 连接") {
+              retryApplePasswords()
+              refreshPasswordSettings()
+            }
+            Text("需要你手动安装并启用官方扩展，按 Apple 的弹窗授权。Cio 不读取 Apple 密码库；连接失败不会切换密码库。")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+          openButton("查看与管理 Chromium 密码", url: "chrome://password-manager/passwords", symbol: "key")
+          Text("偏好保存在 Chromium Profile 并直接控制引擎。Apple／关闭模式停用 Chromium 密码保存与填充；选择 Chromium／关闭时会停用 Apple 扩展。切回 Apple 后请在扩展管理中启用。已有密码保留，地址和银行卡设置保持独立。")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
         Section("浏览器设置") {
           settingsButton("Chrome 设置", path: "", symbol: "slider.horizontal.3")
           settingsButton("首选语言", path: "languages", symbol: "globe")
@@ -81,6 +127,18 @@ public struct BrowserSettingsView: View {
       .navigationTitle("通用")
     }
     .frame(minWidth: 700, minHeight: 440)
+    .onAppear { refreshPasswordSettings() }
+    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("CioPasswordSettingsChanged"))) { _ in
+      refreshPasswordSettings()
+    }
+    .alert("无法更改密码管理器", isPresented: Binding(
+      get: { passwordError != nil },
+      set: { if !$0 { passwordError = nil } }
+    )) {
+      Button("好", role: .cancel) { passwordError = nil }
+    } message: {
+      Text(passwordError ?? "")
+    }
     .alert("无法打开 Chrome 设置", isPresented: $failedToOpenSettings) {
       Button("好", role: .cancel) {}
     } message: {
@@ -89,8 +147,12 @@ public struct BrowserSettingsView: View {
   }
 
   private func settingsButton(_ title: String, path: String, symbol: String) -> some View {
+    openButton(title, url: "chrome://settings/\(path)", symbol: symbol)
+  }
+
+  private func openButton(_ title: String, url: String, symbol: String) -> some View {
     Button {
-      guard let url = URL(string: "chrome://settings/\(path)") else { return }
+      guard let url = URL(string: url) else { return }
       guard openChromiumSettings(url) else {
         failedToOpenSettings = true
         return
@@ -106,6 +168,12 @@ public struct BrowserSettingsView: View {
     }
     .buttonStyle(.plain)
     .accessibilityHint("在 Cio 的标签页中打开")
+  }
+
+  private func refreshPasswordSettings() {
+    let settings = readPasswordSettings()
+    passwordProvider = settings.provider
+    passwordStatus = settings.status
   }
 
   private var speedPosition: Binding<Double> {

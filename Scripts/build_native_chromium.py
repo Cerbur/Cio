@@ -52,6 +52,9 @@ def prepare():
           '      "browser/ui/cio/CioExtensionUI.mm",\n'
           '      "browser/ui/cio/CioExtensionRemoval.mm",\n'
           '      "browser/ui/cio/CioTabExtensions.mm",\n'
+          '      "browser/ui/cio/CioApplePasswordRouting.mm",\n'
+          '      "browser/ui/cio/CioPasswordPreferences.mm",\n'
+          '      "browser/ui/cio/CioPasswords.mm",\n'
           '      "browser/ui/cio/CioRoot.mm",\n')
     # The component build does not export CrApplication's constructors or its
     # pool policy. Export the three entry points the hosted subclass uses,
@@ -152,6 +155,7 @@ def prepare():
     exports = "chrome/app/framework.exports"
     patch(exports, '_ChromeMain\n', '_ChromeMain\n_CioNativeStart\n_CioNativeIsInitialized\n_CioNativeShutdown\n'
           '_CioNativePump\n_CioNativeFlushCookies\n_CioNativeSetDarkAppearance\n'
+          '_CioNativePasswordSettings\n_CioNativeSetPasswordProvider\n_CioNativeRetryApplePasswords\n'
           '_OBJC_CLASS_$_BrowserBridge\n_OBJC_METACLASS_$_BrowserBridge\n'
           '_OBJC_CLASS_$_BrowserConnectionInfo\n_OBJC_METACLASS_$_BrowserConnectionInfo\n')
     patch(exports, '_ChromeMain\n',
@@ -162,6 +166,7 @@ def prepare():
           '_OBJC_METACLASS_$_CioExtensionRemovalRequest\n')
 
     patch("chrome/browser/ui/prefs/prefs_tab_helper.cc", "  WebPreferences pref_defaults;",
+          '  registry->RegisterIntegerPref("cio.password_provider", 0);\n'
           '  registry->RegisterBooleanPref("cio.language_defaults_initialized", false);\n'
           "  WebPreferences pref_defaults;")
     patch("chrome/browser/profiles/profile_impl.cc",
@@ -308,6 +313,11 @@ def prepare():
           '#endif\n\n'
           '  if (result.empty()) {\n'
           '    error_message = "Can\'t find native messaging host " + host_name;')
+
+    # Password UI is hosted per WebContents; retain the upstream model,
+    # suggestion delegates, save/update controller, generation and auth paths.
+    from cio_password_overlay import prepare_password_overlay
+    prepare_password_overlay(patch)
 
     patch(browser, '#include "chrome/browser/ui/browser.h"',
           '#include "chrome/browser/ui/browser.h"\n#if BUILDFLAG(IS_MAC)\n'

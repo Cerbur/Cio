@@ -1,6 +1,8 @@
 #import "chrome/browser/ui/cio/BrowserBridge.h"
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
 #include "chrome/browser/ui/cio/CioTabExtensions.h"
+#include "chrome/browser/ui/cio/CioPasswords.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "components/find_in_page/find_tab_helper.h"
@@ -294,7 +296,7 @@ class PageObserver final : public content::WebContentsObserver {
   if (!_contents) return;
   // Navigation/selection callbacks must not steal the extension popup's
   // keyboard. AppKit's transient dismissal returns focus when it closes.
-  if (focused && _extensions && _extensions->HasPopup()) return;
+  if (focused && ((_extensions && _extensions->HasPopup()) || cio::PasswordUIHasFocus(_contents))) return;
   if (focused && [self nativeCanFocus]) {
     // Every Cio tab owns a Browser. Keep Chromium's last-active window order
     // aligned with the selected pane so extension APIs resolve its active tab.
@@ -304,6 +306,8 @@ class PageObserver final : public content::WebContentsObserver {
     _contents->Focus();
   }
   else if (!focused) {
+    cio::CancelPasswordUI(_contents);
+    cio::CancelApplePasswordRequests(_contents);
     if (auto* widget = _contents->GetRenderWidgetHostView())
       widget->GetRenderWidgetHost()->Blur();
     NSResponder* responder = _parent.window.firstResponder;
@@ -556,6 +560,19 @@ void RefreshDevTools() {
 bool CanFocusBrowser(Browser* browser) {
   auto found = Browsers().find(browser);
   return found != Browsers().end() && [found->second nativeCanFocus];
+}
+content::WebContents* PasswordContentsForExtensionTab(int tab_id) {
+  for (auto& [browser, bridge] : Browsers()) {
+    auto* contents = [bridge nativeContents];
+    if (contents && extensions::ExtensionTabUtil::GetTabId(contents) == tab_id) return contents;
+  }
+  return nullptr;
+}
+bool CanPresentPasswordUI(content::WebContents* contents) {
+  for (auto& [browser, bridge] : Browsers()) {
+    if ([bridge nativeContents] == contents) return [bridge nativeCanFocus];
+  }
+  return false;
 }
 void ShowFindBar(Browser* browser, bool focus) {
   auto found = Browsers().find(browser);

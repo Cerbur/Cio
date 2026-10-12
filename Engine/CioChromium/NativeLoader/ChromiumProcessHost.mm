@@ -90,6 +90,9 @@ BOOL PrepareProfile(NSString* root, NSError** error) {
 + (void)doMessageLoopWork { if (initialized) CioNativePump(); }
 + (void)flushCookiesWithCompletion:(void (^)(BOOL))completion { CioNativeFlushCookies(completion); }
 + (void)setDarkAppearance:(BOOL)dark { if (initialized) CioNativeSetDarkAppearance(dark); }
++ (NSDictionary*)passwordSettings { return CioNativePasswordSettings(); }
++ (NSString*)setPasswordProvider:(NSInteger)provider { return CioNativeSetPasswordProvider(provider); }
++ (void)retryApplePasswords { CioNativeRetryApplePasswords(); }
 + (BOOL)hasLiveChromeSettingsBrowsers { return NO; }
 + (void)closeChromeSettingsWithCompletion:(void (^)(void))completion { completion(); }
 + (BOOL)openChromeSettingsURL:(NSURL*)url {

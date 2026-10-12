@@ -44,7 +44,15 @@ struct CioApp: App {
     // SwiftUI installs the native Settings menu item and Command-comma, which
     // AppKit dispatches even while Chromium owns the browser's first responder.
     Settings {
-      BrowserSettingsView { url in
+      BrowserSettingsView(
+        readPasswordSettings: {
+          let settings = ChromiumProcessHost.passwordSettings()
+          return ((settings["provider"] as? NSNumber)?.intValue ?? 0,
+                  settings["status"] as? String ?? "密码设置不可用。")
+        },
+        setPasswordProvider: { ChromiumProcessHost.setPasswordProvider($0) },
+        retryApplePasswords: { ChromiumProcessHost.retryApplePasswords() }
+      ) { url in
         guard !runtime.workspaceStore.isTerminating else { return false }
         runtime.presentedInternalPanel = nil
         return runtime.workspaceStore.createTab(url: url, title: "设置") != nil

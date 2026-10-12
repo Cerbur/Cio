@@ -1,6 +1,7 @@
 #include "chrome/browser/ui/cio/CioNativeRuntime.h"
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
 #include "chrome/browser/ui/cio/CioHostedMessagePump.h"
+#include "chrome/browser/ui/cio/CioPasswords.h"
 #import "chrome/browser/ui/cio/CioNativeExports.h"
 
 #include <algorithm>
@@ -120,6 +121,7 @@ int CioNativeStart(int argc, const char **argv) {
     auto* profile = ProfileManager::GetLastUsedProfile();
     State().profile_keep_alive = std::make_unique<ScopedProfileKeepAlive>(
         profile, ProfileKeepAliveOrigin::kAppWindow);
+    cio::InitializePasswordPreferences(profile);
     auto* preferences = profile->GetPrefs();
     if (!preferences->GetBoolean("cio.language_defaults_initialized")) {
       std::vector<std::string> languages;
@@ -150,6 +152,8 @@ BOOL CioNativeIsInitialized() { return State().initialized; }
 void CioNativeShutdown() {
   if (!State().content) return;
   State().initialized = false;
+  cio::CancelAllPasswordUI();
+  cio::ShutdownPasswordPreferences();
   cio::ShutdownDownloads();
   if (State().browser) {
     State().browser->Shutdown();
@@ -191,3 +195,7 @@ void CioNativeSetDarkAppearance(BOOL dark) {
                                         : ui::NativeTheme::PreferredColorScheme::kLight);
   theme->NotifyOnNativeThemeUpdated();
 }
+
+NSDictionary* CioNativePasswordSettings() { return cio::PasswordSettingsSnapshot(); }
+NSString* CioNativeSetPasswordProvider(NSInteger provider) { return cio::SetPasswordProvider(static_cast<int>(provider)); }
+void CioNativeRetryApplePasswords() { cio::RetryAppleConnection(); }

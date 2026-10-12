@@ -98,7 +98,10 @@ Objective-C 接口改变时也必须同步更新 CioChromium 接口版本和 UI 
 2026-10-08 在 Cio 内实际播放了两个本地测试视频，H.264/H.265 均解码至 2 秒。
 这不代表所有视频编码参数或 DRM 内容均支持。此构建不包含 Google 私有
 服务或 Widevine。Cio 使用自己的 UI；Chrome 特有的自动填充提示、扩展工具栏等
-Views 气泡没有完整映射到 AppKit。DevTools 使用 Cio 容器，当前固定为停靠模式。
+Views 气泡没有全部映射到 AppKit。密码建议、保存／更新、生成和跨站确认已接到
+原生 AppKit controller 适配层；Apple 官方扩展使用系统 Native Messaging 宿主。
+实现、授权边界、隔离测试及尚未执行的真实填充验收见 [PASSWORDS.md](PASSWORDS.md)。
+DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
 
