@@ -616,6 +616,20 @@ class DownloadObserver final : public download::DownloadItem::Observer {
   ~DownloadObserver() override { if (item_) item_->RemoveObserver(this); }
   void OnDownloadUpdated(download::DownloadItem* item) override {
     BrowserBridge* bridge = bridge_;
+    // Download lifetime belongs to the Profile, not its originating tab.
+    // Immutable values continue reaching the application after that tab closes.
+    [NSNotificationCenter.defaultCenter postNotificationName:@"CioDownloadUpdated" object:nil userInfo:@{
+      @"identifier": @(item->GetId()),
+      @"url": base::SysUTF8ToNSString(item->GetURL().spec()),
+      @"name": base::SysUTF8ToNSString(item->GetFileNameToReportUser().value()),
+      @"suggestedName": base::SysUTF8ToNSString(item->GetSuggestedFilename()),
+      @"contentDisposition": base::SysUTF8ToNSString(item->GetContentDisposition()),
+      @"mimeType": base::SysUTF8ToNSString(item->GetMimeType()),
+      @"originalURL": base::SysUTF8ToNSString(item->GetOriginalUrl().spec()),
+      @"destination": base::SysUTF8ToNSString(item->GetTargetFilePath().value()),
+      @"received": @(item->GetReceivedBytes()), @"total": @(item->GetTotalBytes()),
+      @"state": @(item->GetState()), @"interruptReason": @(item->GetLastReason())
+    }];
     if (!bridge) return;
     if (item->GetState() == download::DownloadItem::INTERRUPTED)
       LOG(ERROR) << "Cio download interrupted: "
@@ -646,9 +660,9 @@ std::map<uint32_t, std::unique_ptr<DownloadObserver>>& Downloads() {
 }
 }
 namespace cio {
-base::FilePath DownloadPath(download::DownloadItem* item) {
+std::optional<base::FilePath> DownloadPath(download::DownloadItem* item) {
   BrowserBridge* bridge = BridgeForContents(content::DownloadItemUtils::GetOriginalWebContents(item));
-  if (!bridge) return {};
+  if (!bridge) return std::nullopt;
   auto name = net::GenerateFileName(item->GetURL(), item->GetContentDisposition(),
       "UTF-8", item->GetSuggestedFilename(), item->GetMimeType(), "download");
   NSString* path = [bridge.delegate browserBridge:bridge destinationPathForDownloadIdentifier:item->GetId()

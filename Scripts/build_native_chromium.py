@@ -49,6 +49,7 @@ def prepare():
           '      "browser/ui/cio/BrowserBridge.mm",\n'
           '      "browser/ui/cio/CioBrowserWindow.mm",\n'
           '      "browser/ui/cio/CioDialogs.mm",\n'
+          '      "browser/ui/cio/CioPermissions.mm",\n'
           '      "browser/ui/cio/CioWebAuthnDialogs.mm",\n'
           '      "browser/ui/cio/CioExtensionUI.mm",\n'
           '      "browser/ui/cio/CioExtensionRemoval.mm",\n'
@@ -356,6 +357,24 @@ def prepare():
           '  if (result.empty()) {\n'
           '    error_message = "Can\'t find native messaging host " + host_name;')
 
+    permissions = "chrome/browser/ui/views/permissions/permission_prompt_factory.cc"
+    patch(permissions, '#include "chrome/browser/ui/permission_bubble/permission_prompt.h"',
+          '#include "chrome/browser/ui/permission_bubble/permission_prompt.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioNativeRuntime.h"\n'
+          '#include "chrome/browser/ui/cio/CioPermissions.h"\n#endif')
+    patch(permissions, '  if (delegate->ShouldDropCurrentRequestIfCannotShowQuietly() &&',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) return cio::CreatePermissionPrompt(web_contents, delegate);\n'
+          '#endif\n  if (delegate->ShouldDropCurrentRequestIfCannotShowQuietly() &&')
+    media_picker = "chrome/browser/ui/views/media_picker_utils.cc"
+    patch(media_picker, '#include "ui/views/window/dialog_delegate.h"',
+          '#include "ui/views/window/dialog_delegate.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(media_picker, '  // If |web_contents| is not a background page then the picker will be shown',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (auto* hosted = cio::CreateMediaPickerDialog(delegate, web_contents)) return hosted;\n'
+          '#endif\n  // If |web_contents| is not a background page then the picker will be shown')
+
     # Password UI is hosted per WebContents; retain the upstream model,
     # suggestion delegates, save/update controller, generation and auth paths.
     from cio_password_overlay import prepare_password_overlay
@@ -399,7 +418,17 @@ def prepare():
           '#if BUILDFLAG(IS_MAC)\n'
           '  if (base::CommandLine::ForCurrentProcess()->HasSwitch("cio-embedded-browser")) {\n'
           '    auto selected_path = cio::DownloadPath(download);\n'
-          '    if (!selected_path.empty()) download_path = selected_path;\n'
+          '    if (selected_path) {\n'
+          '      if (selected_path->empty()) {\n'
+          '        download::DownloadTargetInfo failure;\n'
+          '        failure.interrupt_reason = download::DOWNLOAD_INTERRUPT_REASON_FILE_ACCESS_DENIED;\n'
+          '        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(\n'
+          '            FROM_HERE, base::BindOnce(std::move(target_determined_callback),\n'
+          '                std::move(failure), safe_browsing::DownloadFileType::NOT_DANGEROUS));\n'
+          '        return true;\n'
+          '      }\n'
+          '      download_path = *selected_path;\n'
+          '    }\n'
           '  }\n#endif')
     devtools = "chrome/browser/devtools/devtools_window.cc"
     patch(devtools, '    if (!devtools_ui_controller || !devtools_ui_controller->CanDockDevtools()) {\n'

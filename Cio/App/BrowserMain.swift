@@ -81,6 +81,8 @@ enum BrowserMain {
     // Chromium actually completes a browser teardown for a loaded page.
     SpacesSelfTest.installIfRequested(runtime: runtime)
 
+    DownloadCloseSelfTest.installIfRequested(runtime: runtime)
+
     scheduleToolingHooksIfRequested(runtime: runtime)
     SidebarDragProbe.installIfRequested(runtime: runtime) // PROBE-LINE
 

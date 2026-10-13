@@ -157,8 +157,15 @@ final class CioShellController: NSViewController {
   }
 
   override func loadView() {
-    windowChrome.shouldCloseWindow = { [weak workspace = runtime.workspaceStore] in
-      workspace?.flushSessionPersistence() ?? true
+    windowChrome.shouldCloseWindow = { [weak runtime] in
+      guard let runtime else { return true }
+      guard runtime.workspaceStore.flushSessionPersistence() else { return false }
+      if runtime.downloadManager.activeDownloadCount > 0 {
+        // Keep the native window available for the app's download quit sheet.
+        NSApp.terminate(nil)
+        return false
+      }
+      return true
     }
     addChild(mainViewController)
     addChild(railController)

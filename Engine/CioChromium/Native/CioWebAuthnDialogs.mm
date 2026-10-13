@@ -132,6 +132,18 @@ std::unique_ptr<views::Widget> CreateWebAuthnDialog(
       std::make_unique<WebAuthnSheet>(widget.get(), manager));
   return widget;
 }
+views::Widget* CreateMediaPickerDialog(views::DialogDelegate* view, content::WebContents* contents) {
+  if (!IsHostedBrowser() || !contents) return nullptr;
+  auto* manager = web_modal::WebContentsModalDialogManager::FromWebContents(
+      constrained_window::GetTopLevelWebContents(contents));
+  if (!manager) return nullptr;
+  view->SetModalType(ui::mojom::ModalType::kNone);
+  auto* widget = views::DialogDelegate::CreateDialogWidget(
+      view, gfx::NativeWindow(), gfx::NativeView());
+  manager->ShowDialogWithManager(widget->GetNativeWindow(),
+      std::make_unique<WebAuthnSheet>(widget, manager));
+  return widget;
+}
 bool ShowWebAuthnDialog(views::Widget* widget) {
   auto found = Sheets().find(widget);
   if (found == Sheets().end()) return false;

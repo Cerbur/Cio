@@ -30,6 +30,20 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>Web URLs</string>
+		<key>CFBundleTypeRole</key><string>Viewer</string>
+		<key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array>
+	</dict></array>
+	<key>NSCameraUsageDescription</key>
+	<string>Cio lets websites use your camera only after you allow access.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cio lets websites use your microphone only after you allow access.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Cio lets websites use your location only after you allow access.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Cio lets websites use your location only after you allow access.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Cio uses Bluetooth to let you sign in to websites with a passkey from a nearby phone or security device.</string>
 	<key>NSPrincipalClass</key>

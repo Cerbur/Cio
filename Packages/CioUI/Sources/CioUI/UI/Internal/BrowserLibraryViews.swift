@@ -330,7 +330,9 @@ private struct DownloadRow: View {
           if isActive {
             VStack(alignment: .leading, spacing: 4) {
               ProgressView(value: item.progress)
-                .tint(Color.accentColor.opacity(0.82))
+                // The native progress control resolves its own system tint.
+                // Tinting it with a derived accentColor feeds the SwiftUI tint
+                // back through AppKit's appearance and can recurse indefinitely.
                 .frame(height: 5)
               HStack(spacing: 8) {
                 Text(progressDetail)
@@ -372,6 +374,9 @@ private struct DownloadRow: View {
             }
             .buttonStyle(.link)
             .font(.caption)
+          } else if item.state == .failed {
+            Text(item.failureDescription ?? "无法保存文件。请检查下载目录权限后重试。")
+              .font(.caption).foregroundStyle(.secondary)
           } else {
             Color.clear
           }

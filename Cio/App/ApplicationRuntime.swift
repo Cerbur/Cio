@@ -16,6 +16,7 @@
 
 import CioChromium
 import CioEngine
+import CioModel
 import Combine
 import CioUI
 import Foundation
@@ -199,20 +200,54 @@ final class ApplicationRuntime: ObservableObject {
       }
       return destination.path
     }
-    store.sessionManager.onDownloadUpdated = { [weak self] _, update in
-      self?.downloadManager.update(
-        downloadID: update.downloadID,
-        sourceURL: update.sourceURL,
-        suggestedFileName: update.suggestedFileName,
-        metadata: update.metadata,
-        destinationURL: update.destinationURL,
-        receivedBytes: update.receivedBytes,
-        totalBytes: update.totalBytes,
-        isInProgress: update.isInProgress,
-        isComplete: update.isComplete,
-        isCancelled: update.isCancelled,
-        isInterrupted: update.isInterrupted)
-    }
+    NotificationCenter.default.publisher(for: Notification.Name("CioDownloadUpdated"))
+      .sink { [weak self] notification in MainActor.assumeIsolated {
+        self?.receiveDownloadUpdate(notification.userInfo)
+      }}.store(in: &nativeActionObservations)
+  }
+
+  private func receiveDownloadUpdate(_ values: [AnyHashable: Any]?) {
+    guard let values, let id = values["identifier"] as? NSNumber,
+          let rawURL = values["url"] as? String, let url = URL(string: rawURL),
+          let state = values["state"] as? NSNumber else { return }
+    let total = (values["total"] as? NSNumber)?.int64Value ?? 0
+    let path = values["destination"] as? String ?? ""
+    let original = values["originalURL"] as? String ?? ""
+    downloadManager.update(
+      downloadID: id.uint32Value, sourceURL: url,
+      suggestedFileName: values["name"] as? String ?? "download",
+      metadata: DownloadMetadata(
+        cefSuggestedFileName: values["suggestedName"] as? String ?? "",
+        contentDisposition: values["contentDisposition"] as? String ?? "",
+        mimeType: values["mimeType"] as? String ?? "",
+        originalURL: URL(string: original)),
+      destinationURL: path.isEmpty ? nil : URL(fileURLWithPath: path),
+      receivedBytes: (values["received"] as? NSNumber)?.int64Value ?? 0,
+      totalBytes: total > 0 ? total : nil,
+      isInProgress: state.intValue == 0, isComplete: state.intValue == 1,
+      isCancelled: state.intValue == 2, isInterrupted: state.intValue == 3,
+      failureReason: (values["interruptReason"] as? NSNumber)?.intValue)
+  }
+
+  private var pendingExternalURLs: [URL] = []
+
+  func openExternalURLs(_ urls: [URL]) {
+    guard !workspaceStore.isTerminating else { return }
+    pendingExternalURLs.append(contentsOf: urls.filter { ExternalWebURL.accepts($0) })
+    guard didAppearInWindow else { return }
+    drainExternalURLs()
+  }
+
+  private func drainExternalURLs() {
+    guard !workspaceStore.isTerminating else { return }
+    let urls = pendingExternalURLs
+    pendingExternalURLs.removeAll()
+    guard !urls.isEmpty else { return }
+    presentedInternalPanel = nil
+    workspaceStore.dismissSpotlight(focusPage: false)
+    for url in urls { _ = workspaceStore.createTab(url: url) }
+    NSApp.mainWindow?.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
   }
 
   func showHistory() {
@@ -290,6 +325,7 @@ final class ApplicationRuntime: ObservableObject {
     // target, so explicitly complete the initial hand-off once the real
     // window exists. Subsequent address-field focus remains user-controlled.
     workspaceStore.selectedSession?.focusPage()
+    drainExternalURLs()
     onMainWindowAppeared?()
     presentWorkspaceRecovery()
     if sessionStore.recoveryStatus == .none, workspaceStore.persistenceFailed {

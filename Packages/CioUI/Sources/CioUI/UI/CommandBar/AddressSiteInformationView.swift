@@ -168,6 +168,23 @@ struct AddressSiteInformationView: View {
       }
       .buttonStyle(.plain)
       .accessibilityIdentifier("site-information-security")
+      if let url = information.url,
+         ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+        Button("网站权限…") {
+          guard var origin = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+          origin.path = ""
+          origin.query = nil
+          origin.fragment = nil
+          origin.user = nil
+          origin.password = nil
+          var settings = URLComponents(string: "chrome://settings/content/siteDetails")!
+          settings.queryItems = [URLQueryItem(name: "site", value: origin.string)]
+          guard let target = settings.url else { return }
+          state.dismiss()
+          NotificationCenter.default.post(name: Notification.Name("CioOpenChromeSettings"), object: target)
+        }
+        .accessibilityIdentifier("site-information-permissions")
+      }
       Text("连接安全信息用于说明数据传输和网站身份验证情况，并不保证网站内容可信。")
         .font(.system(size: 12))
         .foregroundStyle(.secondary)

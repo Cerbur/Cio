@@ -22,12 +22,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ApplicationRuntime.shared.startMessagePump()
   }
 
+  func application(_ application: NSApplication, open urls: [URL]) {
+    ApplicationRuntime.shared.openExternalURLs(urls)
+  }
+
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     true
   }
 
   private var terminator: ApplicationRuntime.Terminator?
   private var terminationReady = false
+  private var downloadConfirmation: NSAlert?
+  private var confirmedDownloadCancellation = false
 
   /// Cancel this request so the native key event and any enclosing Chromium call
   /// return completely. terminateLater enters a nested modal loop INSIDE
@@ -40,8 +46,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return .terminateNow
     }
 
-    // Repeated Cmd+Q requests must neither restart cleanup nor reset its clock.
+    // Keep in-progress files alive unless the user explicitly quits and cancels.
+    // Repeated quit requests must not stack sheets or start engine teardown.
     guard terminator == nil else { return .terminateCancel }
+    if runtime.downloadManager.activeDownloadCount > 0 && !confirmedDownloadCancellation {
+      guard downloadConfirmation == nil, let window = NSApp.mainWindow else { return .terminateCancel }
+      let alert = NSAlert()
+      alert.messageText = "下载尚未完成"
+      alert.informativeText = "退出 Cio 会取消正在进行的下载。"
+      alert.addButton(withTitle: "继续下载")
+      alert.addButton(withTitle: "退出并取消下载")
+      downloadConfirmation = alert
+      alert.beginSheetModal(for: window) { [weak self] response in
+        guard let self else { return }
+        self.downloadConfirmation = nil
+        if response == .alertSecondButtonReturn {
+          self.confirmedDownloadCancellation = true
+          NSApp.terminate(nil)
+        }
+      }
+      return .terminateCancel
+    }
+    // Repeated Cmd+Q requests must neither restart cleanup nor reset its clock.
     guard runtime.workspaceStore.flushSessionPersistence() else { return .terminateCancel }
     runtime.markShutdownPhase("T0")
     runtime.record("appkit:should-terminate(entered)")

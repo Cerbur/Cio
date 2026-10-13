@@ -1,4 +1,5 @@
 import SwiftUI
+import CioEngine
 
 /// Native Settings scene: sidebar categories and grouped system-style forms.
 public struct BrowserSettingsView: View {
@@ -9,6 +10,7 @@ public struct BrowserSettingsView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var failedToOpenSettings = false
 
+  @StateObject private var defaultBrowser = DefaultBrowserSettings()
   @State private var passwordProvider = 0
   @State private var passwordStatus = ""
   @State private var passwordError: String?
@@ -81,6 +83,26 @@ public struct BrowserSettingsView: View {
           }
           .padding(.vertical, 6)
         }
+        Section("默认浏览器") {
+          Text(defaultBrowser.isDefault ? "Cio 已是默认浏览器" : "从其他应用打开网页时使用 Cio。")
+          Button(defaultBrowser.isChanging ? "正在设置…" : "设为默认浏览器") {
+            defaultBrowser.requestDefault()
+          }
+          .disabled(defaultBrowser.isDefault || defaultBrowser.isChanging)
+          if let error = defaultBrowser.error {
+            Text(error).font(.caption).foregroundStyle(.secondary)
+          }
+        }
+        Section("网站权限") {
+          settingsButton("管理网站权限", path: "content", symbol: "hand.raised")
+          Button("macOS 隐私与安全") {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security") {
+              NSWorkspace.shared.open(url)
+            }
+          }
+          Text("网站权限与 macOS 授权分别管理。拒绝系统授权后，可在隐私与安全中重新允许。")
+            .font(.caption).foregroundStyle(.secondary)
+        }
         Section("密码管理") {
           Picker("密码管理器", selection: Binding(
             get: { passwordProvider },
@@ -127,7 +149,10 @@ public struct BrowserSettingsView: View {
       .navigationTitle("通用")
     }
     .frame(minWidth: 700, minHeight: 440)
-    .onAppear { refreshPasswordSettings() }
+    .onAppear { refreshPasswordSettings(); defaultBrowser.refresh() }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      defaultBrowser.refresh()
+    }
     .onReceive(NotificationCenter.default.publisher(for: Notification.Name("CioPasswordSettingsChanged"))) { _ in
       refreshPasswordSettings()
     }

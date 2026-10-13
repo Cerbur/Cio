@@ -73,6 +73,7 @@ public struct DownloadItem: Identifiable, Equatable, Sendable {
   public var state: DownloadState
   public var startedAt: Date
   public var finishedAt: Date?
+  public var failureDescription: String? = nil
 
   public var progress: Double? {
     guard let totalBytes, totalBytes > 0 else { return nil }
@@ -223,6 +224,7 @@ public final class DownloadManager: ObservableObject {
     isComplete: Bool,
     isCancelled: Bool,
     isInterrupted: Bool,
+    failureReason: Int? = nil,
     now: Date = Date()
   ) {
     let index: Int
@@ -281,6 +283,14 @@ public final class DownloadManager: ObservableObject {
     }
     if newState.isTerminal, item.finishedAt == nil {
       item.finishedAt = now
+    }
+    if item.state == .failed {
+      switch failureReason ?? 0 {
+      case 1...14: item.failureDescription = "无法保存文件。请检查下载目录的权限和剩余空间。"
+      case 20...29: item.failureDescription = "网络连接中断。请检查网络后重新下载。"
+      case 30...39: item.failureDescription = "服务器无法提供文件，或登录已过期。请回到来源页面重试。"
+      default: item.failureDescription = "下载未完成。请回到来源页面重新下载。"
+      }
     }
     items[index] = item
   }

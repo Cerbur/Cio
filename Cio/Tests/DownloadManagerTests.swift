@@ -27,6 +27,20 @@ final class DownloadManagerTests: XCTestCase {
     try super.tearDownWithError()
   }
 
+  func testNetworkInterruptionHasActionableFailureWithoutInventingCompletion() throws {
+    let manager = manager()
+    let destination = try XCTUnwrap(manager.prepareDownload(
+      downloadID: 99, sourceURL: sourceURL, suggestedFileName: "partial.bin"))
+    manager.update(downloadID: 99, sourceURL: sourceURL, suggestedFileName: "partial.bin",
+      destinationURL: destination, receivedBytes: 40, totalBytes: 100,
+      isInProgress: false, isComplete: false, isCancelled: false, isInterrupted: true,
+      failureReason: 20)
+    XCTAssertEqual(manager.items[0].state, .failed)
+    XCTAssertEqual(manager.items[0].receivedBytes, 40)
+    XCTAssertTrue(manager.items[0].failureDescription?.contains("网络") == true)
+    XCTAssertEqual(manager.activeDownloadCount, 0)
+  }
+
   private func manager() -> DownloadManager {
     DownloadManager(downloadsDirectory: directory)
   }
