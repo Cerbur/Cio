@@ -396,6 +396,14 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.reload()
   }
 
+  func reloadIgnoringCache() {
+    guard !isClosed, hasBrowser else { return }
+    beginNavigation()
+    AppLog.navigation.info("reload ignoring cache")
+    onLifecycleEvent?("navigation:reloadIgnoringCache")
+    bridge?.reloadIgnoringCache()
+  }
+
   func stop() {
     AppLog.navigation.info("stop")
     onLifecycleEvent?("navigation:stop")

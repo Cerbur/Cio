@@ -41,6 +41,13 @@ struct BrowserCommands: Commands {
       }
       .keyboardShortcut("r", modifiers: .command)
 
+      Button("Reload Without Cache") {
+        workspace.selectedSession?.reloadIgnoringCache()
+      }
+      .keyboardShortcut("r", modifiers: [.command, .shift])
+      .disabled(!(workspace.selectedSession?.hasBrowser ?? false)
+                || (workspace.selectedSession?.isClosed ?? true))
+
       Divider()
 
       Button("Open Location…") {

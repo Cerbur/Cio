@@ -286,6 +286,22 @@ def prepare():
           '#endif\n\n'
           '  // Windowing system takes ownership.')
 
+    # Cio hosts WebContents in AppKit, so its native window deliberately has
+    # no Views BrowserView. SadTabController uses this lookup on creation,
+    # reinstallation and destruction; leave the overlay to Cio's existing
+    # renderer-crash UI without entering the Chrome-only window invariant.
+    sad_tab = "chrome/browser/ui/sad_tab_controller.cc"
+    patch(sad_tab, '#include "chrome/browser/ui/sad_tab_controller.h"',
+          '#include "chrome/browser/ui/sad_tab_controller.h"\n'
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioNativeRuntime.h"\n#endif')
+    patch(sad_tab,
+          'ContentsWebView* FindContentsWebView(content::WebContents* web_contents) {',
+          'ContentsWebView* FindContentsWebView(content::WebContents* web_contents) {\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) return nullptr;\n'
+          '#endif')
+
     # Native installers know standard Chrome/Chromium directories, not Cio's
     # custom user-data directory. Resolve their manifests without copying them
     # or changing origin, executable, enterprise-policy or host validation.

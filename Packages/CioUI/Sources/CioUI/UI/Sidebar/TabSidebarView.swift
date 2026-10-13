@@ -286,7 +286,7 @@ struct TabSidebarView: View {
         promptRename(space)
       }
       .padding(.horizontal, BrowserLayout.sidebarContentInset)
-      .padding(.top, BrowserLayout.sidebarTopPinSpacing)
+      .padding(.top, BrowserLayout.sidebarSpaceHeaderTopInset)
       .padding(.bottom, BrowserLayout.sidebarSpaceHeaderSpacing)
       .onSidebarFrameChange { frame in
         if space.id == workspace.selectedSpaceID { tabDrag.spaceHeaderFrame = frame }

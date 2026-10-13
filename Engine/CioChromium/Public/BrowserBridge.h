@@ -171,6 +171,8 @@ __attribute__((visibility("default")))
 - (void)goBack;
 - (void)goForward;
 - (void)reload;
+/// Reloads the current page and its resources bypassing Chromium's cache.
+- (void)reloadIgnoringCache;
 - (void)stopLoading;
 - (void)viewPageSource;
 

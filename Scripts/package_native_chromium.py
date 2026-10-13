@@ -24,6 +24,21 @@ def macho(path):
     with path.open('rb') as stream:
         return stream.read(4) in (b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xca\xfe\xba\xbe')
 
+def copy_runtime_image(origin, destination):
+    # copy2 truncates an existing vnode. A running browser/renderer can still
+    # have signed pages mapped from it, and macOS kills that process when a
+    # changed page is faulted in. Publish a new inode on the same filesystem;
+    # existing mappings retain the old bytes until their processes exit.
+    destination = Path(destination)
+    with tempfile.NamedTemporaryFile(prefix='.cio-image-', dir=destination.parent,
+                                     delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        shutil.copy2(origin, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
 def main():
     metadata = json.loads((ENGINE / 'cio-native-build.json').read_text())
     if not metadata.get('native_backend_built'):
@@ -58,7 +73,7 @@ def main():
     for name in set(previous) - set(names):
         path = FRAMEWORKS / name
         if path.parent == FRAMEWORKS and path.is_file(): path.unlink()
-    for path in libraries: shutil.copy2(path, FRAMEWORKS / path.name)
+    for path in libraries: copy_runtime_image(path, FRAMEWORKS / path.name)
     manifest.write_text(json.dumps(names, indent=2) + '\n')
     # Helpers are nested much deeper than Cio's executable. Give every runtime
     # image its own bundle-relative search path; no build-directory fallback.
@@ -81,7 +96,7 @@ def main():
             run('install_name_tool', '-delete_rpath', old_path, str(image))
         for relative_path in dict.fromkeys((rpath, '@loader_path', '@loader_path/Libraries')):
             run('install_name_tool', '-add_rpath', relative_path, str(image))
-        shutil.copy2(image, binary)
+        copy_runtime_image(image, binary)
         temporary.cleanup()
     notices = CONTENTS / 'Resources/ThirdPartyNotices'
     notices.mkdir(parents=True, exist_ok=True)

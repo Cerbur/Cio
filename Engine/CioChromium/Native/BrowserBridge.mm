@@ -229,6 +229,7 @@ class PageObserver final : public content::WebContentsObserver {
 - (void)goBack { if (_contents && _contents->GetController().CanGoBack()) _contents->GetController().GoBack(); }
 - (void)goForward { if (_contents && _contents->GetController().CanGoForward()) _contents->GetController().GoForward(); }
 - (void)reload { if (_contents) _contents->GetController().Reload(content::ReloadType::NORMAL, false); }
+- (void)reloadIgnoringCache { if (_contents) _contents->GetController().Reload(content::ReloadType::BYPASSING_CACHE, false); }
 - (void)stopLoading { if (_contents) _contents->Stop(); }
 - (void)viewPageSource {
   if (_contents) [self.delegate browserBridge:self didRequestNewTabWithURL:

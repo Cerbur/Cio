@@ -16,7 +16,8 @@ public enum BrowserLayout {
   public static let webPageSplitDropWidthFraction: CGFloat = 1.0 / 5
   public static let webPageSplitDragDistance: CGFloat = 48
   public static let sidebarContentInset = sidebarRowSpacing
-  public static let sidebarTopPinSpacing: CGFloat = 9
+  // Both grid axes use the same internal gap as the Tab rows.
+  public static let sidebarTopPinSpacing = sidebarRowSpacing
   public static let sidebarTabRowHeight: CGFloat = 36
   public static let sidebarTabCloseButtonWidth: CGFloat = 29
   public static let sidebarTabTrailingInset: CGFloat = 3
@@ -29,10 +30,11 @@ public enum BrowserLayout {
   public static let sidebarTabIconSlotWidth: CGFloat = 20
   public static let sidebarTabLabelSpacing: CGFloat = 9
   public static let sidebarSplitLabelFontSize: CGFloat = 12
+  public static let sidebarSpaceHeaderTopInset: CGFloat = 9
   public static let sidebarSpaceHeaderSpacing: CGFloat = 4
-  public static let sidebarSpaceHeaderHeight = sidebarTopPinSpacing + sidebarTabRowHeight + sidebarSpaceHeaderSpacing
+  public static let sidebarSpaceHeaderHeight = sidebarSpaceHeaderTopInset + sidebarTabRowHeight + sidebarSpaceHeaderSpacing
   // Blur starts at the Space title row's bottom edge; its top edge is hidden.
-  public static let sidebarScrollHiddenBoundary = sidebarTopPinSpacing
+  public static let sidebarScrollHiddenBoundary = sidebarSpaceHeaderTopInset
   public static let sidebarScrollTransitionHeight = sidebarTabRowHeight
   public static let sidebarScrollFadeHeight = sidebarScrollTransitionHeight
   public static let sidebarScrollBlurRadius: CGFloat = 18

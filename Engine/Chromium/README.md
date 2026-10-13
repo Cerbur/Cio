@@ -105,6 +105,20 @@ DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
 
+2026-10-12：针对 `FindContentsWebView → SadTabController → SadTabHelper`
+的主进程闪退，宿主模式的 sad-tab 容器查找直接返回空，保留 Chrome 原有查找
+和断言；页面退出仍由 BrowserBridge 通知 Cio 已有的错误提示和 Reload 按钮。
+`python3 Scripts/verify_renderer_crash.py` 编译引擎实际查找函数，使用有原生窗口、
+无 Views BrowserView 的 fixture：修复前在 `browser_view` 断言处中止，修复后通过，
+同时覆盖重复查找和普通 Chrome 容器。此检查不启动应用，不代表端到端恢复验收。
+
+同日渲染进程日志出现 `CODESIGNING / Invalid Page`。打包脚本改用临时文件与
+同目录原子替换发布组件库和修改过 rpath 的镜像，避免 `copy2` 原地截断旧进程
+已经映射的 vnode。`python3 Scripts/verify_runtime_image_copy.py` 使用实际打包函数
+和内存映射 fixture；修复前旧映射字节被改写，修复后连续两次替换都保留旧映射、
+更新目标内容并保留执行权限。构建中的整个 app bundle 仍不是事务式发布；
+正在运行的旧实例应在构建后退出并重新打开。
+
 语言下拉菜单回归检查：`python3 Scripts/verify_hosted_message_pump.py`。
 它使用应用实际的宿主消息泵源码与固定 Chromium base 库，覆盖菜单作用域
 反复进入、模式恢复、菜单期间任务执行、主线程/后台 UI 线程工厂分流，
