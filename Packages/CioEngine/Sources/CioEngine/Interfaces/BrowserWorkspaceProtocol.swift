@@ -35,6 +35,10 @@ public protocol BrowserWorkspaceProtocol: BrowserEngineObservable {
   func clearTemporaryTabs(in spaceID: UUID)
   func presentSpotlight()
 
+  /// Preserve unsaved workspace state by refusing window close when disk IO fails.
+  @discardableResult
+  func flushSessionPersistence() -> Bool
+
   @discardableResult
   func loadInSelectedTab(_ url: URL) -> Bool
 

@@ -186,6 +186,7 @@ struct SpotlightView: View {
         SpotlightInputField(
           input: input,
           focusGeneration: focusGeneration,
+          acceptsFocus: { presentation.isPresented },
           onChange: { value, isComposing, allowsCompletion in
             input.edit(value, isComposing: isComposing, allowsAutomaticCompletion: allowsCompletion)
             selectedIndex = 0
@@ -339,6 +340,7 @@ struct SpotlightView: View {
 private struct SpotlightInputField: NSViewRepresentable {
   let input: SpotlightInputState
   let focusGeneration: Int
+  let acceptsFocus: () -> Bool
   let onChange: (String, Bool, Bool) -> Void
   let onAcceptCompletion: () -> Void
   let onSubmit: () -> Void
@@ -349,6 +351,10 @@ private struct SpotlightInputField: NSViewRepresentable {
 
   func makeNSView(context: Context) -> CioAddressField {
     let field = CioAddressField()
+    field.allowsHiddenEditorFocus = true
+    field.acceptsFocusRequest = { [weak coordinator = context.coordinator] in
+      coordinator?.parent.acceptsFocus() == true
+    }
     // Regression guard: keep .URL explicit before the field first takes focus,
     // including for search queries, and keep AddressField's content type aligned.
     // With nil, NSAutoFillHeuristicController infers password/one-time-code input.

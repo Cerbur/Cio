@@ -157,6 +157,9 @@ final class CioShellController: NSViewController {
   }
 
   override func loadView() {
+    windowChrome.shouldCloseWindow = { [weak workspace = runtime.workspaceStore] in
+      workspace?.flushSessionPersistence() ?? true
+    }
     addChild(mainViewController)
     addChild(railController)
     let shellView = BrowserShellView(

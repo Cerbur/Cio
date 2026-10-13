@@ -13,10 +13,20 @@ import Foundation
 public final class SessionStore {
   static let fileName = "session-v1.json"
 
+  public enum RecoveryStatus: Equatable {
+    case none
+    case restoredBackup
+    case startedFresh
+  }
+
   public let sessionFileURL: URL
+  public let backupFileURL: URL
   public let isEnabled: Bool
+  public private(set) var recoveryStatus: RecoveryStatus = .none
+  public private(set) var needsRepair = false
 
   private let fileManager: FileManager
+  private var protectsUnreadablePrimary = false
 
   public init(
     dataDirectory: URL? = nil,
@@ -41,30 +51,76 @@ public final class SessionStore {
       root = supportDirectory.appendingPathComponent("Cio", isDirectory: true)
     }
     sessionFileURL = root.appendingPathComponent(Self.fileName, isDirectory: false)
+    backupFileURL = root.appendingPathComponent("session-v1.backup.json", isDirectory: false)
   }
 
-  /// Loads and validates a complete snapshot. Any malformed or unsupported
-  /// file is ignored as a unit; callers start a fresh workspace instead.
+  /// Restore only a validated UUID graph. Preserve damaged input before any
+  /// later save can replace it, then fall back to the last known-good snapshot.
   public func loadSnapshot() -> WorkspaceSessionSnapshot? {
     guard isEnabled else { return nil }
-    guard fileManager.fileExists(atPath: sessionFileURL.path) else { return nil }
-
-    do {
-      let data = try Data(contentsOf: sessionFileURL)
-      let decoder = JSONDecoder()
-      decoder.dateDecodingStrategy = .iso8601
-      let snapshot = try decoder.decode(WorkspaceSessionSnapshot.self, from: data)
-      _ = try WorkspaceCollection(restoring: snapshot)
+    recoveryStatus = .none
+    needsRepair = false
+    protectsUnreadablePrimary = false
+    let hadPrimary = fileManager.fileExists(atPath: sessionFileURL.path)
+    if let snapshot = try? readSnapshot(at: sessionFileURL).snapshot {
       AppLog.session.info("workspace session snapshot restored")
       return snapshot
-    } catch let error as WorkspaceSessionSnapshotError {
-      AppLog.session.warning(
-        "workspace session snapshot ignored: \(error.description, privacy: .public)")
-    } catch {
-      // Do not include the raw data, URL fields or decoder payload in logs.
-      AppLog.session.warning("workspace session snapshot ignored: malformed or unreadable data")
+    }
+    if hadPrimary {
+      // If preservation fails, refuse subsequent writes to the original file.
+      protectsUnreadablePrimary = !preserveDamagedPrimary()
+      needsRepair = true
+    }
+    if let backup = try? readSnapshot(at: backupFileURL) {
+      recoveryStatus = .restoredBackup
+      needsRepair = true
+      if !protectsUnreadablePrimary {
+        // Repair without rotating: the only surviving good backup stays intact.
+        do {
+          try writePrivate(backup.data, to: sessionFileURL)
+          needsRepair = false
+        } catch { /* Retry through the normal save/error path. */ }
+      }
+      AppLog.session.warning("workspace restored from validated backup")
+      return backup.snapshot
+    }
+    if hadPrimary || fileManager.fileExists(atPath: backupFileURL.path) {
+      recoveryStatus = .startedFresh
+      AppLog.session.warning("workspace recovery unavailable; original files preserved")
     }
     return nil
+  }
+
+  private func readSnapshot(at url: URL) throws -> (snapshot: WorkspaceSessionSnapshot, data: Data) {
+    let data = try Data(contentsOf: url)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let snapshot = try decoder.decode(WorkspaceSessionSnapshot.self, from: data)
+    _ = try WorkspaceCollection(restoring: snapshot)
+    return (snapshot, data)
+  }
+
+  private func preserveDamagedPrimary() -> Bool {
+    do {
+      let preserved = sessionFileURL.deletingLastPathComponent()
+        .appendingPathComponent("session-v1.damaged-\(UUID().uuidString).json")
+      try fileManager.moveItem(at: sessionFileURL, to: preserved)
+      restrictFile(at: preserved)
+      return true
+    } catch {
+      AppLog.session.error("damaged workspace could not be preserved; writes blocked")
+      return false
+    }
+  }
+
+  private func restrictFile(at url: URL) {
+    try? fileManager.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))],
+                                   ofItemAtPath: url.path)
+  }
+
+  private func writePrivate(_ data: Data, to url: URL) throws {
+    try data.write(to: url, options: [.atomic])
+    restrictFile(at: url)
   }
 
   /// Writes a complete snapshot using Foundation's atomic data-write path.
@@ -72,8 +128,16 @@ public final class SessionStore {
   @discardableResult
   public func saveSnapshot(_ snapshot: WorkspaceSessionSnapshot) -> Bool {
     guard isEnabled else { return true }
+    if protectsUnreadablePrimary {
+      // Access permissions may have been repaired since launch. Retry preserving
+      // the original rather than leaving the Retry button permanently blocked.
+      guard !fileManager.fileExists(atPath: sessionFileURL.path) || preserveDamagedPrimary() else { return false }
+      protectsUnreadablePrimary = false
+    }
 
     do {
+      // Never rotate invalid domain state into the recovery copy.
+      _ = try WorkspaceCollection(restoring: snapshot)
       let parent = sessionFileURL.deletingLastPathComponent()
       try fileManager.createDirectory(
         at: parent,
@@ -90,14 +154,23 @@ public final class SessionStore {
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
       encoder.dateEncodingStrategy = .iso8601
       let data = try encoder.encode(snapshot)
-      try data.write(to: sessionFileURL, options: [.atomic])
-
-      // Workspace state contains browsing URLs. Keep the file private on
-      // filesystems that support POSIX permissions, while allowing the write
-      // to succeed on platforms/filesystems where this attribute is absent.
-      try? fileManager.setAttributes(
-        [.posixPermissions: NSNumber(value: Int16(0o600))],
-        ofItemAtPath: sessionFileURL.path)
+      if let previous = try? readSnapshot(at: sessionFileURL) {
+        try writePrivate(previous.data, to: backupFileURL)
+      } else if fileManager.fileExists(atPath: sessionFileURL.path) {
+        guard preserveDamagedPrimary() else { return false }
+      }
+      // A first save also has a recovery copy. Retain an existing valid backup
+      // when the primary was missing/damaged instead of replacing it with fresh state.
+      if (try? readSnapshot(at: backupFileURL)) == nil {
+        if fileManager.fileExists(atPath: backupFileURL.path) {
+          let preserved = parent.appendingPathComponent("session-v1.damaged-backup-\(UUID().uuidString).json")
+          try fileManager.moveItem(at: backupFileURL, to: preserved)
+          restrictFile(at: preserved)
+        }
+        try writePrivate(data, to: backupFileURL)
+      }
+      try writePrivate(data, to: sessionFileURL)
+      needsRepair = false
       AppLog.session.info("workspace session snapshot saved")
       return true
     } catch {

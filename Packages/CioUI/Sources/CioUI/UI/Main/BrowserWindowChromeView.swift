@@ -9,6 +9,7 @@ final class BrowserWindowChromeView: NSView {
   /// The point is in window coordinates. Native traffic lights are excluded here
   /// before this closure runs and remain in their AppKit titlebar parent.
   var isControlAtWindowPoint: ((NSPoint) -> Bool)?
+  var shouldCloseWindow: (() -> Bool)?
 
   private var trafficLights: [NSButton] = []
   private weak var installedWindow: NSWindow?
@@ -65,7 +66,8 @@ final class BrowserWindowChromeView: NSView {
       }
     }
     if fullScreenDelegate == nil || window.delegate !== fullScreenDelegate {
-      fullScreenDelegate = BrowserFullScreenWindowDelegate(sceneDelegate: window.delegate)
+      fullScreenDelegate = BrowserFullScreenWindowDelegate(sceneDelegate: window.delegate,
+        shouldClose: { [weak self] in self?.shouldCloseWindow?() ?? true })
       window.delegate = fullScreenDelegate
     }
     layoutTrafficLights()

@@ -26,6 +26,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   private var workspace: WorkspaceCollection
   private var lastSavedSnapshot: WorkspaceSessionSnapshot?
+  private(set) var persistenceFailed = false
 
   /// A shell-level command surface. Opening it does not create a tab.
   @Published private(set) var isSpotlightPresented = false
@@ -33,6 +34,7 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// Diagnostics and verification hooks. The store forwards runtime lifecycle
   /// events but remains the owner of all domain transitions.
   var onLifecycleEvent: ((String) -> Void)?
+  var onPersistenceFailure: (() -> Void)?
 
   init(initialTabURL: URL, sessionStore: SessionStore = SessionStore()) {
     homeURL = initialTabURL
@@ -87,6 +89,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     // selected, keeping startup cost proportional to the visible presentation.
     ensureSelectedPresentationSessions()
     publishWorkspace()
+    persistIfNeeded()
   }
 
   // MARK: - Domain projections
@@ -151,8 +154,10 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// Synchronously flushes the current durable domain state. This is called
   /// before application shutdown starts closing Chromium, and again is safe to
   /// call when no live sessions exist.
-  func flushSessionPersistence() {
+  @discardableResult
+  func flushSessionPersistence() -> Bool {
     persistIfNeeded()
+    return !persistenceFailed
   }
 
   /// A pair stays grouped in the domain even when another tab is selected.
@@ -735,9 +740,13 @@ final class BrowserWorkspaceStore: ObservableObject {
     if let previous, previous == current {
       return
     }
-    guard sessionStore.isEnabled, current != lastSavedSnapshot else { return }
+    guard sessionStore.isEnabled, current != lastSavedSnapshot || sessionStore.needsRepair else { return }
     if sessionStore.saveSnapshot(current) {
       lastSavedSnapshot = current
+      persistenceFailed = false
+    } else {
+      persistenceFailed = true
+      onPersistenceFailure?()
     }
   }
 

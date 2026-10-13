@@ -64,6 +64,9 @@ struct AddressField: NSViewRepresentable {
     // aligned with SpotlightInputField; its comment records the captured popup
     // call path and the cold-launch check needed to catch a few-frame regression.
     field.contentType = .URL
+    // Idle editor text is hidden behind the compact label. Presentation
+    // visibility, supplied below, is the authority for an explicit Cmd-L.
+    field.allowsHiddenEditorFocus = true
     field.placeholderString = AddressFieldModel.placeholder
     field.stringValue = model.compactDisplayText(for: model.committedURL)
     field.delegate = context.coordinator
@@ -99,6 +102,9 @@ struct AddressField: NSViewRepresentable {
     // field editor attached.
     field.onFocusChange = { [weak coordinator = context.coordinator] focused in
       coordinator?.reportFocusChange(focused)
+    }
+    field.acceptsFocusRequest = { [weak coordinator = context.coordinator] in
+      coordinator?.parent.acceptsInteraction() == true
     }
     context.coordinator.observeFocusRequests(for: field, model: model)
     context.coordinator.observeOutsideClicks(for: field)
@@ -199,10 +205,11 @@ struct AddressField: NSViewRepresentable {
           // Focus on the next turn so the hosting view cannot reclaim the
           // responder and discard the field editor's selection.
           DispatchQueue.main.async { [weak self, weak field, weak model] in
-            guard let self, let model, self.observedModel === model,
-                  self.parent.acceptsInteraction() else { return }
+            guard let self, let model, let field, self.observedModel === model,
+                  self.parent.acceptsInteraction(), let window = field.window,
+                  window.attachedSheet == nil else { return }
             self.reportFocusChange(true)
-            field?.focusAndSelectAll()
+            field.focusAndSelectAll()
           }
         }
       }
@@ -341,6 +348,8 @@ struct AddressField: NSViewRepresentable {
     /// -target/-action path, used by AppKit versions that send the action
     /// instead of the command selector.
     @objc func submitAction(_ sender: Any?) {
+      guard (addressField?.currentEditor() as? NSTextView)?.hasMarkedText() != true,
+            parent.acceptsInteraction() else { return }
       parent.onSubmit()
     }
 
@@ -382,6 +391,11 @@ struct AddressField: NSViewRepresentable {
 public final class CioAddressField: NSTextField {
   /// Called on the main thread when this field takes or gives up the keyboard.
   var onFocusChange: (@MainActor (Bool) -> Void)?
+  /// Deferred focus must still belong to the currently visible presentation.
+  var acceptsFocusRequest: (() -> Bool)?
+  /// Some mounted editors hide text while their enclosing presentation remains
+  /// visible. They must supply a live acceptsFocusRequest closure to opt in.
+  var allowsHiddenEditorFocus = false
 
   /// Keep the native field editor's text in sync without crossfading an old
   /// URL over the new one during the capsule's width animation.
@@ -440,8 +454,10 @@ public final class CioAddressField: NSTextField {
 
   /// Makes this field first responder with its whole value selected.
   func focusAndSelectAll() {
+    guard acceptsFocusRequest?() != false,
+          !isHiddenOrHasHiddenAncestor || (allowsHiddenEditorFocus && acceptsFocusRequest != nil),
+          let window, window.attachedSheet == nil else { return }
     refusesFirstResponder = false
-    guard let window else { return }
     if !hasKeyboardFocus(in: window) {
       _ = window.makeFirstResponder(self)
     }

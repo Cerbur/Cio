@@ -19,6 +19,7 @@ import CioEngine
 import Combine
 import CioUI
 import Foundation
+import AppKit
 
 /// Owns the Chromium runtime for the whole application.
 @MainActor
@@ -123,6 +124,7 @@ final class ApplicationRuntime: ObservableObject {
   private var didShutDownBrowserEngine = false
   private var engineShutdownInvocations = 0
   private var isTracingEnabled = false
+  private var persistenceFailurePresented = false
 
   private init() {
     let sessionStore = SessionStore()
@@ -133,6 +135,7 @@ final class ApplicationRuntime: ObservableObject {
       initialTabURL: Self.homeURL,
       sessionStore: sessionStore)
     workspaceStore = store
+    store.onPersistenceFailure = { [weak self] in self?.presentPersistenceFailure() }
     NotificationCenter.default.publisher(for: Notification.Name("CioOpenChromeSettings"))
       .sink { [weak self] notification in
         MainActor.assumeIsolated {
@@ -288,6 +291,54 @@ final class ApplicationRuntime: ObservableObject {
     // window exists. Subsequent address-field focus remains user-controlled.
     workspaceStore.selectedSession?.focusPage()
     onMainWindowAppeared?()
+    presentWorkspaceRecovery()
+    if sessionStore.recoveryStatus == .none, workspaceStore.persistenceFailed {
+      presentPersistenceFailure()
+    }
+  }
+
+  private func presentWorkspaceRecovery() {
+    guard sessionStore.recoveryStatus != .none, let window = NSApp.mainWindow else { return }
+    let alert = NSAlert()
+    alert.messageText = sessionStore.recoveryStatus == .restoredBackup
+      ? "已从备份恢复工作区" : "无法恢复上次工作区"
+    alert.informativeText = sessionStore.recoveryStatus == .restoredBackup
+      ? "已恢复最近一份可用备份。最近的部分操作可能未包含在备份中，损坏的原文件已保留。"
+      : "工作区和备份均无法读取，已打开新工作区。原文件已保留，可在资料目录中找回。"
+    alert.addButton(withTitle: "继续")
+    alert.addButton(withTitle: "查看资料目录")
+    alert.beginSheetModal(for: window) { [weak self] response in
+      if response == .alertSecondButtonReturn, let self {
+        NSWorkspace.shared.open(self.sessionStore.sessionFileURL.deletingLastPathComponent())
+      }
+    }
+  }
+
+  private func presentPersistenceFailure() {
+    guard !persistenceFailurePresented, !workspaceStore.isTerminating else { return }
+    // A save can originate inside a Chromium callback. Present after that stack unwinds.
+    persistenceFailurePresented = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let window = NSApp.mainWindow else {
+        self?.persistenceFailurePresented = false
+        return
+      }
+      let alert = NSAlert()
+      alert.messageText = "工作区尚未保存"
+      alert.informativeText = "请检查资料目录的可用空间和访问权限。当前标签页仍然保留在窗口中。"
+      alert.addButton(withTitle: "重试")
+      alert.addButton(withTitle: "查看资料目录")
+      alert.addButton(withTitle: "稍后")
+      alert.beginSheetModal(for: window) { [weak self] response in
+        guard let self else { return }
+        self.persistenceFailurePresented = false
+        if response == .alertFirstButtonReturn {
+          self.workspaceStore.flushSessionPersistence()
+        } else if response == .alertSecondButtonReturn {
+          NSWorkspace.shared.open(self.sessionStore.sessionFileURL.deletingLastPathComponent())
+        }
+      }
+    }
   }
 
   /// True once the SwiftUI window has reported that it appeared.

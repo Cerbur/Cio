@@ -9,8 +9,14 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
+#include "base/location.h"
+#include "base/memory/weak_ptr.h"
+#include "base/memory/raw_ptr.h"
+#include "base/timer/timer.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "base/message_loop/message_pump.h"
 #include "base/message_loop/message_pump_apple.h"
 #include "chrome/app/chrome_main_delegate.h"
@@ -35,12 +41,48 @@
 extern "C" int ChromeMain(int, const char **);
 
 namespace {
+// Persist cookie mutations while the application is running, not only at quit.
+// This listener never reads, copies or logs cookie values. The bounded batch
+// window is storage scheduling, independent of the UI animation preference.
+class CookiePersistence final : public network::mojom::CookieChangeListener {
+ public:
+  explicit CookiePersistence(Profile* profile) : profile_(profile) { Bind(); }
+  void OnCookieChange(const net::CookieChangeInfo&) override {
+    if (!flush_timer_.IsRunning()) {
+      flush_timer_.Start(FROM_HERE, base::Seconds(1),
+          base::BindOnce(&CookiePersistence::Flush, weak_factory_.GetWeakPtr()));
+    }
+  }
+ private:
+  void Bind() {
+    receiver_.reset();
+    profile_->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
+        ->AddGlobalChangeListener(receiver_.BindNewPipeAndPassRemote());
+    receiver_.set_disconnect_handler(base::BindOnce(
+        &CookiePersistence::Disconnected, weak_factory_.GetWeakPtr()));
+  }
+  void Disconnected() {
+    reconnect_timer_.Start(FROM_HERE, base::Seconds(1),
+        base::BindOnce(&CookiePersistence::Bind, weak_factory_.GetWeakPtr()));
+  }
+  void Flush() {
+    profile_->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
+        ->FlushCookieStore(base::DoNothing());
+  }
+  raw_ptr<Profile> profile_;
+  mojo::Receiver<network::mojom::CookieChangeListener> receiver_{this};
+  base::OneShotTimer flush_timer_;
+  base::OneShotTimer reconnect_timer_;
+  base::WeakPtrFactory<CookiePersistence> weak_factory_{this};
+};
+
 struct Runtime {
   std::unique_ptr<ChromeMainDelegate> delegate;
   std::unique_ptr<content::ContentMainRunner> content;
   std::unique_ptr<content::BrowserMainRunner> browser;
   std::unique_ptr<ScopedKeepAlive> keep_alive;
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive;
+  std::unique_ptr<CookiePersistence> cookie_persistence;
   bool initialized = false;
 };
 Runtime& State() {
@@ -121,6 +163,7 @@ int CioNativeStart(int argc, const char **argv) {
     auto* profile = ProfileManager::GetLastUsedProfile();
     State().profile_keep_alive = std::make_unique<ScopedProfileKeepAlive>(
         profile, ProfileKeepAliveOrigin::kAppWindow);
+    State().cookie_persistence = std::make_unique<CookiePersistence>(profile);
     cio::InitializePasswordPreferences(profile);
     auto* preferences = profile->GetPrefs();
     if (!preferences->GetBoolean("cio.language_defaults_initialized")) {
@@ -152,6 +195,7 @@ BOOL CioNativeIsInitialized() { return State().initialized; }
 void CioNativeShutdown() {
   if (!State().content) return;
   State().initialized = false;
+  State().cookie_persistence.reset();
   cio::CancelAllPasswordUI();
   cio::ShutdownPasswordPreferences();
   cio::ShutdownDownloads();

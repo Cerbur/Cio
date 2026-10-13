@@ -160,7 +160,7 @@ struct ToolbarAddressFieldView: View {
       AddressField(
         model: session.engineAddressField,
         isFocused: interaction.isFocused,
-        acceptsInteraction: { presentation.isVisible },
+        acceptsInteraction: { presentation.isVisible && !workspace.isSpotlightPresented },
         completion: autocomplete.isActive && autocomplete.hasUserEdited ? autocomplete.input : nil,
         dropdownHeight: AddressCapsuleLayout.panelHeight(rowCount: rowCount) - AddressCapsuleLayout.height,
         onChange: { text, isComposing, allowsCompletion in

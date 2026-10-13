@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Repeated Cmd+Q requests must neither restart cleanup nor reset its clock.
     guard terminator == nil else { return .terminateCancel }
+    guard runtime.workspaceStore.flushSessionPersistence() else { return .terminateCancel }
     runtime.markShutdownPhase("T0")
     runtime.record("appkit:should-terminate(entered)")
     terminator = ApplicationRuntime.Terminator(runtime: runtime) { [weak self] in

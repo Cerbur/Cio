@@ -53,6 +53,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   /// URL the session opens when its browser is first created.
   let initialURL: URL
+  private var requestedURL: URL
 
   @Published private(set) var title = ""
   @Published private(set) var url: URL?
@@ -195,6 +196,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   init(tabID: UUID, initialURL: URL, initialTitle: String = "") {
     self.tabID = tabID
     self.initialURL = initialURL
+    self.requestedURL = initialURL
     self.title = initialTitle
     self.url = initialURL
     super.init()
@@ -308,8 +310,8 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     // The initial load does not go through load(_:), so it is logged here; the
     // URL is sanitized like every other URL that reaches a log (the
     // Objective-C++ bridge deliberately does not log it at all).
-    AppLog.navigation.info("load \(URLLogSanitizer.sanitized(self.initialURL), privacy: .public)")
-    bridge.loadURL(initialURL.absoluteString)
+    AppLog.navigation.info("load \(URLLogSanitizer.sanitized(self.requestedURL), privacy: .public)")
+    bridge.loadURL(requestedURL.absoluteString)
   }
 
   func setDarkAppearance(_ dark: Bool) {
@@ -360,6 +362,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// a log or a lifecycle trace in full.
   func load(_ url: URL) {
     guard !isClosed else { return }
+    // Input may arrive before the native host has a window. Keep the latest
+    // request so browser creation cannot silently navigate the original URL.
+    requestedURL = url
     beginNavigation()
     let loggedURL = URLLogSanitizer.sanitized(url)
     AppLog.navigation.info("load \(loggedURL, privacy: .public)")
@@ -582,7 +587,8 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// a session that no longer wants the keyboard must not have it handed over
   /// late.
   private var canTakePageFocus: Bool {
-    !isClosed && wantsPageFocus && !isEditingFindField && containerView?.isSurfaceVisible == true
+    !isClosed && wantsPageFocus && !isEditingAddressField && !isEditingFindField
+      && containerView?.isSurfaceVisible == true && containerView?.window?.attachedSheet == nil
   }
 
   /// Returns the keyboard to Chromium.
@@ -894,7 +900,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     // still the visible selected surface *and* the keyboard is still meant for
     // page content; otherwise a background or hidden browser would steal AppKit's
     // first responder, which can be made first responder even while hidden.
-    if wantsPageFocus, containerView?.isSurfaceVisible == true {
+    if canTakePageFocus {
       bridge.setFocus(true)
     } else {
       AppLog.browser.debug(
@@ -906,6 +912,7 @@ extension BrowserSession: BrowserBridgeDelegate {
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateTitle title: String) {
     guard acceptsCallback(from: bridge) else { return }
+    guard didReceiveMainFrameURL || requestedURL.absoluteString == "about:blank" else { return }
     guard self.title != title else { return }
     self.title = title
     AppLog.navigation.debug("title changed (present=\(!title.isEmpty, privacy: .public))")
@@ -928,6 +935,10 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
     guard acceptsCallback(from: bridge) else { return }
     let value = URL(string: url)
+    // AddTabAt creates a bootstrap blank document before the requested page.
+    // It must not replace a restored URL on disk while that page is loading.
+    guard didReceiveMainFrameURL || value?.absoluteString != "about:blank"
+      || requestedURL.absoluteString == "about:blank" else { return }
     // Chromium repeats the main-frame URL on several events; only act when it
     // actually changed so the log and the address field stay quiet. The first
     // callback is still meaningful when a restored session was pre-populated
@@ -1090,7 +1101,8 @@ extension BrowserSession: BrowserBridgeDelegate {
     -> Bool
   {
     guard acceptsCallback(from: bridge) else { return false }
-    let allowed = !isClosed && isSurfaceVisible && !isEditingFindField && ownsPageKeyboard
+    let allowed = !isClosed && isSurfaceVisible && !isEditingAddressField && !isEditingFindField
+      && containerView?.window?.attachedSheet == nil && ownsPageKeyboard
     AppLog.browser.debug(
       "focus request id=\(self.tabID.uuidString, privacy: .public) source=\(fromSystem ? "system" : "navigation", privacy: .public) visible=\(self.isSurfaceVisible, privacy: .public) wants-page-focus=\(self.wantsPageFocus, privacy: .public) allowed=\(allowed, privacy: .public)"
     )

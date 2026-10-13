@@ -7,10 +7,17 @@ final class BrowserFullScreenWindowDelegate: NSObject, NSWindowDelegate {
   // NSObject's forwarding entry points are nonisolated. AppKit calls this
   // window delegate on the main thread, including selector discovery.
   nonisolated(unsafe) private weak var sceneDelegate: NSWindowDelegate?
+  private let shouldClose: () -> Bool
 
-  init(sceneDelegate: NSWindowDelegate?) {
+  init(sceneDelegate: NSWindowDelegate?, shouldClose: @escaping () -> Bool = { true }) {
     self.sceneDelegate = sceneDelegate
+    self.shouldClose = shouldClose
     super.init()
+  }
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    guard shouldClose() else { return false }
+    return sceneDelegate?.windowShouldClose?(sender) ?? true
   }
 
   func restoreDelegate(in window: NSWindow) {

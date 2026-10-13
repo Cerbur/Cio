@@ -49,6 +49,7 @@ def prepare():
           '      "browser/ui/cio/BrowserBridge.mm",\n'
           '      "browser/ui/cio/CioBrowserWindow.mm",\n'
           '      "browser/ui/cio/CioDialogs.mm",\n'
+          '      "browser/ui/cio/CioWebAuthnDialogs.mm",\n'
           '      "browser/ui/cio/CioExtensionUI.mm",\n'
           '      "browser/ui/cio/CioExtensionRemoval.mm",\n'
           '      "browser/ui/cio/CioTabExtensions.mm",\n'
@@ -285,6 +286,31 @@ def prepare():
           '          initiating_origin, initiator_document)) return;\n'
           '#endif\n\n'
           '  // Windowing system takes ownership.')
+
+    # Preserve Chromium's complete WebAuthn UI and security tracking, but use
+    # an AppKit sheet instead of an invalid NativeWidgetMac child parent.
+    auth_controller = "chrome/browser/ui/views/webauthn/authenticator_request_dialog_view_controller_views.cc"
+    patch(auth_controller, '#include <utility>',
+          '#include <utility>\n#include "build/build_config.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(auth_controller,
+          '  widget_ = constrained_window::ShowWebModalDialogViewsOwned(\n'
+          '      view_, web_contents, views::Widget::InitParams::CLIENT_OWNS_WIDGET);',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  widget_ = cio::CreateWebAuthnDialog(view_, web_contents);\n'
+          '  if (!widget_)\n'
+          '#endif\n'
+          '  widget_ = constrained_window::ShowWebModalDialogViewsOwned(\n'
+          '      view_, web_contents, views::Widget::InitParams::CLIENT_OWNS_WIDGET);')
+    auth_view = "chrome/browser/ui/views/webauthn/authenticator_request_dialog_view.cc"
+    patch(auth_view, '#include <memory>',
+          '#include <memory>\n#include "build/build_config.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(auth_view, '\n  GetWidget()->Show();',
+          '\n#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::ShowWebAuthnDialog(GetWidget())) return;\n'
+          '#endif\n  GetWidget()->Show();')
+    patch(auth_view, '    GetWidget()->Show();', '    Show();')
 
     # Cio hosts WebContents in AppKit, so its native window deliberately has
     # no Views BrowserView. SadTabController uses this lookup on creation,

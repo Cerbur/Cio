@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+from http.cookies import SimpleCookie
 
 
 PAYLOAD = (b"Cio Milestone 7 fixture payload\n" * 1024)
@@ -44,6 +45,35 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._popup_page()
         elif path == "/native-bridge":
             self._native_bridge_page()
+        elif path == "/daily":
+            self._daily_page()
+        elif path == "/daily/passkey":
+            # Runs real WebAuthn discovery and UI without an account or a real
+            # credential. Cancel is the expected end state, never authentication.
+            self._send(200, b'''<!doctype html><meta charset=utf-8><title>Passkey cancellation acceptance</title>
+              <h1>Passkey cancellation acceptance</h1>
+              <p>No account or usable credential is involved. Cancel the native dialog.</p>
+              <button id=start>Start disposable passkey request</button>
+              <p id=result>Not started</p><script>
+              document.querySelector('#start').onclick=async()=>{
+                const result=document.querySelector('#result');result.textContent='Request pending';
+                try {await navigator.credentials.get({publicKey:{
+                  challenge:crypto.getRandomValues(new Uint8Array(32)),
+                  allowCredentials:[{type:'public-key',id:new Uint8Array(32).fill(7),transports:['hybrid','usb']}],
+                  userVerification:'preferred',timeout:120000}});
+                  result.textContent='Unexpected credential result';
+                } catch(e) {result.textContent='Request ended: '+e.name;}
+              };</script>''', "text/html; charset=utf-8")
+        elif path == "/daily/oauth":
+            self._send(200, b'''<!doctype html><meta charset=utf-8><title>Test authorization</title>
+              <h1>Disposable authorization fixture</h1>
+              <p>This exercises popup navigation, opener and close; it is not a real OAuth provider.</p>
+              <a href=/daily/callback?code=fixture>Complete test authorization</a>''', "text/html; charset=utf-8")
+        elif path == "/daily/callback":
+            self._send(200, b'''<!doctype html><meta charset=utf-8><title>Test callback</title>
+              <h1>Test callback</h1><p id=result></p>
+              <button onclick="if(window.opener){window.opener.postMessage('fixture-authorized', location.origin);window.close()}">Return and close popup</button>
+              <script>document.querySelector('#result').textContent=window.opener?'PASS: opener retained':'FAIL: opener missing'</script>''', "text/html; charset=utf-8")
         elif path == "/native-child":
             self._send(200, b'''<!doctype html><meta charset=utf-8>
                 <title>Native child</title><h1>Native child</h1><p id=result></p>
@@ -89,6 +119,38 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self._slow_download()
         else:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
+
+    def do_POST(self) -> None:  # noqa: N802
+        if urlsplit(self.path).path != "/daily/login":
+            self._send(404, b"not found", "text/plain")
+            return
+        self.send_response(303)
+        # HttpOnly cookies exercise the real network store, not a JS mirror.
+        self.send_header("Set-Cookie", "cio_test_session=fixture; Path=/; HttpOnly; SameSite=Lax")
+        self.send_header("Set-Cookie", "cio_test_persistent=fixture; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400")
+        self.send_header("Location", "/daily")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _daily_page(self) -> None:
+        cookies = SimpleCookie()
+        cookies.load(self.headers.get("Cookie", ""))
+        session = cookies.get("cio_test_session")
+        persistent = cookies.get("cio_test_persistent")
+        state = "PASS: session and persistent login restored" if (
+            session and session.value == "fixture" and persistent and persistent.value == "fixture"
+        ) else "Not signed in to disposable fixture"
+        payload = ('''<!doctype html><meta charset=utf-8><title>Daily browser acceptance</title>
+          <style>body{font:18px system-ui;margin:32px}input,button{font:inherit;margin:8px;padding:8px}</style>
+          <h1>Daily browser acceptance</h1><p>''' + state + '''</p>
+          <form method=post action=/daily/login><button>Sign in to test fixture</button></form>
+          <p id=oauth>Authorization pending</p>
+          <button onclick="window.open('/daily/oauth', '_blank')">Open test authorization popup</button>
+          <p><label>Page input <input id=typing placeholder="Type here to verify page focus"></label></p>
+          <p id=echo></p><a href=/page-b>Navigate to Page B</a>
+          <script>document.querySelector('#typing').addEventListener('input',e=>document.querySelector('#echo').textContent='Page received: '+e.target.value);
+          addEventListener('message',e=>{if(e.origin===location.origin && e.data==='fixture-authorized')document.querySelector('#oauth').textContent='PASS: authorization callback received'})</script>''').encode()
+        self._send(200, payload, "text/html; charset=utf-8")
 
     def _page(self, title: str, body: str) -> None:
         payload = (

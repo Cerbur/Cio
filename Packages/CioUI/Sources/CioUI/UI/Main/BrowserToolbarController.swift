@@ -389,14 +389,14 @@ final class BrowserToolbarController: NSObject {
       if focused { siteInformation.dismiss() }
       session.addressFieldFocusChanged(focused)
     case .addressFocusRequested(let session):
-      guard isActive(session), toolbarPresentation.isVisible else { return }
+      guard isActive(session), toolbarPresentation.isVisible, !workspace.isSpotlightPresented else { return }
       siteInformation.dismiss()
       // Let the mounted field's coordinator prepare its editing state before
       // the native field/editor handoff. Address overlays are content siblings
       // and must not depend on the navigation host's window or view traversal.
       DispatchQueue.main.async { [weak self, weak session] in
         guard let self, let session, self.isActive(session),
-              self.toolbarPresentation.isVisible else { return }
+              self.toolbarPresentation.isVisible, !self.workspace.isSpotlightPresented else { return }
         NotificationCenter.default.post(
           name: .browserAddressFieldShouldFocus, object: session.engineAddressField)
       }

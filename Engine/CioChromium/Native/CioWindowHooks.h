@@ -13,6 +13,7 @@ class GURL;
 namespace base { class FilePath; }
 namespace download { class DownloadItem; }
 namespace find_in_page { class FindNotificationDetails; }
+namespace views { class Widget; class WidgetDelegate; }
 namespace cio {
 void OnBrowserWindowCreated(Browser* browser);
 void OnBrowserWindowDestroyed(Browser* browser);
@@ -26,6 +27,9 @@ bool ShowExternalProtocolDialog(content::WebContents* contents, const GURL& url,
     content::WeakDocumentPtr initiator_document);
 bool ShowHungRenderer(content::WebContents* contents, base::RepeatingClosure restart);
 bool HideHungRenderer(content::WebContents* contents);
+std::unique_ptr<views::Widget> CreateWebAuthnDialog(
+    views::WidgetDelegate* view, content::WebContents* contents);
+bool ShowWebAuthnDialog(views::Widget* widget);
 base::FilePath DownloadPath(download::DownloadItem* item);
 bool OpenNewTab(Browser* browser, const GURL& url);
 void AdoptExtensionTab(Browser* browser, content::WebContents* contents, bool active);
