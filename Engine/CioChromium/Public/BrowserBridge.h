@@ -137,6 +137,7 @@ NS_SWIFT_UI_ACTOR
     activeMatch:(NSInteger)activeMatch
     matchCount:(NSInteger)matchCount
     finalUpdate:(BOOL)finalUpdate;
+/// Inspected viewport in the shell's top-left (flipped) coordinate system.
 - (void)browserBridge:(BrowserBridge *)bridge didSetInspectedPageBounds:(NSRect)bounds;
 - (void)browserBridge:(BrowserBridge *)bridge didSetDevToolsDocked:(BOOL)docked;
 - (void)browserBridge:(BrowserBridge *)bridge didRequestInspectNode:(NSInteger)backendNodeID;
@@ -203,6 +204,10 @@ __attribute__((visibility("default")))
 - (void)executeExtensionAction:(NSString *)identifier;
 - (void)openExtensionManager;
 - (void)openExtensionStore;
+
+/// Reopens the engine's pending save/update/add-username prompt for this page.
+/// Returns NO if no such prompt remains or this page cannot present it.
+- (BOOL)showPendingPasswordPrompt;
 
 /// Starts a download through the browser's real Chromium download pipeline. The
 /// verification harness uses this to avoid making download correctness depend

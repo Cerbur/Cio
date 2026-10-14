@@ -15,7 +15,7 @@ import SwiftUI
 
 /// Geometry of the address capsule.
 ///
-/// The corner radius is half the height, making each end of the pill a circle.
+/// Preserve the standard corner radius; the system clamps it for shorter pills.
 /// The favicon and reload icon sit on the respective cap centres.
 enum AddressCapsuleLayout {
   static let rowHeight: CGFloat = 48
@@ -35,18 +35,19 @@ enum AddressCapsuleLayout {
       ? 1 + 2 * listInset + CGFloat(rowCount) * rowHeight + CGFloat(rowCount - 1) * rowSpacing : 0)
   }
   static var maximumHeight: CGFloat { panelHeight(rowCount: AddressAutocompleteModel.rowLimit) }
-  static let height = AddressCapsuleInteraction.controlDiameter
-  static let cornerRadius = height / 2
-  static let unfocusedWidthRatio: CGFloat = 0.38
-  static let focusedWidthRatio: CGFloat = 0.45
-  static let faviconSize: CGFloat = 16
-  static let endControlHitDiameter = AddressCapsuleInteraction.controlDiameter
-  static let textIdealHeight: CGFloat = 22
+  static var height: CGFloat { AddressCapsuleInteraction.controlDiameter }
+  static let cornerRadius: CGFloat = 18
+  static var unfocusedWidthRatio: CGFloat { 0.38 * BrowserLayout.chromeMetrics.addressWidthScale }
+  static var focusedWidthRatio: CGFloat { 0.45 * BrowserLayout.chromeMetrics.addressWidthScale }
+  static var faviconSize: CGFloat { BrowserLayout.addressFaviconSize }
+  static var endControlHitDiameter: CGFloat { AddressCapsuleInteraction.controlDiameter }
+  static var textIdealHeight: CGFloat { min(22, height) }
   /// Reserve matching space at both ends so idle text is centred in the pill.
-  static let endControlWidth: CGFloat = 40
+  static var endControlWidth: CGFloat { height + 4 }
 }
 
 struct ToolbarAddressFieldView: View {
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedEngine var workspace: any BrowserWorkspaceProtocol
   /// Nil follows workspace selection; a UUID keeps every address action bound
   /// to that pane's tab, even while another pane is selected.
@@ -86,8 +87,9 @@ struct ToolbarAddressFieldView: View {
     GeometryReader { geometry in
       let width = siteInformation.width(in: geometry.size.width, focused: interaction.isFocused)
       let height = siteInformation.height(rowCount: rowCount)
-      let radius: CGFloat = siteInformation.isPresented ? 24
+      let nominalRadius: CGFloat = siteInformation.isPresented ? 24
         : rowCount > 0 ? 20 : AddressCapsuleLayout.cornerRadius
+      let radius = BrowserLayout.fittedCornerRadius(nominalRadius, in: CGSize(width: width, height: height))
       if let session {
         VStack(spacing: 0) {
           addressField(for: session, width: width)
@@ -160,6 +162,7 @@ struct ToolbarAddressFieldView: View {
       AddressField(
         model: session.engineAddressField,
         isFocused: interaction.isFocused,
+        fontSize: BrowserLayout.addressTextSize,
         acceptsInteraction: { presentation.isVisible && !workspace.isSpotlightPresented },
         completion: autocomplete.isActive && autocomplete.hasUserEdited ? autocomplete.input : nil,
         dropdownHeight: AddressCapsuleLayout.panelHeight(rowCount: rowCount) - AddressCapsuleLayout.height,
@@ -184,7 +187,8 @@ struct ToolbarAddressFieldView: View {
         content.opacity(interaction.isFocused ? 1 : 0)
       }
       .overlay {
-        AddressCompactText(model: session.engineAddressField, isFocused: interaction.isFocused)
+        AddressCompactText(model: session.engineAddressField, isFocused: interaction.isFocused,
+                           fontSize: BrowserLayout.addressTextSize)
       }
       .padding(.leading, textInset)
       .accessibilityIdentifier("address-input")
@@ -202,7 +206,7 @@ struct ToolbarAddressFieldView: View {
         .contentShape(Circle())
         .zIndex(1)
         .accessibilityHidden(isExpanded)
-        .position(x: isExpanded ? AddressCapsuleLayout.suggestionIconCenter : AddressCapsuleLayout.cornerRadius,
+        .position(x: isExpanded ? AddressCapsuleLayout.suggestionIconCenter : AddressCapsuleLayout.height / 2,
                   y: AddressCapsuleLayout.height / 2)
 
       ZStack {
@@ -218,7 +222,7 @@ struct ToolbarAddressFieldView: View {
         .zIndex(1)
         .allowsHitTesting(!isExpanded)
         .accessibilityHidden(isExpanded)
-        .position(x: width - AddressCapsuleLayout.cornerRadius,
+        .position(x: width - AddressCapsuleLayout.height / 2,
                   y: AddressCapsuleLayout.height / 2)
     }
     .frame(width: width, height: AddressCapsuleLayout.height)
@@ -286,6 +290,7 @@ struct ToolbarAddressFieldView: View {
 private struct AddressCompactText: View {
   @ObservedEngine var model: any BrowserAddressEditing
   var isFocused: Bool
+  let fontSize: CGFloat
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
@@ -293,7 +298,7 @@ private struct AddressCompactText: View {
     ZStack {
       if !isFocused {
         Text(domain.isEmpty ? AddressFieldModel.placeholder : domain)
-          .font(.system(size: 13))
+          .font(.system(size: fontSize))
           .foregroundStyle(domain.isEmpty ? Color.secondary : Color.primary)
           .lineLimit(1)
           .truncationMode(.tail)
@@ -313,6 +318,7 @@ private struct AddressCompactText: View {
 /// Matches the reload control's hover timing and scale, keeping the circular
 /// hit area fixed while only the favicon gently grows and settles back.
 private struct AddressFaviconButton: View {
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedEngine var session: any BrowserSessionProtocol
   var onSiteInformationToggle: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -337,6 +343,7 @@ private struct AddressFaviconButton: View {
 
 /// Loading state comes from the selected session; the idle symbol rests upright.
 private struct AddressReloadButton: View {
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedEngine var session: any BrowserSessionProtocol
   var onReloadOrStop: () -> Void
   @Environment(\.colorScheme) private var colorScheme
@@ -380,7 +387,7 @@ private struct AddressReloadButton: View {
     let highlightsHover = isHovered && !session.isLoading
     let hoverColor = colorScheme == .dark ? Color.white : Color.black
     return Image(systemName: "arrow.triangle.2.circlepath")
-      .font(.system(size: 14, weight: .semibold))
+      .font(.system(size: BrowserLayout.addressReloadSymbolSize, weight: .semibold))
       .foregroundStyle(highlightsHover ? hoverColor : Color.secondary)
       .scaleEffect(highlightsHover ? AnimationValues.AddressField.hoverScale : 1)
       .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.AddressField.hoverDuration),
@@ -423,8 +430,9 @@ private struct NativeAddressFocusRing: NSViewRepresentable {
       let capsule = bounds.insetBy(dx: NativeAddressFocusRing.inset,
                                    dy: NativeAddressFocusRing.inset)
       NSFocusRingPlacement.only.set()
-      NSBezierPath(roundedRect: capsule, xRadius: cornerRadius,
-                   yRadius: cornerRadius).fill()
+      let radius = BrowserLayout.fittedCornerRadius(cornerRadius, in: capsule.size)
+      NSBezierPath(roundedRect: capsule, xRadius: radius,
+                   yRadius: radius).fill()
       NSGraphicsContext.restoreGraphicsState()
     }
 

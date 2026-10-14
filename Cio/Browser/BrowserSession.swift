@@ -244,6 +244,16 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   func openExtensionManager() { bridge?.openExtensionManager() }
   func openExtensionStore() { bridge?.openExtensionStore() }
 
+  func showPendingPasswordPrompt() -> Bool {
+    guard !isClosed, !rendererCrashed, let bridge else { return false }
+    addressField.cancelEditing()
+    setAddressFieldFocused(false)
+    closeFindBar()
+    wantsPageFocus = true
+    bridge.setFocus(true)
+    return bridge.showPendingPasswordPrompt()
+  }
+
   func browserBridgeDidChangeExtensions(_ bridge: BrowserBridge) {
     guard self.bridge === bridge, !isClosed else { return }
     extensionActions = bridge.extensionActions().compactMap { value in

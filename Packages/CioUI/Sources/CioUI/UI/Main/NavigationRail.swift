@@ -10,7 +10,8 @@ import SwiftUI
 struct NavigationRail: View {
   @ObservedObject var runtime: BrowserUIContext
 
-  private let buttonSize = BrowserLayout.chromeControlSize
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
+  private var buttonSize: CGFloat { BrowserLayout.chromeControlSize }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -40,7 +41,7 @@ struct NavigationRail: View {
       }
     } label: {
       Image(systemName: symbol)
-        .font(.system(size: 14.25, weight: isSelected ? .semibold : .regular))
+        .font(.system(size: BrowserLayout.railSymbolSize, weight: isSelected ? .semibold : .regular))
         .frame(width: buttonSize, height: buttonSize)
         .contentShape(SidebarTabAppearance.glassShape)
     }

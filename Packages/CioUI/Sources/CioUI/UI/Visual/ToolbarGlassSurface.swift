@@ -80,9 +80,12 @@ struct ToolbarGlassSurface: View {
 /// Keep native AppKit buttons mounted over one SwiftUI-owned native glass
 /// surface, so all three toolbar components can use the same materialize API.
 struct ToolbarNativeControlsView: View {
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
   let content: NSView
   @ObservedObject var presentation: ToolbarPresentationState
-  let size: NSSize
+  private var size: NSSize {
+    NSSize(width: BrowserLayout.chromeControlSize, height: BrowserLayout.chromeControlSize)
+  }
 
   var body: some View {
     ToolbarNativeControl(view: content)

@@ -22,6 +22,7 @@ final class BrowserSplitPaneControl: NSView {
   private var presented = false
   private var collapsedFrame = CGRect.zero
   private var expandedFrame = CGRect.zero
+  private var handleSymbolSize = BrowserLayout.splitPaneHandleSymbolSize
   var onDrag: ((BrowserSplitPaneDragEvent) -> Bool)?
   var onClose: (() -> Void)?
   var onMinimize: (() -> Void)?
@@ -70,9 +71,9 @@ final class BrowserSplitPaneControl: NSView {
     handle.contentTintColor = .secondaryLabelColor
     handle.title = ""
     handle.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: "Split Page Actions")?
-      .withSymbolConfiguration(.init(pointSize: 13, weight: .bold))
+      .withSymbolConfiguration(.init(pointSize: BrowserLayout.splitPaneHandleSymbolSize, weight: .bold))
     handle.imagePosition = .imageOnly
-    handle.imageScaling = .scaleNone
+    handle.imageScaling = .scaleProportionallyDown
     handle.isBordered = false
     handle.setButtonType(.momentaryChange)
     handle.toolTip = "Click for page actions; hold to move this page"
@@ -89,7 +90,8 @@ final class BrowserSplitPaneControl: NSView {
     handle.onEnd = { [weak self] cancelled in _ = self?.onDrag?(cancelled ? .cancel : .end) }
     addSubview(handle)
     capsule.style = .regular
-    capsule.cornerRadius = BrowserLayout.splitPaneCapsuleSize.height / 2
+    capsule.cornerRadius = BrowserLayout.fittedCornerRadius(
+      BrowserLayout.splitPaneCapsuleCornerRadius, in: BrowserLayout.splitPaneCapsuleSize)
     let content = actionContent
     content.frame = CGRect(origin: .zero, size: BrowserLayout.splitPaneCapsuleSize)
     let actions: [(NSColor, String, String, Selector)] = [
@@ -123,7 +125,7 @@ final class BrowserSplitPaneControl: NSView {
       content.addAction(button, hoverImage: hoverImage)
       buttons.append(button)
     }
-    let spacing = BrowserLayout.trafficLightSpacing
+    let spacing = BrowserLayout.splitPaneActionSpacing
     let controlsWidth = buttons.reduce(CGFloat.zero) { $0 + $1.frame.width }
       + CGFloat(max(buttons.count - 1, 0)) * spacing
     var x = (content.bounds.width - controlsWidth) / 2
@@ -141,6 +143,14 @@ final class BrowserSplitPaneControl: NSView {
              addressFrame: CGRect?, visible: Bool, revealDuration: TimeInterval) {
     if !visible { setPresented(false); return }
     guard let chromeHost else { return }
+    if handleSymbolSize != BrowserLayout.splitPaneHandleSymbolSize {
+      handleSymbolSize = BrowserLayout.splitPaneHandleSymbolSize
+      handle.image = handle.image?.withSymbolConfiguration(
+        .init(pointSize: handleSymbolSize, weight: .bold))
+    }
+    capsule.cornerRadius = BrowserLayout.fittedCornerRadius(
+      BrowserLayout.splitPaneCapsuleCornerRadius, in: BrowserLayout.splitPaneCapsuleSize)
+    actionContent.updateControlGeometry()
     // Page chrome can mount its address overlay during layout. Keep this
     // floating control above it so the capsule owns clicks in the covered area.
     if superview !== chromeHost || chromeHost.subviews.last !== self {
@@ -259,10 +269,37 @@ private final class SplitPaneActionContentView: NSView {
   private var actions: [(button: NSButton, idle: NSImage?, hover: NSImage?)] = []
   private var rolloverArea: NSTrackingArea?
   private var hovered = false
+  private var actionSize = CGSize.zero
 
   func addAction(_ button: NSButton, hoverImage: NSImage?) {
     actions.append((button, button.image, hoverImage))
     addSubview(button)
+  }
+
+  /// Resize the mounted native actions and their artwork; never scale the
+  /// glass/content layer, which would stretch circles and rollover glyphs.
+  func updateControlGeometry() {
+    let size = BrowserLayout.splitPaneActionSize
+    guard actionSize != size else { return }
+    let spacing = BrowserLayout.splitPaneActionSpacing
+    // Native autoresizing keeps the group centered as the existing capsule
+    // expands/collapses. Updating child frames from layout() invalidates the
+    // enclosing SwiftUI graph during its own layout transaction.
+    let capsuleSize = bounds.size
+    let width = CGFloat(actions.count) * size.width + CGFloat(max(0, actions.count - 1)) * spacing
+    var x = (capsuleSize.width - width) / 2
+    for index in actions.indices {
+      let configuration = NSImage.SymbolConfiguration(pointSize: size.height, weight: .regular)
+      actions[index].idle = actions[index].idle?.withSymbolConfiguration(configuration)
+      actions[index].hover = actions[index].hover?.withSymbolConfiguration(configuration)
+      actions[index].button.image = hovered ? actions[index].hover : actions[index].idle
+      actions[index].button.imageScaling = BrowserLayout.chromeMetrics.scale < 1 ? .scaleProportionallyDown : .scaleNone
+      let frame = CGRect(x: x, y: (capsuleSize.height - size.height) / 2,
+                         width: size.width, height: size.height)
+      if actions[index].button.frame != frame { actions[index].button.frame = frame }
+      x += size.width + spacing
+    }
+    actionSize = size
   }
 
   func actionButton(at point: NSPoint, from source: NSView?) -> NSButton? {

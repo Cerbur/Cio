@@ -62,6 +62,18 @@ struct BrowserCommands: Commands {
       Button("Chrome Web Store…") { runtime.openExtensionsPage(store: true) }
     }
 
+    CommandMenu("Passwords") {
+      Button("Manage Passwords…") { runtime.openPasswordsPage() }
+        .disabled(!runtime.engineStatus.isReady || workspace.isTerminating)
+      Button("Save or Update Password…") {
+        workspace.dismissSpotlight(focusPage: false)
+        if workspace.selectedSession?.showPendingPasswordPrompt() != true {
+          runtime.openPasswordsPage()
+        }
+      }
+      .disabled(runtime.presentedInternalPanel != nil || workspace.selectedSession?.hasBrowser != true)
+    }
+
     CommandGroup(after: .textEditing) {
       Divider()
       Button("Find in Page…") {

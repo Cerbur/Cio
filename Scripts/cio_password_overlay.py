@@ -90,6 +90,10 @@ def prepare_password_overlay(patch):
         '    if (!cio::CanPresentPasswordUI(web_contents()) ||\n'
         '        !cio::ChromiumPasswordsEnabled(Profile::FromBrowserContext(web_contents()->GetBrowserContext()))) return false;') +
         '\n  if (!HasBrowserWindow()) {')
+    signature = 'void ManagePasswordsUIController::OnPromptEnableAutoSignin() {'
+    patch(ui, signature, signature + branch(
+        '    if (!cio::CanPresentPasswordUI(web_contents()) ||\n'
+        '        !cio::ChromiumPasswordsEnabled(Profile::FromBrowserContext(web_contents()->GetBrowserContext()))) return;'))
 
     dialogs = 'chrome/browser/ui/views/tab_dialogs_views.cc'
     include(dialogs, '#include "chrome/browser/ui/views/tab_dialogs_views.h"')
@@ -127,6 +131,27 @@ def prepare_password_overlay(patch):
     content::WebContents* web_contents) {'''
     patch(chooser, signature, signature + branch(
         '    return cio::CreatePasswordAccountChooser(controller, web_contents);'))
+
+    autosignin = 'chrome/browser/ui/views/passwords/auto_signin_first_run_dialog_view.cc'
+    include(autosignin, '#include "chrome/browser/ui/views/passwords/auto_signin_first_run_dialog_view.h"')
+    signature = '''AutoSigninFirstRunPrompt* CreateAutoSigninPromptView(
+    CredentialManagerDialogController* controller,
+    content::WebContents* web_contents) {'''
+    patch(autosignin, signature, signature + branch(
+        '    return cio::CreatePasswordAutoSigninPrompt(controller, web_contents);'))
+
+    chooser_controller = 'chrome/browser/ui/passwords/credential_manager_dialog_controller_impl.cc'
+    include(chooser_controller, '#include "chrome/browser/ui/passwords/credential_manager_dialog_controller_impl.h"')
+    signature = '''    bool result) {
+  if (!result) {
+    return;
+  }
+  ResetDialog();'''
+    patch(chooser_controller, signature, '''    bool result) {
+  if (!result) {''' + branch('    cio::PasswordAccountAuthenticationFailed(this);') + '''
+    return;
+  }
+  ResetDialog();''')
 
     cross = 'chrome/browser/ui/views/passwords/password_cross_domain_confirmation_popup_view_views.cc'
     include(cross, '#include "chrome/browser/ui/views/passwords/password_cross_domain_confirmation_popup_view_views.h"')
@@ -211,3 +236,91 @@ def prepare_password_overlay(patch):
     signature = 'bool PasswordFeatureManagerImpl::IsGenerationEnabled() const {'
     patch(feature, signature, signature + '\n  if (' + hosted + ')\n'
           '    return pref_service_ && pref_service_->GetBoolean(prefs::kCredentialsEnableService);\n')
+
+    # Drain queued disk writes without fetching any credentials. Waiting at the
+    # store also orders the barrier after requests deferred during OSCrypt init.
+    store_interface = 'components/password_manager/core/browser/password_store/password_store_interface.h'
+    patch(store_interface, '  virtual ActionableError GetError() const = 0;',
+          '''  virtual ActionableError GetError() const = 0;
+
+  // Cio shutdown barrier. Unsupported backends report failure, never a false
+  // assertion of persistence. No credentials are read by this operation.
+  virtual void FlushForShutdown(base::OnceCallback<void(bool)> completion);''')
+    store_header = 'components/password_manager/core/browser/password_store/password_store.h'
+    patch(store_header, '  ActionableError GetError() const override;',
+          '  ActionableError GetError() const override;\n'
+          '  void FlushForShutdown(base::OnceCallback<void(bool)> completion) override;')
+    patch(store_header, '  void UnblocklistInternal(base::OnceClosure completion, LoginsResult forms);',
+          '  void UnblocklistInternal(base::OnceClosure completion, LoginsResult forms);\n'
+          '  void OnUnblocklistCompleted(base::OnceClosure completion);')
+    patch(store_header, '  base::OnceClosure post_init_callback_ = base::DoNothing();',
+          '  base::OnceClosure post_init_callback_ = base::DoNothing();\n'
+          '  unsigned pending_unblocklists_ = 0;\n'
+          '  std::vector<base::OnceCallback<void(bool)>> pending_shutdown_flushes_;')
+    store = 'components/password_manager/core/browser/password_store/password_store.cc'
+    signature = 'void PasswordStore::AddLogin(StoredCredential form,'
+    patch(store, signature, '''void PasswordStoreInterface::FlushForShutdown(base::OnceCallback<void(bool)> completion) {
+  std::move(completion).Run(false);
+}
+
+void PasswordStoreBackend::FlushForShutdown(base::OnceCallback<void(bool)> completion) {
+  std::move(completion).Run(false);
+}
+
+void PasswordStore::FlushForShutdown(base::OnceCallback<void(bool)> completion) {
+  DCHECK(main_task_runner_->RunsTasksInCurrentSequence());
+  if (!backend_) {
+    std::move(completion).Run(false);
+    return;
+  }
+  if (post_init_callback_) {
+    post_init_callback_ = std::move(post_init_callback_).Then(
+        base::BindOnce(&PasswordStore::FlushForShutdown, this, std::move(completion)));
+    return;
+  }
+  if (pending_unblocklists_) {
+    pending_shutdown_flushes_.push_back(std::move(completion));
+    return;
+  }
+  backend_->FlushForShutdown(std::move(completion));
+}
+
+void PasswordStore::OnUnblocklistCompleted(base::OnceClosure completion) {
+  DCHECK(main_task_runner_->RunsTasksInCurrentSequence());
+  CHECK_GT(pending_unblocklists_, 0u);
+  --pending_unblocklists_;
+  if (completion) std::move(completion).Run();
+  if (!pending_unblocklists_) {
+    auto flushes = std::move(pending_shutdown_flushes_);
+    for (auto& flush : flushes) FlushForShutdown(std::move(flush));
+  }
+}
+
+''' + signature)
+    signature = '''  auto adapter = base::BindOnce(&GetLoginsOrEmptyListOnFailure)
+                     .Then(base::BindOnce(&PasswordStore::UnblocklistInternal,
+                                          this, std::move(completion)));'''
+    patch(store, signature, '''  ++pending_unblocklists_;
+  auto final_completion = base::BindOnce(&PasswordStore::OnUnblocklistCompleted,
+                                        this, std::move(completion));
+  auto adapter = base::BindOnce(&GetLoginsOrEmptyListOnFailure)
+                     .Then(base::BindOnce(&PasswordStore::UnblocklistInternal,
+                                         this, std::move(final_completion)));''')
+    backend_header = 'components/password_manager/core/browser/password_store/password_store_backend.h'
+    patch(backend_header, '  virtual ActionableError GetError() = 0;',
+          '''  virtual ActionableError GetError() = 0;
+
+  virtual void FlushForShutdown(base::OnceCallback<void(bool)> completion);''')
+    built_in_header = 'components/password_manager/core/browser/password_store/password_store_built_in_backend.h'
+    patch(built_in_header, '  ActionableError GetError() override;',
+          '  ActionableError GetError() override;\n'
+          '  void FlushForShutdown(base::OnceCallback<void(bool)> completion) override;')
+    built_in = 'components/password_manager/core/browser/password_store/password_store_built_in_backend.cc'
+    signature = 'ActionableError PasswordStoreBuiltInBackend::GetError() {'
+    patch(built_in, signature, '''void PasswordStoreBuiltInBackend::FlushForShutdown(base::OnceCallback<void(bool)> completion) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  background_task_runner_->PostTaskAndReply(
+      FROM_HERE, base::DoNothing(), base::BindOnce(std::move(completion), true));
+}
+
+''' + signature)

@@ -2,6 +2,7 @@
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
 #include "chrome/browser/ui/cio/CioTabExtensions.h"
 #include "chrome/browser/ui/cio/CioPasswords.h"
+#include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
@@ -173,7 +174,6 @@ class PageObserver final : public content::WebContentsObserver {
   BOOL _closing;
   BOOL _accepted;
   BOOL _terminationRequested;
-  BOOL _devtoolsRequested;
   BOOL _devtoolsClosing;
   NSInteger _findGeneration;
   int _findRequestID;
@@ -435,6 +435,20 @@ class PageObserver final : public content::WebContentsObserver {
   info.certificateChain = chain;
   return info;
 }
+- (BOOL)showPendingPasswordPrompt {
+  if (!_contents || ![self nativeCanFocus] ||
+      !cio::ChromiumPasswordsEnabled(Profile::FromBrowserContext(_contents->GetBrowserContext()))) return NO;
+  auto* controller = ManagePasswordsUIController::FromWebContents(_contents);
+  if (!controller) return NO;
+  switch (controller->GetState()) {
+    case password_manager::ui::PENDING_PASSWORD_STATE:
+    case password_manager::ui::PENDING_PASSWORD_UPDATE_STATE:
+    case password_manager::ui::GENERATED_PASSWORD_CONFIRMATION_STATE:
+      controller->QueueOrShowBubble(/*user_action=*/true);
+      return YES;
+    default: return NO;
+  }
+}
 - (NSArray<NSDictionary<NSString*, id>*>*)extensionActions {
   return _extensions ? _extensions->Snapshot() : @[];
 }
@@ -473,12 +487,11 @@ class PageObserver final : public content::WebContentsObserver {
       blink::mojom::UserActivationNotificationType::kInteraction);
 }
 - (BOOL)showDevToolsInView:(NSView *)view {
-  if (!_contents || _closing) return NO;
-  _devtoolsParent = view; _devtoolsRequested = YES;
-  _devtoolsClosing = NO;
+  if (!_contents || _closing || _devtoolsClosing) return NO;
+  _devtoolsParent = view;
   DevToolsWindow::OpenDevToolsWindow(_contents, DevToolsOpenedByAction::kMainMenuOrMainShortcut);
   [self nativeRefreshDevTools];
-  return YES;
+  return _devtools != nullptr;
 }
 - (void)nativeRefreshDevTools {
   if (!_contents) return;
@@ -487,18 +500,27 @@ class PageObserver final : public content::WebContentsObserver {
   if (hidden && _contents->GetVisibility() == content::Visibility::VISIBLE) _contents->WasHidden();
   else if (!hidden && _contents->GetVisibility() == content::Visibility::HIDDEN) _contents->WasShown();
   if (_devtoolsClosing || _closing) return;
+  // GetInTabWebContents deliberately withholds the frontend until docking is
+  // decided. Observe its lifetime immediately so a close during loading still
+  // closes Chromium's frontend and completes the session's close callback.
+  auto* window = DevToolsWindow::GetInstanceForInspectedWebContents(_contents);
+  auto* frontend = window ? window->GetDevToolsWebContents().get() : nullptr;
+  if (!frontend) return;
+  if (frontend != _devtools) {
+    _devtools = frontend;
+    _devtoolsObserver = std::make_unique<PageObserver>(frontend, self, true);
+  }
   DevToolsContentsResizingStrategy strategy;
   auto* contents = DevToolsWindow::GetInTabWebContents(_contents, &strategy);
   if (!contents) return;
   auto bounds = strategy.bounds();
   if (_emulationParent && !bounds.IsEmpty()) {
+    // Chromium and ChromiumContainerView both use top-left coordinates. A
+    // Cocoa bottom-left conversion would place the page over bottom DevTools.
     [self.delegate browserBridge:self didSetInspectedPageBounds:NSMakeRect(
-        bounds.x(), _emulationParent.bounds.size.height - bounds.bottom(), bounds.width(), bounds.height())];
+        bounds.x(), bounds.y(), bounds.width(), bounds.height())];
   }
-  if (contents == _devtools) return;
-  _devtoolsRequested = YES;
-  _devtools = contents;
-  _devtoolsObserver = std::make_unique<PageObserver>(contents, self, true);
+  if (_devtoolsView) return;
   _devtoolsView = contents->GetNativeView().GetNativeNSView();
   _devtoolsView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   [self.delegate browserBridge:self didSetDevToolsDocked:YES];
@@ -520,7 +542,7 @@ class PageObserver final : public content::WebContentsObserver {
       didRequestExtensionTabWithURL:base::SysUTF8ToNSString(target.spec()) active:active];
 }
 - (void)nativeDevToolsClosed {
-  _devtools = nullptr; _devtoolsRequested = NO;
+  _devtools = nullptr;
   _devtoolsClosing = NO;
   [_devtoolsView removeFromSuperview]; _devtoolsView = nil;
   dispatch_async(dispatch_get_main_queue(), ^{ [self.delegate browserBridgeDidCloseDevTools:self]; });
@@ -534,11 +556,11 @@ class PageObserver final : public content::WebContentsObserver {
 }
 - (void)setDevToolsEmulationHostView:(NSView *)view { _emulationParent = view; }
 - (void)closeDevTools {
-  _devtoolsRequested = NO;
-  _devtoolsClosing = _devtools != nullptr;
-  if (_devtools) _devtools->ClosePage();
-  _devtools = nullptr;
-  [_devtoolsView removeFromSuperview]; _devtoolsView = nil;
+  if (!_devtools || _devtoolsClosing) return;
+  _devtoolsClosing = YES;
+  // WebContentsDestroyed clears the pointer and native hosts. Retain the
+  // observed frontend until that callback, including while it is still loading.
+  _devtools->ClosePage();
 }
 - (void)revealDevToolsNode:(NSInteger)node {
   if (!_devtools) return;

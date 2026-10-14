@@ -269,6 +269,14 @@ final class ApplicationRuntime: ObservableObject {
     workspaceStore.createTab(url: url, title: store ? "Chrome 应用商店" : "扩展程序")
   }
 
+  func openPasswordsPage() {
+    guard engineStatus.isReady, !workspaceStore.isTerminating,
+          let url = URL(string: "chrome://password-manager/passwords") else { return }
+    presentedInternalPanel = nil
+    workspaceStore.dismissSpotlight(focusPage: false)
+    workspaceStore.createTab(url: url, title: "密码")
+  }
+
   func toggleSpotlight() {
     if workspaceStore.isSpotlightPresented {
       dismissSpotlight()
@@ -708,10 +716,11 @@ final class ApplicationRuntime: ObservableObject {
             MainActor.assumeIsolated {
               guard let self else { return }
               if !success {
-                AppLog.cef.error("Cookie store flush could not be started")
+                AppLog.cef.error("Profile, password or cookie persistence could not be completed")
               }
               self.didCompleteCookieFlush = true
               self.runtime.record(success ? "termination:cookies-flushed" : "termination:cookie-flush-failed")
+              if success { self.runtime.record("termination:password-writes-drained") }
               self.scheduleStep()
             }
           }

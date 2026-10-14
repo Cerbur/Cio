@@ -1,4 +1,77 @@
 import AppKit
+import Combine
+
+enum BrowserChromeSize: String, CaseIterable, Identifiable {
+  case small, standard
+
+  var id: String { rawValue }
+  var title: String { self == .small ? "小号" : "标准" }
+  var scale: CGFloat { self == .small ? 0.5 : 1 }
+}
+
+/// Resolve usable control geometry from shell space, rather than shrinking
+/// every dimension equally. Standard stays unchanged; compact content retains
+/// enough height for native glass and text, with matching square action slots.
+struct BrowserChromeMetrics {
+  let scale: CGFloat
+  var thickness: CGFloat { 56 * scale }
+  var controlSize: CGFloat { min(thickness, max(22, 36 * scale)) }
+  var controlSpacing: CGFloat { (thickness - controlSize) / 2 }
+  var navigationWidth: CGFloat { 2 * controlSize + 2 * BrowserLayout.navigationCapsuleEndInset }
+  var contentScale: CGFloat { controlSize / 36 }
+  // Symbols shrink less than their containers so compact controls stay legible.
+  var symbolScale: CGFloat { contentScale.squareRoot() }
+  func symbolSize(_ standardSize: CGFloat) -> CGFloat { standardSize * symbolScale }
+  var textSize: CGFloat { 12 + min(1, max(0, (controlSize - 22) / 14)) }
+  var addressWidthScale: CGFloat { symbolScale }
+  var pageControlInset: CGFloat { 7 * contentScale }
+  var nativeControlSize: NSControl.ControlSize {
+    controlSize < 28 ? .small : controlSize < 32 ? .regular : .large
+  }
+  var splitHandleSize: CGSize {
+    CGSize(width: 36 * contentScale, height: min(8, controlSpacing * 0.8))
+  }
+  var splitCapsuleSize: CGSize { CGSize(width: 96 * symbolScale, height: 30 * symbolScale) }
+  var splitActionSize: CGSize { CGSize(width: 14 * symbolScale, height: 14 * symbolScale) }
+}
+
+/// Geometry used by the page owner in both single and split panes. Width is
+/// budgeted after navigation so a narrow pane never stretches or clips a pill.
+struct BrowserPageToolbarFrames {
+  let navigation: CGRect
+  let address: CGRect
+
+  init(bounds: CGRect, reservedLeadingEdge: CGFloat, metrics: BrowserChromeMetrics) {
+    let inset = metrics.pageControlInset
+    let navigationLeft = max(bounds.minX + inset, reservedLeadingEdge + metrics.controlSpacing)
+    navigation = CGRect(x: navigationLeft, y: bounds.midY - metrics.controlSize / 2,
+                        width: metrics.navigationWidth, height: metrics.controlSize)
+    let addressLeadingEdge = navigation.maxX + inset
+    let availableWidth = max(0, bounds.maxX - inset - addressLeadingEdge)
+    let preferredWidth = bounds.width * 0.45 * metrics.addressWidthScale
+    let width = min(availableWidth, max(180 * metrics.symbolScale, preferredWidth))
+    address = CGRect(x: min(max(bounds.midX - width / 2, addressLeadingEdge), bounds.maxX - inset - width),
+                     y: bounds.midY - metrics.controlSize / 2, width: width, height: metrics.controlSize)
+  }
+}
+
+@MainActor
+final class BrowserChromePreferences: ObservableObject {
+  static let shared = BrowserChromePreferences()
+  @Published var size: BrowserChromeSize {
+    didSet {
+      guard oldValue != size else { return }
+      UserDefaults.standard.set(size.rawValue, forKey: BrowserLayout.chromeSizePreferenceKey)
+      NotificationCenter.default.post(name: .browserChromeSizeDidChange, object: self)
+    }
+  }
+
+  private init() { size = BrowserLayout.chromeSize }
+}
+
+extension Notification.Name {
+  static let browserChromeSizeDidChange = Notification.Name("browser.chromeSizeDidChange")
+}
 
 /// The shell supplies geometry only; page controls retain their tab ownership.
 @MainActor
@@ -10,7 +83,13 @@ protocol BrowserToolbarLayoutHosting: AnyObject {
 /// Shared shell metrics. Toolbar height and navigation-rail width always use
 /// chromeThickness; changing it moves both Main View edges together.
 public enum BrowserLayout {
-  public static let chromeThickness: CGFloat = 56
+  static let chromeSizePreferenceKey = "browser.chromeSize"
+  static var chromeSize: BrowserChromeSize {
+    UserDefaults.standard.string(forKey: chromeSizePreferenceKey)
+      .flatMap(BrowserChromeSize.init(rawValue:)) ?? .standard
+  }
+  static var chromeMetrics: BrowserChromeMetrics { BrowserChromeMetrics(scale: chromeSize.scale) }
+  public static var chromeThickness: CGFloat { chromeMetrics.thickness }
   public static let mainViewEdgeInset: CGFloat = 4
   public static let contentCornerRadius: CGFloat = 14
   public static let webPageSplitDropWidthFraction: CGFloat = 1.0 / 5
@@ -41,14 +120,26 @@ public enum BrowserLayout {
   public static let sidebarRowSpacing: CGFloat = 5
   // Resting visible glass / hit slots, not merely hosting-view dimensions.
   // See the toolbar control geometry contract in AGENTS.md.
-  public static let chromeControlSize: CGFloat = 36
-  public static let chromeControlSpacing: CGFloat = 10
+  public static var chromeControlSize: CGFloat { chromeMetrics.controlSize }
+  public static var chromeControlSpacing: CGFloat { chromeMetrics.controlSpacing }
   public static let navigationCapsuleEndInset: CGFloat = 1
-  public static let navigationCapsuleWidth = 2 * chromeControlSize + 2 * navigationCapsuleEndInset
-  public static let pageControlInset: CGFloat = 7
-  public static let splitPaneHandleSize = CGSize(width: 36, height: 8)
-  public static let splitPaneCapsuleSize = CGSize(width: 96, height: 30)
-  public static let splitPaneActionSize = CGSize(width: 14, height: 14)
+  public static var navigationCapsuleWidth: CGFloat { chromeMetrics.navigationWidth }
+  public static var pageControlInset: CGFloat { chromeMetrics.pageControlInset }
+  static var toolbarSymbolSize: CGFloat { chromeMetrics.symbolSize(15) }
+  static var railSymbolSize: CGFloat { chromeMetrics.symbolSize(14.25) }
+  static var addressFaviconSize: CGFloat { chromeMetrics.symbolSize(16) }
+  static var addressReloadSymbolSize: CGFloat { chromeMetrics.symbolSize(14) }
+  static var addressTextSize: CGFloat { chromeMetrics.textSize }
+  static var nativeChromeControlSize: NSControl.ControlSize { chromeMetrics.nativeControlSize }
+  public static var splitPaneHandleSize: CGSize { chromeMetrics.splitHandleSize }
+  static var splitPaneHandleSymbolSize: CGFloat { 13 * chromeMetrics.contentScale }
+  public static var splitPaneCapsuleSize: CGSize { chromeMetrics.splitCapsuleSize }
+  static let splitPaneCapsuleCornerRadius: CGFloat = 15
+  public static var splitPaneActionSize: CGSize { chromeMetrics.splitActionSize }
+  static var splitPaneActionSpacing: CGFloat { trafficLightSpacing * chromeMetrics.symbolScale }
+  static func fittedCornerRadius(_ nominal: CGFloat, in size: CGSize) -> CGFloat {
+    min(nominal, max(0, min(size.width, size.height) / 2))
+  }
   public static let splitPaneHoldDuration: TimeInterval = 0.28
   public static let trafficLightSpacing: CGFloat = 9
   public static let sidebarMinimumWidth: CGFloat = 182

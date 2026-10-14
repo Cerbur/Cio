@@ -26,6 +26,16 @@ void Notify() {
 class PasswordPreferences final : public extensions::ExtensionRegistryObserver {
  public:
   explicit PasswordPreferences(Profile* profile) : profile_(profile) {
+    auto* prefs = profile->GetPrefs();
+    // Persist the initial selection once, before observing changes. Never
+    // replace an explicit Apple/off choice when its transport is unavailable.
+    if (prefs->FindPreference(kPasswordProviderPref)->IsDefaultValue()) {
+      const bool apple_installed = extensions::ExtensionRegistry::Get(profile)
+          ->GetInstalledExtension(kApplePasswordExtension);
+      prefs->SetInteger(kPasswordProviderPref, InitialPasswordProvider(apple_installed,
+          prefs->GetBoolean(password_manager::prefs::kCredentialsEnableService)));
+      prefs->CommitPendingWrite();
+    }
     registrar_.Init(profile->GetPrefs());
     registrar_.Add(kPasswordProviderPref, base::BindRepeating(
         &PasswordPreferences::ProviderChanged, base::Unretained(this)));

@@ -11,7 +11,7 @@ public struct BrowserSettingsView: View {
   @State private var failedToOpenSettings = false
 
   @StateObject private var defaultBrowser = DefaultBrowserSettings()
-  @State private var passwordProvider = 0
+  @State private var passwordProvider = 1
   @State private var passwordStatus = ""
   @State private var passwordError: String?
 
@@ -29,6 +29,7 @@ public struct BrowserSettingsView: View {
   private enum Page: Hashable { case general }
   @State private var selection: Page? = .general
   @ObservedObject private var animations = BrowserAnimationPreferences.shared
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
 
   public var body: some View {
     NavigationSplitView {
@@ -52,6 +53,18 @@ public struct BrowserSettingsView: View {
           }
           .frame(maxWidth: .infinity)
           .padding(.vertical, 22)
+        }
+
+        Section("界面尺寸") {
+          Picker("工具栏与导航栏", selection: $chrome.size) {
+            ForEach(BrowserChromeSize.allCases) { size in
+              Text(size.title).tag(size)
+            }
+          }
+          .pickerStyle(.segmented)
+          Text("小号缩小顶部和左侧留白，为网页腾出更多空间。")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
 
         Section("动画效果") {
@@ -111,14 +124,21 @@ public struct BrowserSettingsView: View {
               refreshPasswordSettings()
             }
           )) {
-            Text("Apple iCloud 密码扩展").tag(0)
             Text("Chromium 内置密码管理").tag(1)
+            Text("Apple iCloud 密码扩展").tag(0)
             Text("关闭密码保存与自动填充").tag(2)
           }
           Text(passwordStatus)
             .font(.caption)
             .foregroundStyle(.secondary)
           if passwordProvider == 0 {
+            Text("iCloud 密码需要 Apple 批准 Cio 的浏览器权限。当前开发签名无法连接系统密码宿主，可选择 Chromium 本机密码管理。")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Button("使用 Chromium 本机密码管理") {
+              passwordError = setPasswordProvider(1)
+              refreshPasswordSettings()
+            }
             openButton("Apple 官方 iCloud 密码扩展", url: "https://chromewebstore.google.com/detail/icloud-passwords/pejdijmoenmkgeppbflobdenhhabjlaj", symbol: "key.icloud")
             openButton("管理扩展／检查启用状态", url: "chrome://extensions/", symbol: "puzzlepiece.extension")
             Button("手动重试 Apple 连接") {

@@ -19,6 +19,7 @@ final class SpaceToolbarController: NSObject {
   private let presentation: ToolbarPresentationState
   private let controlHost: SpaceSidebarControlHostingView
   private let layoutMotion = GlassComponentLayoutMotion()
+  private var symbolSize = BrowserLayout.toolbarSymbolSize
 
   /// Stable for the controller's lifetime, including section visibility changes.
   var view: NSView { controlHost }
@@ -34,18 +35,17 @@ final class SpaceToolbarController: NSObject {
     // circular hover, press and release feedback over the shared material.
     button.bezelStyle = .glass
     button.borderShape = .circle
-    button.controlSize = .large
+    button.controlSize = BrowserLayout.nativeChromeControlSize
     button.isBordered = true
     button.showsBorderOnlyWhileMouseInside = true
     button.title = ""
     button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Sidebar")?
-      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
+      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: BrowserLayout.toolbarSymbolSize, weight: .medium))
     button.imagePosition = .imageOnly
     button.autoresizingMask = [.width, .height]
     sidebarButton = button
     controlHost = SpaceSidebarControlHostingView(rootView: ToolbarNativeControlsView(
-      content: button, presentation: presentation,
-      size: NSSize(width: height, height: height)))
+      content: button, presentation: presentation))
     super.init()
 
     controlHost.wantsLayer = true
@@ -77,6 +77,15 @@ final class SpaceToolbarController: NSObject {
       host.addSubview(controlHost, positioned: .above, relativeTo: nil)
     }
     let height = BrowserLayout.chromeControlSize
+    if sidebarButton.controlSize != BrowserLayout.nativeChromeControlSize {
+      sidebarButton.controlSize = BrowserLayout.nativeChromeControlSize
+    }
+    let desiredSymbolSize = BrowserLayout.toolbarSymbolSize
+    if symbolSize != desiredSymbolSize {
+      symbolSize = desiredSymbolSize
+      sidebarButton.image = sidebarButton.image?.withSymbolConfiguration(
+        .init(pointSize: symbolSize, weight: .medium))
+    }
     let left = max(windowControlsTrailingEdge + BrowserLayout.chromeControlSpacing,
                    sidebarAnchor.minX - height - BrowserLayout.chromeControlSpacing)
     let topInset = (BrowserLayout.chromeThickness - height) / 2

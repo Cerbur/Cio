@@ -30,6 +30,7 @@ struct AddressField: NSViewRepresentable {
   @ObservedEngine var model: any BrowserAddressEditing
   /// The toolbar controller owns the presentation state across tab changes.
   var isFocused: Bool
+  var fontSize: CGFloat = 13
   /// Local AppKit monitors bypass SwiftUI's allowsHitTesting. Read the owning
   /// toolbar's current visibility even while its native editor stays mounted.
   var acceptsInteraction: () -> Bool
@@ -72,7 +73,7 @@ struct AddressField: NSViewRepresentable {
     field.delegate = context.coordinator
     field.target = context.coordinator
     field.action = #selector(Coordinator.submitAction(_:))
-    field.font = .systemFont(ofSize: 13)
+    field.font = .systemFont(ofSize: fontSize)
     field.textColor = .labelColor
     field.alignment = .center
     field.isBezeled = false
@@ -113,6 +114,11 @@ struct AddressField: NSViewRepresentable {
 
   func updateNSView(_ field: CioAddressField, context: Context) {
     context.coordinator.parent = self
+    let font = NSFont.systemFont(ofSize: fontSize)
+    if field.font != font, (field.currentEditor() as? NSTextView)?.hasMarkedText() != true {
+      field.font = font
+      field.currentEditor()?.font = font
+    }
     context.coordinator.syncFocusFromToolbar(isFocused)
     field.alignment = isFocused ? .left : .center
     // The toolbar is reused when the selected tab changes, so the focus

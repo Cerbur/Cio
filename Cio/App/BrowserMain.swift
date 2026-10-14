@@ -41,6 +41,10 @@ enum BrowserMain {
     }
     runtime.startBrowserEngine()
 
+    if CommandLine.arguments.contains("--devtools-self-test") {
+      exit(DevToolsSelfTest.run(runtime: runtime))
+    }
+
     if runSelfTestIfRequested(runtime: runtime) {
       return
     }
@@ -108,6 +112,7 @@ enum BrowserMain {
     CommandLine.arguments.contains("--cef-self-test")
       || CommandLine.arguments.contains("--browser-self-test")
       || CommandLine.arguments.contains("--navigation-self-test")
+      || CommandLine.arguments.contains("--devtools-self-test")
       || CommandLine.arguments.contains("--tabs-self-test")
       || CommandLine.arguments.contains("--spaces-self-test")
       || CommandLine.arguments.contains { $0.hasPrefix("--session-restore-self-test=") }

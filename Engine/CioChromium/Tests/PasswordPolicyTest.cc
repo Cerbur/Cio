@@ -30,6 +30,10 @@ int main() {
   Check(ValidPasswordProvider(0) && ValidPasswordProvider(1) && ValidPasswordProvider(2), "valid provider enum");
   Check(!ValidPasswordProvider(-1) && !ValidPasswordProvider(3), "invalid provider cannot enable filling");
   Check(!ChromiumPasswordsAllowed(0) && !ChromiumPasswordsAllowed(2) && ChromiumPasswordsAllowed(1), "vault coordination");
+  Check(InitialPasswordProvider(false, true) == 1, "new profile has a working local password provider");
+  Check(InitialPasswordProvider(false, false) == 2, "initialization respects an existing save-disabled preference");
+  Check(InitialPasswordProvider(true, true) == 0 && InitialPasswordProvider(true, false) == 0,
+        "initialization preserves an installed Apple password extension");
   Check(ProviderAfterSavingChange(0, false) == 0, "Apple false privacy override keeps Apple selected");
   Check(ProviderAfterSavingChange(1, false) == 2, "engine saving off updates provider and filling");
   Check(ProviderAfterSavingChange(2, false) == 2, "off remains off");

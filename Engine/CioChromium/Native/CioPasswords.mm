@@ -13,6 +13,7 @@
 #include "chrome/browser/ui/autofill/autofill_popup_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_utils.h"
 #include "chrome/browser/ui/passwords/bubble_controllers/save_update_bubble_controller.h"
+#include "chrome/browser/ui/passwords/bubble_controllers/add_username_bubble_controller.h"
 #include "chrome/browser/ui/passwords/credential_manager_dialog_controller.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/ui/passwords/password_dialog_prompts.h"
@@ -52,6 +53,7 @@
 namespace cio {
 namespace {
 class PasswordSurface;
+void CancelAuthenticators(content::WebContents* contents);
 std::set<PasswordSurface*>& Surfaces() { static auto* value = new std::set<PasswordSurface*>; return *value; }
 std::map<content::WebContents*, PasswordSurface*>& Bubbles() {
   static auto* value = new std::map<content::WebContents*, PasswordSurface*>; return *value;
@@ -119,6 +121,11 @@ class PasswordSurface : public content::WebContentsObserver {
   }
   content::WebContents* contents() const { return web_contents(); }
   bool HasFocus() const { return panel_.isKeyWindow; }
+  bool IsComposing() const {
+    NSResponder* responder = panel_.firstResponder;
+    return [responder conformsToProtocol:@protocol(NSTextInputClient)] &&
+        [(id<NSTextInputClient>)responder hasMarkedText];
+  }
   bool Usable() const {
     const bool same = primary_.AsRenderFrameHostIfValid() && frame_.AsRenderFrameHostIfValid();
     return lease_.CanAct(same ? 1 : 0, CanPresentPasswordUI(web_contents()),
@@ -218,7 +225,10 @@ class SaveSurface final : public PasswordSurface {
               ? PasswordBubbleControllerBase::DisplayReason::kUserAction
               : PasswordBubbleControllerBase::DisplayReason::kAutomatic)) {
     Bubbles()[contents] = this;
+    update_prompt_ = controller_->IsCurrentStateUpdate();
     Text(base::SysUTF16ToNSString(controller_->GetTitle()), true);
+    if (auto origin = controller_->GetDomainForSubhead())
+      Text(base::SysUTF16ToNSString(*origin));
     Text(@"账号");
     username_ = [[NSTextField alloc] init];
     username_.stringValue = base::SysUTF16ToNSString(controller_->pending_password().username_value);
@@ -232,11 +242,19 @@ class SaveSurface final : public PasswordSurface {
     [password_ setAccessibilityLabel:@"密码（隐藏）"];
     [stack_ addArrangedSubview:password_];
     [password_.widthAnchor constraintEqualToAnchor:stack_.widthAnchor].active = YES;
-    Button(controller_->IsCurrentStateUpdate() ? @"更新密码" : @"保存密码", [this] { Finish(0); }).keyEquivalent = @"\r";
+    save_ = Button(update_prompt_ ? @"更新密码" : @"保存密码", [this] { Finish(0); });
+    save_.keyEquivalent = @"\r";
+    UpdateSaveEnabled();
+    auto weak = weak_factory_.GetWeakPtr();
+    password_change_ = [NSNotificationCenter.defaultCenter addObserverForName:NSControlTextDidChangeNotification
+        object:password_ queue:nil usingBlock:^(NSNotification*) {
+          if (weak) static_cast<SaveSurface*>(weak.get())->UpdateSaveEnabled();
+        }];
     Button(@"暂不", [this] { Finish(1); }).keyEquivalent = @"\e";
     if (!controller_->IsCurrentStateUpdate()) Button(@"此网站不保存", [this] { Finish(2); });
   }
   ~SaveSurface() override {
+    [NSNotificationCenter.defaultCenter removeObserver:password_change_];
     auto found = Bubbles().find(contents());
     if (found != Bubbles().end() && found->second == this) Bubbles().erase(found);
     // Erase and hide before controller notifications can synchronously re-enter.
@@ -247,22 +265,86 @@ class SaveSurface final : public PasswordSurface {
   }
   void Cancel() override { delete this; }
  private:
+  void UpdateSaveEnabled() {
+    save_.enabled = controller_->pending_password().IsFederatedCredential() || password_.stringValue.length > 0;
+  }
   void Finish(int choice) {
+    // A panel field editor is separate from the page's first responder. Let
+    // native IME finish composition before Return can accept the password.
+    if (IsComposing()) return;
+    if (choice == 0 && !controller_->pending_password().IsFederatedCredential() &&
+        password_.stringValue.length == 0) return;
     if (!lease_.Complete(1, CanPresentPasswordUI(contents()), Eligible(contents()))) return;
     auto controller = std::move(controller_);
+    const bool update_prompt = update_prompt_;
     auto username = base::SysNSStringToUTF16(username_.stringValue);
     auto password = base::SysNSStringToUTF16(password_.stringValue);
     delete this;
     if (choice == 0) {
       controller->OnCredentialEdited(std::move(username), std::move(password));
       controller->OnSaveClicked();
-    } else if (choice == 1) controller->OnNotNowClicked();
+    } else if (choice == 1) DeclinePasswordPrompt(*controller, update_prompt);
     else controller->OnNeverForThisSiteClicked();
     controller->OnBubbleClosing();
   }
   std::unique_ptr<SaveUpdateBubbleController> controller_;
   NSTextField* username_;
   NSSecureTextField* password_;
+  NSButton* save_;
+  bool update_prompt_ = false;
+  id password_change_;
+};
+
+// The engine already saved a generated password without a username. Complete
+// its original account-association flow instead of dropping this bubble state.
+class AddUsernameSurface final : public PasswordSurface {
+ public:
+  AddUsernameSurface(content::WebContents* contents, bool user_action)
+      : PasswordSurface(contents, true), controller_(std::make_unique<AddUsernameBubbleController>(
+          PasswordsModelDelegateFromWebContents(contents), user_action
+              ? PasswordBubbleControllerBase::DisplayReason::kUserAction
+              : PasswordBubbleControllerBase::DisplayReason::kAutomatic)) {
+    Bubbles()[contents] = this;
+    Text(base::SysUTF16ToNSString(controller_->GetTitle()), true);
+    Text(@"强密码已保存。补充账号，以便下次登录时选择并填充。");
+    username_ = [[NSTextField alloc] init];
+    username_.placeholderString = @"用户名";
+    [username_ setAccessibilityLabel:@"账号"];
+    [stack_ addArrangedSubview:username_];
+    [username_.widthAnchor constraintEqualToAnchor:stack_.widthAnchor].active = YES;
+    Button(@"保存账号", [this] { Finish(true); }).keyEquivalent = @"\r";
+    Button(@"暂不补充", [this] { Finish(false); }).keyEquivalent = @"\e";
+  }
+  ~AddUsernameSurface() override {
+    auto found = Bubbles().find(contents());
+    if (found != Bubbles().end() && found->second == this) Bubbles().erase(found);
+    CloseNative();
+    if (controller_) controller_->OnBubbleClosing();
+    username_.stringValue = @"";
+  }
+  void Cancel() override { delete this; }
+ private:
+  void Finish(bool save) {
+    if (IsComposing()) return;
+    NSString* username = [username_.stringValue stringByTrimmingCharactersInSet:
+        NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (save && !username.length) {
+      [panel_ makeKeyWindow];
+      [panel_ makeFirstResponder:username_];
+      return;
+    }
+    if (!lease_.Complete(1, CanPresentPasswordUI(contents()), Eligible(contents()))) return;
+    auto controller = std::move(controller_);
+    auto account = base::SysNSStringToUTF16(username);
+    delete this;
+    if (save) {
+      controller->OnCredentialEdited(std::move(account), controller->pending_password().password_value);
+      controller->OnSaveClicked();
+    } else controller->OnNoThanksClicked();
+    controller->OnBubbleClosing();
+  }
+  std::unique_ptr<AddUsernameBubbleController> controller_;
+  NSTextField* username_;
 };
 
 // Confirm generated-password persistence using the same model's bubble lifetime.
@@ -272,7 +354,8 @@ class ConfirmationSurface final : public PasswordSurface {
       : PasswordSurface(contents), delegate_(PasswordsModelDelegateFromWebContents(contents)) {
     Bubbles()[contents] = this;
     delegate_->OnBubbleShown();
-    Text(@"密码已由 Chromium 保存", true);
+    Text(delegate_->GetState() == password_manager::ui::UPDATE_CONFIRMATION_STATE
+        ? @"密码已更新" : @"密码已保存", true);
     Text(base::SysUTF16ToNSString(delegate_->GetPendingPassword().username_value));
     Button(@"好", [this] { Cancel(); });
   }
@@ -294,12 +377,15 @@ class SuggestionsSurface final : public autofill::AutofillPopupView, public Pass
   bool Show(autofill::AutoselectFirstSuggestion select) override {
     Rebuild();
     if (!Present(&controller_->element_bounds())) { Cancel(); return false; }
-    if (*select) SelectNext(1);
     // Keep Chromium's real input-protection barrier, including its 500ms idle
     // requirement. Native views must report their first paint to the controller.
     [panel_.contentView displayIfNeeded];
     controller_->OnPopupPainted();
-    return true;
+    // Selection can synchronously close this surface. Do it after all paint
+    // notifications and never access its members afterwards.
+    auto weak = view_weak_factory_.GetWeakPtr();
+    if (*select) SelectNext(1);
+    return !!weak;
   }
   void Hide() override { delete this; }
   void Cancel() override {
@@ -365,9 +451,9 @@ class SuggestionsSurface final : public autofill::AutofillPopupView, public Pass
       next = NextPasswordSuggestionIndex(next, count, direction);
       if (Selectable(next)) {
         selected_ = next;
-        controller_->SelectSuggestion(next);
         for (NSButton* button in rows_) button.state = button.tag == next ? NSControlStateValueOn : NSControlStateValueOff;
         AxAnnounce(controller_->GetSuggestionAt(next).main_text.value);
+        controller_->SelectSuggestion(next);  // May destroy the popup/controller.
         return;
       }
     }
@@ -439,7 +525,8 @@ class GenerationSurface final : public PasswordGenerationPopupView, public Passw
   void UpdateState() override {
     accept_.hidden = controller_->state() != PasswordGenerationPopupController::kOfferGeneration;
     reject_.hidden = accept_.hidden;
-    if (!Present(&controller_->element_bounds())) Cancel();
+    // Show() calls UpdateBoundsAndRedrawPopup immediately afterwards. That
+    // method owns cancellation; deleting here leaves its caller dangling.
   }
   bool UpdateBoundsAndRedrawPopup() override {
     if (!Present(&controller_->element_bounds())) { Cancel(); return false; }
@@ -456,10 +543,17 @@ class GenerationSurface final : public PasswordGenerationPopupView, public Passw
   NSButton* reject_;
 };
 
+class AccountSurface;
+std::map<CredentialManagerDialogController*, AccountSurface*>& AccountChoosers() {
+  static auto* value = new std::map<CredentialManagerDialogController*, AccountSurface*>;
+  return *value;
+}
 class AccountSurface final : public AccountChooserPrompt, public PasswordSurface {
  public:
   AccountSurface(CredentialManagerDialogController* controller, content::WebContents* contents)
-      : PasswordSurface(contents, true), controller_(controller) {}
+      : PasswordSurface(contents, true), controller_(controller) {
+    AccountChoosers()[controller] = this;
+  }
   ~AccountSurface() override { ControllerGone(); }
   void ShowAccountChooser() override {
     Text(base::SysUTF16ToNSString(controller_->GetAccountChooserTitle()), true);
@@ -467,25 +561,70 @@ class AccountSurface final : public AccountChooserPrompt, public PasswordSurface
     for (size_t i = 0; i < forms.size(); ++i) {
       Text(base::SysUTF8ToNSString(forms[i]->url.host()));
       Button(base::SysUTF16ToNSString(forms[i]->username_value), [this, i] {
-        if (!lease_.Complete(1, CanPresentPasswordUI(contents()), Eligible(contents()))) return;
+        if (authenticating_ || !Usable()) return;
         // Copy before the controller destroys its chooser/local credentials.
         auto form = *controller_->GetLocalForms()[i];
         auto* controller = controller_.get();
-        CloseNative();
+        authenticating_ = true;
+        // Upstream keeps the chooser alive during reauth. Its ResetDialog()
+        // owns closure on success; denial leaves a usable retry/cancel surface.
         controller->OnChooseCredentials(form, password_manager::CredentialType::CREDENTIAL_TYPE_PASSWORD);
       });
     }
     Button(@"取消", [this] { Cancel(); }).keyEquivalent = @"\e";
     if (!Present()) Cancel();
   }
-  void ControllerGone() override { controller_ = nullptr; CloseNative(); }
-  void Cancel() override {
-    auto* controller = controller_.get();
+  void AuthenticationFailed() { authenticating_ = false; }
+  void ControllerGone() override {
+    AccountChoosers().erase(controller_.get());
     controller_ = nullptr;
     CloseNative();
+  }
+  void Cancel() override {
+    auto* controller = controller_.get();
+    AccountChoosers().erase(controller);
+    controller_ = nullptr;
+    CloseNative();
+    CancelAuthenticators(contents());
     if (controller) controller->OnCloseDialog();
   }
  private:
+  raw_ptr<CredentialManagerDialogController> controller_;
+  bool authenticating_ = false;
+};
+
+// Credential Management can show this immediately after choosing an account.
+// Its stock Chrome Views modal assumes a Chrome window that Cio does not own.
+class AutoSigninSurface final : public AutoSigninFirstRunPrompt, public PasswordSurface {
+ public:
+  AutoSigninSurface(CredentialManagerDialogController* controller, content::WebContents* contents)
+      : PasswordSurface(contents, true), controller_(controller) {}
+  void ShowAutoSigninPrompt() override {
+    Text(base::SysUTF16ToNSString(controller_->GetAutoSigninPromoTitle()), true);
+    Text(base::SysUTF16ToNSString(controller_->GetAutoSigninText()));
+    Button(@"好", [this] { Finish(true); });
+    Button(@"关闭自动登录", [this] { Finish(false); });
+    if (!Present()) Cancel();
+  }
+  void ControllerGone() override {
+    controller_ = nullptr;
+    delete this;
+  }
+  void Cancel() override {
+    auto* controller = controller_.get();
+    controller_ = nullptr;
+    delete this;
+    if (controller) controller->OnCloseDialog();
+  }
+ private:
+  void Finish(bool enable) {
+    if (!lease_.Complete(1, CanPresentPasswordUI(contents()), Eligible(contents()))) return;
+    auto* controller = controller_.get();
+    CloseNative();
+    // ResetDialog invokes ControllerGone and deletes this surface.
+    if (enable) controller->OnAutoSigninOK();
+    else controller->OnAutoSigninTurnOff();
+  }
   raw_ptr<CredentialManagerDialogController> controller_;
 };
 
@@ -583,6 +722,11 @@ void CancelAuthenticators(content::WebContents* contents) {
 }
 }  // namespace
 
+void PasswordAccountAuthenticationFailed(CredentialManagerDialogController* controller) {
+  auto found = AccountChoosers().find(controller);
+  if (found != AccountChoosers().end()) found->second->AuthenticationFailed();
+}
+
 bool ShowPasswordBubble(content::WebContents* contents, bool user_action) {
   HidePasswordBubble(contents);
   if (!Eligible(contents)) return true;  // Handled; never fall through to Chrome Views.
@@ -594,7 +738,10 @@ bool ShowPasswordBubble(content::WebContents* contents, bool user_action) {
     case password_manager::ui::PENDING_PASSWORD_UPDATE_STATE:
       surface = new SaveSurface(contents, user_action); break;
     case password_manager::ui::SAVE_CONFIRMATION_STATE:
+    case password_manager::ui::UPDATE_CONFIRMATION_STATE:
       surface = new ConfirmationSurface(contents); break;
+    case password_manager::ui::GENERATED_PASSWORD_CONFIRMATION_STATE:
+      surface = new AddUsernameSurface(contents, user_action); break;
     default: return true;  // Other states are managed via chrome://password-manager/.
   }
   if (!surface->Present()) surface->Cancel();
@@ -634,6 +781,10 @@ PasswordGenerationPopupView* CreatePasswordGeneration(base::WeakPtr<PasswordGene
 std::unique_ptr<AccountChooserPrompt> CreatePasswordAccountChooser(
     CredentialManagerDialogController* controller, content::WebContents* contents) {
   return std::make_unique<AccountSurface>(controller, contents);
+}
+AutoSigninFirstRunPrompt* CreatePasswordAutoSigninPrompt(
+    CredentialManagerDialogController* controller, content::WebContents* contents) {
+  return new AutoSigninSurface(controller, contents);
 }
 base::WeakPtr<PasswordCrossDomainConfirmationPopupView> ShowPasswordCrossDomain(
     base::WeakPtr<PasswordCrossDomainConfirmationPopupControllerInterface> controller,

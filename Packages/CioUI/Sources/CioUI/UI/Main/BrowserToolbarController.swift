@@ -123,30 +123,21 @@ final class ToolbarChromeView: NSView {
 
   func applyLayout(browserRect: NSRect, preparingToShow: Bool = false) {
     guard browserRect.width > 0, presentation.isVisible || preparingToShow else { return }
-    let height = AddressCapsuleLayout.height
-    let y = (bounds.height - height) / 2
     let reservedEdge = (superview as? BrowserToolbarLayoutHosting).map {
       convert(NSPoint(x: $0.pageControlsLeadingEdge, y: 0), from: superview).x
     } ?? browserRect.minX
-    let navigationLeft = max(browserRect.minX + BrowserLayout.pageControlInset,
-                             reservedEdge + BrowserLayout.chromeControlSpacing)
-    let addressWidth = browserRect.width * AddressCapsuleLayout.focusedWidthRatio
-    let addressLeft = max(browserRect.midX - addressWidth / 2,
-                          navigationLeft + BrowserLayout.navigationCapsuleWidth + BrowserLayout.pageControlInset)
-    let navigationHeight = BrowserLayout.chromeControlSize
-    let navigationY = (bounds.height - navigationHeight) / 2
-    setFrame(NSRect(x: navigationLeft, y: navigationY,
-                    width: BrowserLayout.navigationCapsuleWidth, height: navigationHeight),
-             on: navigationGroup)
+    let frames = BrowserPageToolbarFrames(bounds: browserRect,
+      reservedLeadingEdge: reservedEdge, metrics: BrowserLayout.chromeMetrics)
+    setFrame(frames.navigation, on: navigationGroup)
     if let contentView = superview {
       if addressView.superview !== contentView {
         contentView.addSubview(addressView, positioned: .above, relativeTo: nil)
       }
-      let anchor = convert(NSRect(x: addressLeft, y: y, width: addressWidth, height: height), to: contentView)
+      let anchor = convert(frames.address, to: contentView)
       let panelHeight = max(AddressCapsuleLayout.maximumHeight,
                             AddressCapsuleLayout.height + AddressSiteInformationState.contentHeight)
       let originY = contentView.isFlipped ? anchor.minY : anchor.maxY - panelHeight
-      setFrame(NSRect(x: anchor.minX, y: originY, width: addressWidth, height: panelHeight), on: addressView)
+      setFrame(NSRect(x: anchor.minX, y: originY, width: anchor.width, height: panelHeight), on: addressView)
     }
   }
 

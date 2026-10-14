@@ -41,7 +41,10 @@ def prepare():
             if path.suffix in (".h", ".mm"):
                 target = destination / path.name
                 if not target.exists() or target.read_bytes() != path.read_bytes():
-                    shutil.copy2(path, target)
+                    # Changed bytes must get a fresh mtime. Preserving the
+                    # repository file's time can make Ninja reuse an old object
+                    # when that file was edited during the preceding build.
+                    shutil.copyfile(path, target)
     patch("chrome/BUILD.gn", '      "app/chrome_main_mac.mm",\n',
           '      "app/chrome_main_mac.mm",\n'
           '      "browser/ui/cio/CioNativeRuntime.mm",\n'
@@ -168,7 +171,7 @@ def prepare():
           '_OBJC_METACLASS_$_CioExtensionRemovalRequest\n')
 
     patch("chrome/browser/ui/prefs/prefs_tab_helper.cc", "  WebPreferences pref_defaults;",
-          '  registry->RegisterIntegerPref("cio.password_provider", 0);\n'
+          '  registry->RegisterIntegerPref("cio.password_provider", 1);\n'
           '  registry->RegisterBooleanPref("cio.language_defaults_initialized", false);\n'
           "  WebPreferences pref_defaults;")
     patch("chrome/browser/profiles/profile_impl.cc",

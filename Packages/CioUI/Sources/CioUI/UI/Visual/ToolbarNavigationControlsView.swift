@@ -15,6 +15,7 @@ final class ToolbarNavigationState: ObservableObject {
 /// One material owns the complete capsule. The stable AppKit container owns
 /// its two independent native buttons and keeps them in one responder chain.
 struct ToolbarNavigationControlsView: View {
+  @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedObject var state: ToolbarNavigationState
   @ObservedObject var presentation: ToolbarPresentationState
   let onBack: () -> Void
@@ -59,6 +60,7 @@ private final class NavigationButtonsView: NSView {
   let forward = NavigationButtonsView.button("Forward", symbol: "chevron.forward")
   var onBack: (() -> Void)?
   var onForward: (() -> Void)?
+  private var symbolSize = BrowserLayout.toolbarSymbolSize
 
   init() {
     super.init(frame: .zero)
@@ -74,7 +76,17 @@ private final class NavigationButtonsView: NSView {
 
   override func layout() {
     super.layout()
-    let size = BrowserLayout.chromeControlSize
+    let size = min(bounds.width / 2, bounds.height)
+    for button in [back, forward] where button.controlSize != BrowserLayout.nativeChromeControlSize {
+      button.controlSize = BrowserLayout.nativeChromeControlSize
+    }
+    let desiredSymbolSize = BrowserLayout.toolbarSymbolSize
+    if symbolSize != desiredSymbolSize {
+      symbolSize = desiredSymbolSize
+      for button in [back, forward] {
+        button.image = button.image?.withSymbolConfiguration(.init(pointSize: symbolSize, weight: .medium))
+      }
+    }
     back.frame = NSRect(x: 0, y: (bounds.height - size) / 2, width: size, height: size)
     forward.frame = back.frame.offsetBy(dx: size, dy: 0)
   }
@@ -88,14 +100,14 @@ private final class NavigationButtonsView: NSView {
     button.setButtonType(.momentaryPushIn)
     button.bezelStyle = .glass
     button.borderShape = .circle
-    button.controlSize = .large
+    button.controlSize = BrowserLayout.nativeChromeControlSize
     // The group supplies its sole material. A bordered bezel here would draw
     // a second independent glass circle over each half of that capsule.
     button.isBordered = false
     button.title = ""
     button.imagePosition = .imageOnly
     button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
+      .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: BrowserLayout.toolbarSymbolSize, weight: .medium))
     button.toolTip = label
     button.setAccessibilityLabel(label)
     return button

@@ -57,6 +57,10 @@ final class BrowserMainViewController: NSViewController {
     let sidebarController = NSHostingController(rootView: sidebarRootView)
     let browserController = NSHostingController(
       rootView: BrowserShellContentView(runtime: runtime, workspace: runtime.workspaceStore))
+    // The shell already reserves the shared chrome thickness. Native titlebar
+    // safe areas must not add a second inset when that reservation gets smaller.
+    sidebarController.safeAreaRegions = []
+    browserController.safeAreaRegions = []
 
     let sidebarItem = NSSplitViewItem(viewController: sidebarController)
     sidebarItem.canCollapse = true

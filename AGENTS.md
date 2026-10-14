@@ -7,6 +7,8 @@
 
 # Required shell layout constraints
 
+- Shell size is selectable in Settings → General → 界面尺寸, persisted as `browser.chromeSize`. Standard preserves the original 56 pt toolbar/rail and 36 pt controls; Small uses a 28 pt toolbar/rail with adaptive 22 pt controls, rather than halving every content dimension. Both axes and toolbar controls derive from `BrowserChromeMetrics` in `BrowserShellLayout.swift`, including intermediate scales for future continuous sizing. Symbols, text, native control size, address widths and split handles resolve from usable control space; a split handle must fit inside the actual upper gap. Preserve configured corner radii, resolving them to at most half the rendered bounds for both glass masks and native focus rings. Never stretch artwork or glass layers to obtain the resting size. The fixed dimensions below describe Standard; Small preserves their alignment, native implementation and shape contracts. Main View / Tab / Top Pin corner radius stays 14 pt and right/bottom insets stay 4 pt. Traffic lights retain their actual native size, equal red-button top/left insets and the shared vertical center.
+
 These are user-defined constraints from [the layout session](codex://threads/01a0f0a4-00f0-7101-9eee-4b1e0b1ed7ec). Preserve them when fixing interactions or changing components; change them only when the user requests a layout change.
 
 - A single `backgroundGlass` backdrop fills the entire shell. Toolbar, Main View and Navigation Rail sit above it.

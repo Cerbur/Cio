@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <string_view>
+#include <vector>
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/barrier_callback.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
 #include "base/location.h"
@@ -21,6 +23,8 @@
 #include "base/message_loop/message_pump_apple.h"
 #include "chrome/app/chrome_main_delegate.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "chrome/browser/profiles/profile.h"
@@ -223,15 +227,27 @@ void CioNativeFlushCookies(void (^completion)(BOOL)) {
       ? ProfileManager::GetLastUsedProfileIfLoaded() : nullptr;
   if (!profile) { completion(NO); return; }
   void (^callback)(BOOL) = [completion copy];
+  std::vector<scoped_refptr<password_manager::PasswordStoreInterface>> stores;
+  // Do not initialize a vault on quit if it was never opened in this process.
+  if (ProfilePasswordStoreFactory::HasStore(profile))
+    stores.push_back(ProfilePasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS));
+  if (AccountPasswordStoreFactory::HasStore(profile))
+    stores.push_back(AccountPasswordStoreFactory::GetForProfile(profile, ServiceAccessType::EXPLICIT_ACCESS));
+  std::erase(stores, nullptr);
+  auto drained = base::BarrierCallback<bool>(stores.size() + 1, base::BindOnce(
+      [](void (^done)(BOOL), std::vector<bool> results) {
+        done(std::all_of(results.begin(), results.end(), [](bool success) { return success; }));
+      }, callback));
+  for (auto& store : stores) store->FlushForShutdown(drained);
   // The host waits for this boundary before shutting down Chromium. Include
   // extension enablement, permissions and other pending Profile preferences,
   // rather than relying on their delayed writer during engine teardown.
   profile->GetPrefs()->CommitPendingWrite(base::BindOnce(
-      [](Profile* profile, void (^done)(BOOL)) {
+      [](Profile* profile, base::RepeatingCallback<void(bool)> done) {
         profile->GetDefaultStoragePartition()->GetCookieManagerForBrowserProcess()
             ->FlushCookieStore(base::BindOnce(
-                [](void (^callback)(BOOL)) { callback(YES); }, done));
-      }, profile, callback));
+                [](base::RepeatingCallback<void(bool)> callback) { callback.Run(true); }, done));
+      }, profile, drained));
 }
 void CioNativeSetDarkAppearance(BOOL dark) {
   auto* theme = ui::NativeTheme::GetInstanceForNativeUi();

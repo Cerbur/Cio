@@ -138,6 +138,7 @@ final class CioShellController: NSViewController {
   private var sidebarItem: NSSplitViewItem { mainViewController.sidebarItem }
 
   private var spotlightObservation: AnyCancellable?
+  private var chromeSizeObservation: AnyCancellable?
   private var spotlightHostingView: SpotlightHostingView?
   private var spotlightPresentationState: SpotlightPresentationState?
   private var spotlightRemovalTask: Task<Void, Never>?
@@ -200,6 +201,14 @@ final class CioShellController: NSViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
     observeSpotlight()
+    chromeSizeObservation = NotificationCenter.default.publisher(for: .browserChromeSizeDidChange)
+      .receive(on: RunLoop.main)
+      .sink { [weak self] _ in
+        guard let self else { return }
+        self.windowChrome.invalidateIntrinsicContentSize()
+        self.view.needsLayout = true
+        self.view.layoutSubtreeIfNeeded()
+      }
   }
 
   override func viewWillAppear() {

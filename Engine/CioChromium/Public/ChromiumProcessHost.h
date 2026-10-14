@@ -41,7 +41,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)shutdown;
 
 /// Asynchronously commits Profile preferences (including extension state), then
-/// flushes Chromium's shared cookie store. Keep pumping Chromium
+/// drains pending password-store disk writes and flushes the shared cookie store.
+/// The password barrier waits for encryption/database initialization and does
+/// not read credentials. Keep pumping Chromium
 /// until completion, then schedule shutdown outside the Chromium callback stack.
 + (void)flushCookiesWithCompletion:(void (^)(BOOL success))completion;
 

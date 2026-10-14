@@ -16,6 +16,11 @@ Closing the inspector restores the page, and closing a tab closes its inspector.
 The bridge manages frontend WebContents through Chromium's DevToolsWindow;
 there is no separate CEF client or custom JavaScript protocol transport.
 
+`Scripts/verify_devtools.sh` runs the real frontend in a temporary profile. It
+checks that bottom docking leaves the page at the top, closing restores the
+full page, and closing during frontend startup permits a clean reopen. Run it
+after `CONFIGURATION=Debug Scripts/build.sh`; it uses that repository's Debug app.
+
 Normal launch does not request a remote debugging listener. The old
 `CIO_CDP_PORT` environment-variable adapter belonged to CEF and has been removed;
 it is not an entry point for the native backend. Embedded DevTools uses

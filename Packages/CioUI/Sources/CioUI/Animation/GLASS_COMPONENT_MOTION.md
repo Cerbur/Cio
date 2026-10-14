@@ -1,5 +1,34 @@
 # Liquid Glass component motion
 
+## Shell size（2026-10-14）
+
+设置中的界面尺寸统一驱动 toolbar 高度与 Navigation Rail 宽度：标准 56 pt，小号 28 pt。
+控件与间距由 `BrowserChromeMetrics` 按可用空间解析，标准 36 pt 的圆按钮和导航 slot
+在小号保留 22 pt 内容高度，顶/底各 3 pt；不再将所有内容机械减半。
+导航共享材质在应用实际尺寸后绘制，宿主仍保留两端各 1 pt clearance。
+原生按钮、编辑器、共享玻璃、namespace 和宿主在切换时保持挂载。
+地址胶囊宽度按内容比例缩短，并在导航按钮之后按 pane 可用宽度限幅。
+圆角参数保留 18 pt，玻璃 mask 和 AppKit focus ring 同时按真实 bounds 限幅，
+主视图 / Tab / Top Pin 保留 14 pt 圆角。红绿灯不缩放，按实际按钮尺寸重新计算对称边距。
+图标与 favicon 使用 control size ratio 的平方根缩放，小号的 15 pt toolbar symbol 为约 11.7 pt，
+地址文字为 12 pt，native control size 为 small；标准档图标与字体保持原尺寸。
+分屏把手从 8 pt 适配至不超过顶部空隙的 80%，小号为 2.4 pt；其 SF Symbol 和展开的原生
+action container 同时适配，无需 layer 缩放来压扁圆形按钮。内容宿主关闭 native safe area，
+避免 28 pt shell 在 titlebar 下又累加一层隐藏的顶部 inset。
+
+本次通过仓库 Debug 构建，并运行 9 项 shell geometry / address hit-area 定向测试。
+Computer use 连接绝对 Debug app 路径的新实例，检查标准 ↔ 小号实时切换、图标比例恢复、
+单页 / 双页静止玻璃轮廓、地址编辑和焦点环、分屏动作胶囊展开、Back / Forward 点击与
+独立 enabled 状态，以及侧栏收起 / 展开。最终窗口恢复原分屏并保留小号预览。
+收起后 Main View 的顶边与左边均为当前 chrome thickness；内容宿主不再叠加 titlebar inset。
+截图中系统屏幕共享指示器会遮挡激活窗口的交通灯；未激活窗口截图可见原生按钮对称边距，
+布局测试覆盖实际按钮尺寸的居中计算。本次未逐帧验收系统 hover / press 动画。
+
+分屏 action container 的尺寸更新只在 metrics 变化时执行，按钮组继续用原生 autoresizing
+居中。不要从该子视图的 `layout()` 中反复设置按钮 frame：实机复现会触发 SwiftUI graph
+布局重入的 NSGenericException，静态几何测试无法覆盖这一 native / SwiftUI 调用链。
+该问题已经通过新 Debug 实例冷启动、分屏动作展开及尺寸往返切换验证修复。
+
 这是后续一级玻璃控件的统一模板，适用于侧栏按钮、导航胶囊和地址胶囊。
 玻璃保持系统材质，按钮与编辑器保持原生控件；不绘制替代玻璃，不递归给内部图标套同一套效果。
 

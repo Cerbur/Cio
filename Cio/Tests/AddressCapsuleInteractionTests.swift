@@ -31,4 +31,20 @@ final class AddressCapsuleInteractionTests: XCTestCase {
                                                      in: capsule, hasSuggestions: true), .address)
     }
   }
+
+  func testEndControlsFollowTheActualCapsuleHeight() {
+    for height: CGFloat in [18, 27, 36] {
+      let frame = CGRect(x: 120, y: 200, width: 240, height: height)
+      let radius = height / 2
+      XCTAssertEqual(AddressCapsuleInteraction.target(
+        at: CGPoint(x: frame.minX + radius, y: frame.midY), in: frame, hasSuggestions: false),
+        .siteInformation)
+      XCTAssertEqual(AddressCapsuleInteraction.target(
+        at: CGPoint(x: frame.maxX - radius, y: frame.midY), in: frame, hasSuggestions: false),
+        .reloadOrStop)
+      XCTAssertEqual(AddressCapsuleInteraction.target(
+        at: CGPoint(x: frame.minX + height + 1, y: frame.midY), in: frame, hasSuggestions: false),
+        .address)
+    }
+  }
 }

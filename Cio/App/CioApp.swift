@@ -47,7 +47,7 @@ struct CioApp: App {
       BrowserSettingsView(
         readPasswordSettings: {
           let settings = ChromiumProcessHost.passwordSettings()
-          return ((settings["provider"] as? NSNumber)?.intValue ?? 0,
+          return ((settings["provider"] as? NSNumber)?.intValue ?? 1,
                   settings["status"] as? String ?? "密码设置不可用。")
         },
         setPasswordProvider: { ChromiumProcessHost.setPasswordProvider($0) },

@@ -15,6 +15,7 @@ class PasswordCrossDomainConfirmationPopupControllerInterface;
 class PasswordCrossDomainConfirmationPopupView;
 class CredentialManagerDialogController;
 class AccountChooserPrompt;
+class AutoSigninFirstRunPrompt;
 namespace content { class WebContents; }
 namespace autofill { class AutofillPopupController; class AutofillPopupView; }
 namespace device_reauth { class DeviceAuthenticator; }
@@ -29,6 +30,7 @@ void CancelAllPasswordUI();
 bool PasswordUIHasFocus(content::WebContents* contents);
 bool CanPresentPasswordUI(content::WebContents* contents);
 bool PasswordIMEComposing(content::WebContents* contents);
+void PasswordAccountAuthenticationFailed(CredentialManagerDialogController* controller);
 std::unique_ptr<device_reauth::DeviceAuthenticator> BindPasswordAuthenticator(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     content::WebContents* contents);
@@ -37,6 +39,8 @@ base::WeakPtr<autofill::AutofillPopupView> CreatePasswordSuggestions(
 PasswordGenerationPopupView* CreatePasswordGeneration(
     base::WeakPtr<PasswordGenerationPopupController> controller);
 std::unique_ptr<AccountChooserPrompt> CreatePasswordAccountChooser(
+    CredentialManagerDialogController* controller, content::WebContents* contents);
+AutoSigninFirstRunPrompt* CreatePasswordAutoSigninPrompt(
     CredentialManagerDialogController* controller, content::WebContents* contents);
 base::WeakPtr<PasswordCrossDomainConfirmationPopupView> ShowPasswordCrossDomain(
     base::WeakPtr<PasswordCrossDomainConfirmationPopupControllerInterface> controller,

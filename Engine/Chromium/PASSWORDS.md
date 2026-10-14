@@ -1,5 +1,39 @@
 # Cio 密码集成与验收边界
 
+## 日常可用路径补齐（2026-10-13）
+
+Chromium 本机密码管理是新 Profile 的默认路径。已有明确的 Apple／Chromium／
+关闭选择不会被替换；没有明确选择但已安装 Apple 扩展的 Profile 保留 Apple，
+已有关闭保存设置的 Profile 保留关闭。初始化后的选择保存在引擎 Profile 中。
+Apple 连接失败不会触发自动换库；设置中提供显式的本机密码管理选择。
+
+- **Passwords → Manage Passwords…** 打开同一 Profile 的原密码管理页面。
+  **Save or Update Password…** 重新打开当前页面仍有效的保存、更新或生成密码
+  补充账号提示；没有待处理请求时打开管理页面。不缓存秘密或旧文档回调。
+- 更新提示的“暂不”使用原 `OnNoThanksClicked`，保存提示使用
+  `OnNotNowClicked`；修复更新状态误调用保存回调触发 Chromium CHECK 的崩溃。
+- 保存／更新拒绝空的非联邦密码；账号与安全密码编辑器的真实 IME 组合期间
+  不接受 Return 提交。跨站提示另外显示原 controller 的凭据来源。
+- 自动保存生成密码后，缺少用户名的状态使用原 `AddUsernameBubbleController`
+  补充账号并关联原记录；更新成功状态显示原生确认。密码生成仍使用原引擎。
+- 账号选择在系统身份认证期间保持 mounted。取消／失败后可重试或取消请求；
+  认证进行中拒绝重复选择，关闭、导航及 provider 变化撤销迟到认证。
+  首次自动登录提示也由 AppKit 承载，保留原开关和 controller 回调。
+- 建议选择若同步销毁 popup，宿主不再访问已销毁对象，并向上游返回失败；
+  强密码状态更新不会在紧接的 bounds 更新前提前销毁 controller。
+- 正常退出的已有持久化边界并行等待 Profile 偏好、Cookie 和已创建的密码库。
+  密码库屏障排在加密／数据库初始化和已提交写入之后，在同一后台序列回到
+  主线程后才允许引擎退出；不读取凭据，不通过等待固定秒数推断写入完成。
+  解除“此网站不保存”的读→删除链路也必须完成；原完成回调引发的新写入或
+  新解除操作同样排在屏障之前。
+  此屏障保证排队操作完成，数据库写入是否成功仍由上游处理；它不是保存成功
+  的额外断言，也不保证强退前尚未完成的写入。未使用的密码库不会因为退出而
+  被创建。
+
+本轮验证结果见文末。以下 2026-10-12 的实现／诊断记录保留为历史证据；实际
+网站填充和真实系统认证仍需单独验收。跨设备 Passkey 后续已验收的部分见
+[daily-readiness.md](../../docs/daily-readiness.md)，与密码保存／填充分别记账。
+
 本轮日期：2026-10-12。引擎固定为 Chromium **152.0.7977.83**，提交
 `79460ebecaa5625e57a5fb679a735659e73dc687`。
 
@@ -80,7 +114,8 @@ Cio 只解析外层路由字段，保留真实 WebContents／frame 的 WeakDocum
 ## 选择和启用
 
 打开 **Cio 设置 → 密码管理**。唯一偏好在 Chromium Profile 中注册为
-`cio.password_provider`：0 Apple（默认）、1 Chromium、2 关闭；不镜像到 UserDefaults。
+`cio.password_provider`：0 Apple、1 Chromium、2 关闭；不镜像到 UserDefaults。
+新 Profile 默认 Chromium；已有选择的保留规则见本文首节。
 
 - **Apple iCloud 密码扩展**：点击官方扩展入口，由你安装并在扩展管理中启用。
   打开网站信息里的扩展操作，按 Apple 弹窗授权／配对／解锁。停用或卸载后保持
@@ -254,3 +289,25 @@ message、账号、密码、验证码或配对数据。脚本保留实际 ASN.1 
 本次仓库 Debug 构建退出码 0，**BUILD SUCCEEDED**，日志
 `build/icloud-diagnostic-build.log`；45 项密码规则测试通过。没有改应用签名配置或
 添加权限。用户的既有运行实例用于只读问题诊断，没有作为新构建的运行验收。
+
+## 本机密码路径验证记录（2026-10-13）
+
+- 仓库规定的 `CONFIGURATION=Debug Scripts/build.sh` 最终退出码 0，
+  **BUILD SUCCEEDED**，没有编译错误。日志：`build/p0-password-build.log`。
+  原生源码复制改为保留新写入时间，修复构建期间编辑文件后 Ninja 可能复用旧
+  对象的增量构建问题；Objective-C 接口版本随新增提示入口更新为 4。
+- `PYTHONDONTWRITEBYTECODE=1 python3 Scripts/verify_password_integration.py`
+  通过 48 项策略／生命周期检查，并编译固定 Chromium 的实际取消、编辑及
+  补充用户名方法，验证保存／更新取消分别调用正确 delegate、生成密码关联
+  原记录；旧更新取消路径在独立进程中仍命中原 CHECK／SIGABRT。
+- `PYTHONDONTWRITEBYTECODE=1 python3 Scripts/verify_password_shutdown.py`
+  提取实际 Store／Backend 屏障、初始化完成和解除阻止完成方法，链接当前
+  Chromium base。通过初始化前后排队、阻塞写入、FIFO 文件内容、重复屏障、
+  后端不可用、多阶段解除阻止、多个等待者和重入完成的检查。四个反向验证
+  分别识别提前回复、缺少初始化等待、缺少多阶段等待、错误的完成顺序。
+  产物：`build/verification/password-shutdown/shutdown-tests.log`。
+- 上述测试没有启动应用、创建 Profile、读取凭据或访问钥匙串。文件写入只含
+  临时合成标记，不能替代真实密码库加密／解密、renderer 填充或系统认证验收。
+- 按当前仓库默认验证约定，本轮没有启动 Debug app 或执行 computer use；
+  真实网站保存→重启→填充→修改密码的端到端界面验收仍未执行。Apple iCloud
+  准入限制未改变，也未改动用户正在运行的实例或其密码管理偏好。

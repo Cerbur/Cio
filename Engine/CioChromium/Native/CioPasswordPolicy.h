@@ -10,6 +10,18 @@ inline constexpr char kPasswordProviderPref[] = "cio.password_provider";
 inline constexpr char kApplePasswordExtension[] = "pejdijmoenmkgeppbflobdenhhabjlaj";
 inline constexpr char kApplePasswordHost[] = "com.apple.passwordmanager";
 enum class PasswordProvider { kApple = 0, kChromium = 1, kOff = 2 };
+inline int InitialPasswordProvider(bool apple_installed, bool saving_enabled) {
+  // Used only when no explicit Cio provider is stored. An installed Apple
+  // extension and an existing save-disabled preference remain authoritative.
+  if (apple_installed) return static_cast<int>(PasswordProvider::kApple);
+  return static_cast<int>(saving_enabled ? PasswordProvider::kChromium : PasswordProvider::kOff);
+}
+template <typename Controller>
+void DeclinePasswordPrompt(Controller& controller, bool update_prompt) {
+  // Chromium has different delegates and CHECKs for save and update dismissal.
+  if (update_prompt) controller.OnNoThanksClicked();
+  else controller.OnNotNowClicked();
+}
 inline bool ValidPasswordProvider(int value) { return value >= 0 && value <= 2; }
 inline bool ChromiumPasswordsAllowed(int provider) {
   return provider == static_cast<int>(PasswordProvider::kChromium);
