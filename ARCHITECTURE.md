@@ -113,6 +113,7 @@ AppCommands installs menu key equivalents. Actions resolve the selected session 
 | Cmd-S | Toggle Space sidebar |
 | Cmd-D | Move selected tab between Space pin and temporary |
 | Option-Cmd-I | Toggle selected page's Web Inspector |
+| F12 | Toggle selected page's Web Inspector |
 | Option-Cmd-U | View page source |
 
 AppDelegate removes the competing standard window Cmd-W menu item; the red native close button still closes the window. The inspector's privileged transport is bound only to explicitly marked inspector browsers, never arbitrary page JavaScript.

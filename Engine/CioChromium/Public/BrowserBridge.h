@@ -40,6 +40,9 @@ NS_SWIFT_UI_ACTOR
 /// Candidate favicon URLs from Chromium's current page, in preference order.
 - (void)browserBridge:(BrowserBridge *)bridge
     didUpdateFaviconURLs:(NSArray<NSString *> *)urls;
+/// Chromium's selected, decoded favicon, including its native scale representations.
+- (void)browserBridge:(BrowserBridge *)bridge
+    didUpdateFaviconImage:(nullable NSImage *)image;
 - (void)browserBridge:(BrowserBridge *)bridge didUpdateURL:(NSString *)url;
 - (void)browserBridge:(BrowserBridge *)bridge
     didUpdateLoadingState:(BOOL)isLoading

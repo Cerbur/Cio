@@ -41,6 +41,10 @@ Scripts/verify_bundle.sh
   这两个文件从 Mori 的 MIT 实现修改而来；未导入 Mori 的 SwiftUI 应用。
 - `Native/BrowserBridge.mm` 将页面视图嵌入 Cio 容器，转发导航、标题、图标、
   加载、证书、关闭和下载事件；原始弹窗 WebContents 被移入 Cio 标签页。
+  活跃页面的 favicon 观察 Chromium `ContentFaviconDriver`，将已选取、解析和
+  缩放的原生 NSImage 交给地址栏和侧栏，保留多分辨率位图与动态更新。
+  导航提交时刷新图标，WebContents 销毁前解除观察。不使用 URLSession 再次
+  下载活跃页面图标，避免丢失网页会话或由 AppKit 错误解析 SVG 的内嵌 CSS。
 - `NativeLoader/ChromiumProcessHost.mm` 提供不包含 Chromium C++ 头文件的生命周期
   接口，并在首次使用时复制旧 CEF profile。迁移保留旧目录，拒绝复制正在使用的 profile。
 - 用户目录为 `~/Library/Application Support/Cio/Chromium/Default`；
@@ -104,6 +108,30 @@ Views 气泡没有全部映射到 AppKit。密码建议、保存／更新、生�
 DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
+
+2026-10-14：ChatGPT favicon 的 SVG 带有内嵌 CSS。AppKit 接受该图像，但
+绘制得到 0 个可见像素；相同资源经 Chromium 解码的 32 px 缓存有 459 个
+可见像素。独立请求备用 `/favicon.ico` 返回 403，无法补救透明 SVG。
+活跃页面现使用原生 favicon driver 的 NSImage，不重新下载或用 AppKit 解析 SVG。
+`python3 Scripts/verify_favicon.py` 在临时 profile/mock keychain 的 Debug Cio
+中加载本地 CSS-styled SVG，验证实际 session 图像的像素与 CSS 颜色：
+576 个可见像素、样式正确、正常退出。Debug 构建通过；新 Debug 实例
+（PID 35048，21:18:50 启动，绝对可执行路径已核实）的 computer-use 检查确认
+ChatGPT 分屏地址栏、置顶分组图标显示正常，刷新与侧栏收起后仍显示。
+记录与日志位于 `build/verification/favicon/`。
+
+2026-10-14：chatgpt.com 的 Renderer 崩溃定位到 Chromium 152 的
+`CSSVariableParser::StripTrailingWhitespaceAndComments`：嵌套 `var()` 替换空值
+后，合法备用值可能以空格开头；含 `/` 或 UTF-16 内容的慢路径却断言不存在
+开头空格，导致进程中止。构建补丁保留备用值空格，将该断言移回已调用
+`ConsumeWhitespace` 的声明解析处，不改变 CSS 解析结果或关闭其他断言。
+`python3 Scripts/verify_css_variable_fallback.py` 启动已构建的 Debug Cio，使用
+临时 profile 和 mock keychain 加载实际 HTML fixture，检查计算样式、页面完成
+加载和 Renderer 存活；覆盖空变量替换、斜杠、尾部注释和中文备用值。
+Debug 构建与回归均通过，日志位于 `build/verification/css-variable-fallback/`。
+新构建的 Debug 实例（PID 23968，20:43:07 启动，仓库内绝对可执行路径已核实）
+完成实际站点 computer-use 验证：打开 chatgpt.com、普通刷新和强制刷新后均
+显示首页、模型选择器和输入框；系统日志未记录该实例的 Renderer 退出。
 
 2026-10-12：针对 `FindContentsWebView → SadTabController → SadTabHelper`
 的主进程闪退，宿主模式的 sad-tab 容器查找直接返回空，保留 Chrome 原有查找

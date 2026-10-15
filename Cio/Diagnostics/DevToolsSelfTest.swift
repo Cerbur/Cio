@@ -30,15 +30,24 @@ enum DevToolsSelfTest {
     check("page-loaded", waitUntil { session.hasFinishedFirstLoad })
 
     session.toggleDevTools()
+    check("startup-keeps-page-full-size", container.pageContentView.frame == container.bounds)
+    let rightDock = CommandLine.arguments.contains("--devtools-dock=right")
+    var reservedWrongAxis = false
     check("frontend-mounted", waitUntil {
-      !container.devToolsHostView.subviews.isEmpty
+      if rightDock && container.pageContentView.frame.height != container.bounds.height {
+        reservedWrongAxis = true
+      }
+      return !container.devToolsHostView.subviews.isEmpty
         && container.devToolsHostView.subviews.allSatisfy { $0.frame.size == container.devToolsHostView.bounds.size }
     })
-    check("bottom-dock-keeps-page-at-top", waitUntil(stableFor: 0.5) {
-      container.pageContentView.frame.minY == 0
-        && container.pageContentView.frame.height > 0
-        && container.pageContentView.frame.height < container.bounds.height
+    check(rightDock ? "right-dock-keeps-full-height" : "bottom-dock-keeps-page-at-top", waitUntil(stableFor: 0.5) {
+      let page = container.pageContentView.frame
+      if rightDock && page.height != container.bounds.height { reservedWrongAxis = true }
+      return page.minY == 0 && page.height > 0 && (rightDock
+        ? page.height == container.bounds.height && page.width > 0 && page.width < container.bounds.width
+        : page.height < container.bounds.height)
     })
+    if rightDock { check("right-dock-never-reserves-bottom", !reservedWrongAxis) }
     session.toggleDevTools()
     check("close-restores-page", waitUntil {
       !session.isDevToolsOpen && !container.isDevToolsVisible

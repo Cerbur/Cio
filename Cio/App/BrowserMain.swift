@@ -389,6 +389,9 @@ enum BrowserMain {
     case .waitingForQuitAfterNavigation, .countingDownToQuit:
       guard Date() >= toolingDeadline else { return }
       toolingPhase = .done
+      if CommandLine.arguments.contains("--favicon-self-test") {
+        FaviconSelfTest.report(runtime: runtime)
+      }
       AppLog.app.info("tooling: requesting application termination")
       // Uses the real coordinator, but does not reproduce a native key stack.
       NSApp.terminate(nil)

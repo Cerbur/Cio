@@ -7,7 +7,11 @@
 @end
 @implementation CioRoot
 + (BOOL)handleShortcutEvent:(NSEvent *)event {
-  if (!(event.modifierFlags & NSEventModifierFlagCommand)) return NO;
+  const BOOL inspectorFunctionKey =
+      [event.charactersIgnoringModifiers isEqualToString:[NSString stringWithFormat:@"%C", static_cast<unichar>(NSF12FunctionKey)]] &&
+      !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption |
+                              NSEventModifierFlagControl | NSEventModifierFlagShift));
+  if (!(event.modifierFlags & NSEventModifierFlagCommand) && !inspectorFunctionKey) return NO;
   return [NSApp.mainMenu performKeyEquivalent:event];
 }
 + (void)focusOmnibox {

@@ -75,9 +75,9 @@ final class ChromiumContainerView: NSView {
   func showDevToolsPane() {
     guard !isDevToolsVisible else { return }
     isDevToolsVisible = true
-    // Leave room for the frontend until its first placeholder update arrives.
-    inspectedPageBounds = CGRect(x: 0, y: 0, width: bounds.width,
-      height: bounds.height * (1 - BrowserLayout.devToolsDefaultFraction))
+    // Keep the page intact while Chromium loads the frontend and resolves its
+    // saved dock side. Only its real placeholder bounds may reserve space.
+    inspectedPageBounds = nil
     devToolsHostView.isHidden = false
     layoutPanes()
   }

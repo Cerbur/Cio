@@ -60,6 +60,8 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// Icon URLs reported by Chromium for this live page. Restored tabs without
   /// a runtime use their page origin's /favicon.ico until activated.
   @Published private(set) var faviconURLs: [URL] = []
+  /// Chromium handles SVG/CSS, page credentials and multi-scale decoding.
+  @Published private(set) var faviconImage: NSImage?
   @Published private(set) var isLoading = false
   @Published private(set) var loadingProgress: Double = 0
   @Published private(set) var canGoBack = false
@@ -942,6 +944,11 @@ extension BrowserSession: BrowserBridgeDelegate {
     faviconURLs = candidates
   }
 
+  func browserBridge(_ bridge: BrowserBridge, didUpdateFaviconImage image: NSImage?) {
+    guard acceptsCallback(from: bridge) else { return }
+    faviconImage = image
+  }
+
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
     guard acceptsCallback(from: bridge) else { return }
     let value = URL(string: url)
@@ -959,6 +966,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     guard isFirstMainFrameURL || value != self.url else { return }
     self.url = value
     faviconURLs = []
+    faviconImage = nil
     mainFrameURLChangeCount += 1
     addressField.applyBrowserURL(value)
     // The session keeps the complete URL (the address field mirrors it); only

@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 /// One favicon renderer for top pin, space pin and temporary tabs. A live
-/// session supplies Chromium's icon URLs; a lazily restored tab can still show
+/// session supplies Chromium's decoded artwork; a lazily restored tab can still show
 /// its origin's favicon without creating a browser session.
 struct TabFaviconView: View {
   let pageURL: URL?
@@ -36,9 +36,7 @@ private struct LiveTabFaviconView: View {
   let fallbackLetter: String?
 
   var body: some View {
-    ResolvedTabFaviconView(pageURL: session.url ?? pageURL,
-                           preferredURLs: session.faviconURLs,
-                           size: size, fallbackLetter: fallbackLetter)
+    FaviconArtworkView(image: session.faviconImage, size: size, fallbackLetter: fallbackLetter)
   }
 }
 
@@ -67,6 +65,27 @@ private struct ResolvedTabFaviconView: View {
   }
 
   var body: some View {
+    FaviconArtworkView(image: image, size: size, fallbackLetter: fallbackLetter)
+      .task(id: requestURLs) {
+        image = nil
+        for url in requestURLs {
+          guard !Task.isCancelled else { return }
+          if let data = await TabFaviconCache.shared.data(for: url),
+             let resolved = NSImage(data: data) {
+            image = resolved
+            return
+          }
+        }
+      }
+  }
+}
+
+private struct FaviconArtworkView: View {
+  let image: NSImage?
+  let size: CGFloat
+  let fallbackLetter: String?
+
+  var body: some View {
     Group {
       if let image {
         Image(nsImage: image)
@@ -85,17 +104,6 @@ private struct ResolvedTabFaviconView: View {
       }
     }
     .frame(width: size, height: size)
-    .task(id: requestURLs) {
-      image = nil
-      for url in requestURLs {
-        guard !Task.isCancelled else { return }
-        if let data = await TabFaviconCache.shared.data(for: url),
-           let resolved = NSImage(data: data) {
-          image = resolved
-          return
-        }
-      }
-    }
   }
 }
 

@@ -1,4 +1,5 @@
 import Combine
+import AppKit
 import Foundation
 import CioModel
 
@@ -13,6 +14,7 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   var title: String { get }
   var url: URL? { get }
   var faviconURLs: [URL] { get }
+  var faviconImage: NSImage? { get }
   var isLoading: Bool { get }
   var canGoBack: Bool { get }
   var canGoForward: Bool { get }

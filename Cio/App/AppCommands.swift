@@ -103,6 +103,9 @@ struct BrowserCommands: Commands {
         Button("Show Web Inspector") {}
           .keyboardShortcut("i", modifiers: [.command, .option])
           .disabled(true)
+        Button("Toggle Web Inspector") {}
+          .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!)), modifiers: [])
+          .disabled(true)
       }
     }
 
@@ -188,5 +191,9 @@ private struct WebInspectorMenuItem: View {
     }
     .keyboardShortcut("i", modifiers: [.command, .option])
     .disabled(!session.hasBrowser || session.isClosed)
+
+    Button("Toggle Web Inspector") { session.toggleDevTools() }
+      .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!)), modifiers: [])
+      .disabled(!session.hasBrowser || session.isClosed)
   }
 }

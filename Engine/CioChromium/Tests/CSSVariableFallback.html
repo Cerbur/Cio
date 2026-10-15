@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS fallback regression</title>
+<style>
+  body {
+    --empty: ;
+    background-color: var(--missing, var(--empty) rgb(0 128 0 / 1));
+    color: white;
+  }
+  #comment { font-family: var(--missing, var(--empty) "a/b" /* trailing comment */); }
+  #unicode { font-family: var(--missing, var(--empty) "测试"); }
+</style>
+<h1>CSS fallback regression</h1>
+<p id="comment">Comment and quoted slash fallback</p>
+<p id="unicode">Unicode fallback</p>
+<script>
+  const passed = getComputedStyle(document.body).backgroundColor === 'rgb(0, 128, 0)'
+    && getComputedStyle(document.querySelector('#comment')).fontFamily === '"a/b"'
+    && getComputedStyle(document.querySelector('#unicode')).fontFamily.replaceAll('"', '') === '测试';
+  document.title = passed ? 'CSS fallback PASS' : 'CSS fallback FAIL';
+  document.body.dataset.result = passed ? 'pass' : 'fail';
+  console.log(passed ? 'css-variable-fallback: PASS' : 'css-variable-fallback: FAIL');
+</script>

@@ -14,6 +14,10 @@
 #include <memory>
 #include "base/memory/raw_ptr.h"
 #include "base/logging.h"
+#include "base/scoped_observation.h"
+#include "components/favicon/content/content_favicon_driver.h"
+#include "components/favicon/core/favicon_driver_observer.h"
+#include "ui/gfx/image/image.h"
 #include "content/public/browser/ssl_status.h"
 #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
 #include "base/functional/bind.h"
@@ -69,6 +73,7 @@
 @interface BrowserBridge (NativeEvents)
 - (void)nativeLoadingChanged;
 - (void)nativeTitleChanged;
+- (void)nativeFaviconChanged;
 - (void)nativeNavigationFinished:(content::NavigationHandle *)handle;
 - (void)nativePageLoaded:(NSString *)url;
 - (void)nativeClosed;
@@ -77,6 +82,8 @@
 - (void)nativeRendererGone:(NSInteger)status;
 - (BOOL)nativeCanFocus;
 - (void)nativeRefreshDevTools;
+- (void)nativeDevToolsLoaded;
+- (void)nativeDevToolsPainted;
 - (void)nativeDevToolsClosed;
 - (content::WebContents*)nativeContents;
 - (void)nativeAdoptExtensionTab:(content::WebContents*)contents active:(BOOL)active;
@@ -97,13 +104,26 @@ std::map<Browser*, __weak BrowserBridge*>& Browsers() {
   static auto* browsers = new std::map<Browser*, __weak BrowserBridge*>;
   return *browsers;
 }
-class PageObserver final : public content::WebContentsObserver {
+class PageObserver final : public content::WebContentsObserver,
+                           public favicon::FaviconDriverObserver {
  public:
   PageObserver(content::WebContents* contents, BrowserBridge* bridge,
                bool devtools = false)
-      : WebContentsObserver(contents), bridge_(bridge), devtools_(devtools) {}
+      : WebContentsObserver(contents), bridge_(bridge), devtools_(devtools) {
+    if (!devtools_) {
+      if (auto* driver = favicon::ContentFaviconDriver::FromWebContents(contents))
+        favicon_observation_.Observe(driver);
+    }
+  }
+  void OnFaviconUpdated(favicon::FaviconDriver*, NotificationIconType type,
+                       const GURL&, bool, const gfx::Image&) override {
+    if (type == NON_TOUCH_16_DIP) [bridge_ nativeFaviconChanged];
+  }
   void DidStartLoading() override { if (!devtools_) [bridge_ nativeLoadingChanged]; }
   void DidStopLoading() override { if (!devtools_) [bridge_ nativeLoadingChanged]; }
+  void DidFirstVisuallyNonEmptyPaint() override {
+    if (devtools_) [bridge_ nativeDevToolsPainted];
+  }
   void LoadProgressChanged(double progress) override {
     if (devtools_) return;
     auto* bridge = bridge_;
@@ -121,6 +141,7 @@ class PageObserver final : public content::WebContentsObserver {
       if (handle->HasCommitted() && !handle->IsSameDocument())
         [bridge_ nativeFindInvalidated];
       [bridge_ nativeNavigationFinished:handle];
+      if (handle->HasCommitted()) [bridge_ nativeFaviconChanged];
     }
   }
   void DidFinishLoad(content::RenderFrameHost* frame, const GURL& url) override {
@@ -146,6 +167,8 @@ class PageObserver final : public content::WebContentsObserver {
     if (!devtools_) [bridge_ nativeRendererGone:static_cast<NSInteger>(status)];
   }
   void WebContentsDestroyed() override {
+    // WebContents still owns its favicon driver during this notification.
+    favicon_observation_.Reset();
     if (!devtools_) cio::HideHungRenderer(web_contents());
     Observe(nullptr);
     if (devtools_) [bridge_ nativeDevToolsClosed];
@@ -154,6 +177,8 @@ class PageObserver final : public content::WebContentsObserver {
  private:
   __weak BrowserBridge* bridge_;
   bool devtools_;
+  base::ScopedObservation<favicon::FaviconDriver, favicon::FaviconDriverObserver>
+      favicon_observation_{this};
 };
 }
 
@@ -175,6 +200,8 @@ class PageObserver final : public content::WebContentsObserver {
   BOOL _accepted;
   BOOL _terminationRequested;
   BOOL _devtoolsClosing;
+  BOOL _devtoolsLoaded;
+  BOOL _devtoolsPainted;
   NSInteger _findGeneration;
   int _findRequestID;
 }
@@ -216,6 +243,7 @@ class PageObserver final : public content::WebContentsObserver {
     _extensions = std::make_unique<cio::TabExtensions>(_browser, _contents, self);
     [self reparentToView:_parent];
     [self.delegate browserBridgeDidCreateBrowser:self];
+    [self nativeFaviconChanged];
   }
   if (adopted) {
     [self.delegate browserBridge:self didUpdateURL:url];
@@ -403,6 +431,13 @@ class PageObserver final : public content::WebContentsObserver {
 - (void)nativeTitleChanged {
   if (_contents) [self.delegate browserBridge:self didUpdateTitle:base::SysUTF16ToNSString(_contents->GetTitle())];
 }
+- (void)nativeFaviconChanged {
+  if (!_contents) return;
+  auto* driver = favicon::ContentFaviconDriver::FromWebContents(_contents);
+  NSImage* image = driver && driver->FaviconIsValid()
+      ? driver->GetFavicon().AsNSImage() : nil;
+  [self.delegate browserBridge:self didUpdateFaviconImage:image];
+}
 - (void)nativeNavigationFinished:(content::NavigationHandle *)handle {
   if (handle->HasCommitted()) {
     [self.delegate browserBridge:self didUpdateURL:base::SysUTF8ToNSString(handle->GetURL().spec())];
@@ -508,23 +543,40 @@ class PageObserver final : public content::WebContentsObserver {
   if (!frontend) return;
   if (frontend != _devtools) {
     _devtools = frontend;
+    _devtoolsLoaded = NO;
+    _devtoolsPainted = NO;
     _devtoolsObserver = std::make_unique<PageObserver>(frontend, self, true);
+    __weak BrowserBridge* bridge = self;
+    window->SetLoadCompletedCallback(base::BindOnce(^{
+      [bridge nativeDevToolsLoaded];
+    }));
   }
   DevToolsContentsResizingStrategy strategy;
   auto* contents = DevToolsWindow::GetInTabWebContents(_contents, &strategy);
   if (!contents) return;
+  // Mount at full size behind the unchanged page so Chromium can lay out and
+  // paint its saved dock side. Reveal only after loading, paint and real bounds.
+  if (!_devtoolsView) {
+    _devtoolsView = contents->GetNativeView().GetNativeNSView();
+    _devtoolsView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [self.delegate browserBridge:self didSetDevToolsDocked:YES];
+    [self reparentDevToolsToView:_devtoolsParent];
+  }
   auto bounds = strategy.bounds();
-  if (_emulationParent && !bounds.IsEmpty()) {
+  if (_devtoolsLoaded && _devtoolsPainted && _emulationParent && !bounds.IsEmpty()) {
     // Chromium and ChromiumContainerView both use top-left coordinates. A
     // Cocoa bottom-left conversion would place the page over bottom DevTools.
     [self.delegate browserBridge:self didSetInspectedPageBounds:NSMakeRect(
         bounds.x(), bounds.y(), bounds.width(), bounds.height())];
   }
-  if (_devtoolsView) return;
-  _devtoolsView = contents->GetNativeView().GetNativeNSView();
-  _devtoolsView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  [self.delegate browserBridge:self didSetDevToolsDocked:YES];
-  [self reparentDevToolsToView:_devtoolsParent];
+}
+- (void)nativeDevToolsLoaded {
+  _devtoolsLoaded = YES;
+  [self nativeRefreshDevTools];
+}
+- (void)nativeDevToolsPainted {
+  _devtoolsPainted = YES;
+  [self nativeRefreshDevTools];
 }
 - (content::WebContents*)nativeContents { return _contents.get(); }
 - (void)nativeAdoptExtensionTab:(content::WebContents*)contents active:(BOOL)active {
@@ -544,6 +596,8 @@ class PageObserver final : public content::WebContentsObserver {
 - (void)nativeDevToolsClosed {
   _devtools = nullptr;
   _devtoolsClosing = NO;
+  _devtoolsLoaded = NO;
+  _devtoolsPainted = NO;
   [_devtoolsView removeFromSuperview]; _devtoolsView = nil;
   dispatch_async(dispatch_get_main_queue(), ^{ [self.delegate browserBridgeDidCloseDevTools:self]; });
 }

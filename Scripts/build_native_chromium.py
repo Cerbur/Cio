@@ -45,6 +45,34 @@ def prepare():
                     # repository file's time can make Ninja reuse an old object
                     # when that file was edited during the preceding build.
                     shutil.copyfile(path, target)
+    # Chromium 152 also calls this trailing-only utility on resolved var()
+    # fallbacks. Substituting an empty variable can leave leading whitespace,
+    # which is valid there (and already accepted by the 8-bit fast path).
+    # Keep the declaration-parser invariant at its actual pre-trimmed caller,
+    # rather than aborting renderers on legal fallback CSS such as ChatGPT's.
+    css_variables = "third_party/blink/renderer/core/css/parser/css_variable_parser.cc"
+    patch(css_variables,
+          '  // Leading whitespace should already have been stripped.\n'
+          '  // (This test needs to be after we stripped trailing spaces,\n'
+          '  // or we could look at trailing space believing it was leading.)\n'
+          '  // SAFETY: ret is checked for emptiness before access.\n'
+          '  DCHECK(ret.empty() || !IsHTMLSpace(UNSAFE_BUFFERS(ret[0])));\n',
+          '  // Resolved fallbacks may begin with whitespace after an empty\n'
+          '  // variable substitution. Preserve it; this only strips the tail.\n')
+    patch(css_variables,
+          '      CSSVariableParser::StripTrailingWhitespaceAndComments(original_text);\n',
+          '      CSSVariableParser::StripTrailingWhitespaceAndComments(original_text);\n'
+          '  // ConsumeWhitespace above removed the declaration\'s leading space.\n'
+          '  // SAFETY: original_text is checked for emptiness before access.\n'
+          '  DCHECK(original_text.empty() ||\n'
+          '         !IsHTMLSpace(UNSAFE_BUFFERS(original_text[0])));\n')
+    patch("third_party/blink/renderer/core/css/parser/css_variable_parser.h",
+          '  // NOTE: We have to strip both leading and trailing whitespace (and comments)\n'
+          '  // from values as per spec, but we assume the tokenizer has already done the\n'
+          '  // leading ones for us; see comment on CSSPropertyParser::ParseValue().\n',
+          '  // Strip trailing whitespace and comments, preserving leading whitespace.\n'
+          '  // Declaration parsing consumes the leading whitespace separately;\n'
+          '  // resolved var() fallbacks can acquire it through empty substitutions.\n')
     patch("chrome/BUILD.gn", '      "app/chrome_main_mac.mm",\n',
           '      "app/chrome_main_mac.mm",\n'
           '      "browser/ui/cio/CioNativeRuntime.mm",\n'
@@ -433,6 +461,41 @@ def prepare():
           '      download_path = *selected_path;\n'
           '    }\n'
           '  }\n#endif')
+    # Cio's AppKit window has no Views Widget. Keep Chromium's menu model and
+    # Cocoa controller, allowing native menus to use the actual attached view.
+    context_menu = "chrome/browser/ui/cocoa/renderer_context_menu/render_view_context_menu_mac_cocoa.mm"
+    patch(context_menu, '#include <utility>',
+          '#include <utility>\n#include "chrome/browser/ui/cio/CioNativeRuntime.h"')
+    patch(context_menu, '  if (!widget || headless::IsHeadlessMode()) {\n    return;\n  }',
+          '  const bool hosted = cio::IsHostedBrowser() && parent_view_.window;\n'
+          '  if ((!widget && !hosted) || headless::IsHeadlessMode()) {\n    return;\n  }')
+    patch(context_menu,
+          '  menu_controller_delegate_ = [[MenuControllerCocoaDelegateImpl alloc]\n'
+          '      initWithParams:MenuControllerParamsForWidget(widget)];',
+          '  if (widget) {\n'
+          '    menu_controller_delegate_ = [[MenuControllerCocoaDelegateImpl alloc]\n'
+          '        initWithParams:MenuControllerParamsForWidget(widget)];\n'
+          '  }')
+    patch(context_menu,
+          '      NSMakePoint(params_.x, NSHeight(parent_view_.bounds) - params_.y);',
+          '      NSMakePoint(params_.x, parent_view_.isFlipped ? params_.y\n'
+          '          : NSHeight(parent_view_.bounds) - params_.y);')
+    patch(context_menu,
+          '      position, [parent_view_ window]);',
+          '      position, [parent_view_ window]);\n'
+          '  if (hosted && !params_.custom_items.empty()) {\n'
+          '    // DevTools dropdowns arrive by IPC after the initiating click.\n'
+          '    // Reusing AppKit\'s mouse-up immediately dismisses the NSMenu.\n'
+          '    clickEvent = [NSEvent mouseEventWithType:NSEventTypeRightMouseDown\n'
+          '        location:position modifierFlags:0 timestamp:0\n'
+          '        windowNumber:parent_view_.window.windowNumber context:nil\n'
+          '        eventNumber:0 clickCount:1 pressure:0];\n'
+          '  }')
+    patch(context_menu,
+          '                      views::ElementTrackerViews::GetContextForWidget(widget));',
+          '                      widget ? views::ElementTrackerViews::GetContextForWidget(widget)\n'
+          '                             : ui::ElementContext());')
+
     devtools = "chrome/browser/devtools/devtools_window.cc"
     patch(devtools, '    if (!devtools_ui_controller || !devtools_ui_controller->CanDockDevtools()) {\n'
           '      can_dock = false;\n    }',
