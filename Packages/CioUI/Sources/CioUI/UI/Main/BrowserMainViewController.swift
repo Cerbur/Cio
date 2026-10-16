@@ -67,10 +67,13 @@ final class BrowserMainViewController: NSViewController {
     sidebarItem.canCollapseFromWindowResize = false
     sidebarItem.minimumThickness = BrowserLayout.sidebarMinimumWidth
     sidebarItem.maximumThickness = BrowserLayout.sidebarMaximumWidth
+    // Window resizing belongs to the browser; keep the user's sidebar width.
+    sidebarItem.holdingPriority = .defaultHigh
     sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
     self.sidebarItem = sidebarItem
 
     let browserItem = NSSplitViewItem(viewController: browserController)
+    browserItem.holdingPriority = .defaultLow
     self.browserItem = browserItem
 
     let splitController = NSSplitViewController()

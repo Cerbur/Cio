@@ -44,6 +44,12 @@ final class ChromiumContainerView: NSView {
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
+    // Expose the whole native surface as a selectable ancestor for screenshot
+    // tools that inspect accessibility elements. AppKit supplies its live screen
+    // frame; keep Chromium's descendants and native hit testing intact so page
+    // controls remain accessible. The screenshot tool chooses the selection level.
+    setAccessibilityElement(true)
+    setAccessibilityRole(.group)
     wantsLayer = true
     for host in [devToolsHostView, devToolsEmulationHostView, pageContentView] {
       host.frame = bounds
@@ -60,6 +66,16 @@ final class ChromiumContainerView: NSView {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override func accessibilityLabel() -> String? {
+    let title = browserSession?.title ?? ""
+    return title.isEmpty ? "Web content" : "Web content: \(title)"
+  }
+
+  override func accessibilityIdentifier() -> String {
+    guard let tabID = browserSession?.tabID else { return "chromium-container" }
+    return "chromium-container-\(tabID.uuidString)"
+  }
 
   override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
