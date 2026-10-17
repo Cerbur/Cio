@@ -29,6 +29,7 @@ final class BrowserMainViewController: NSViewController {
   private var panePreviewIndex: Int?
   let sidebarItem: NSSplitViewItem
   let browserItem: NSSplitViewItem
+  private let browserViewport: SpaceOverviewBrowserViewport
   let spaceSplitController: NSSplitViewController
 
   /// Section-owned control displayed in the shell overlay, outside content clips.
@@ -36,14 +37,23 @@ final class BrowserMainViewController: NSViewController {
     self?.toggleSpaceSidebar()
   })
   var onToolbarLayoutChange: (() -> Void)?
+  var onSpaceOverviewTranslation: ((CGFloat) -> Void)?
   private var panelObservation: AnyCancellable?
   private var workspaceObservation: AnyCancellable?
   private var sidebarCommandObservation: AnyCancellable?
+  private var spaceOverviewCommandObservation: AnyCancellable?
   private var sidebarCollapseObservation: NSKeyValueObservation?
   private var sidebarWasCollapsedBeforeLibrary = false
   private var wasShowingLibrary = false
   private var didRestoreSidebarWidth = false
   private var expandedSidebarWidth = BrowserLayout.sidebarDefaultWidth
+  private var spaceOverviewMotion: SpaceOverviewLayoutMotion { sidebarChromeLayout.overviewMotion }
+  private var spaceOverviewWidth: CGFloat?
+  private var hasPreparedSpaceOverview = false
+  private var isConfiguringSpaceOverview = false
+  private var overviewBaseWidth: CGFloat = 0
+  private let overviewSidebarMask = CAShapeLayer()
+  private let overviewStage = NSView()
 
   var spaceSplitView: NSSplitView { spaceSplitController.splitView }
 
@@ -67,12 +77,19 @@ final class BrowserMainViewController: NSViewController {
     sidebarItem.canCollapseFromWindowResize = false
     sidebarItem.minimumThickness = BrowserLayout.sidebarMinimumWidth
     sidebarItem.maximumThickness = BrowserLayout.sidebarMaximumWidth
-    // Window resizing belongs to the browser; keep the user's sidebar width.
-    sidebarItem.holdingPriority = .defaultHigh
+    // The sidebar holds its width ahead of the browser, but must yield to
+    // AppKit's divider-drag priority for manual and overview resizing.
+    sidebarItem.holdingPriority = NSLayoutConstraint.Priority(
+      rawValue: NSLayoutConstraint.Priority.dragThatCannotResizeWindow.rawValue - 1)
     sidebarItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
     self.sidebarItem = sidebarItem
 
-    let browserItem = NSSplitViewItem(viewController: browserController)
+    let browserContainer = NSViewController()
+    let viewport = SpaceOverviewBrowserViewport(content: browserController.view)
+    browserContainer.view = viewport
+    browserContainer.addChild(browserController)
+    browserViewport = viewport
+    let browserItem = NSSplitViewItem(viewController: browserContainer)
     browserItem.holdingPriority = .defaultLow
     self.browserItem = browserItem
 
@@ -101,16 +118,28 @@ final class BrowserMainViewController: NSViewController {
     container.layer?.masksToBounds = true
     view = container
     addChild(spaceSplitController)
-    container.addSubview(spaceSplitController.view)
+    overviewStage.wantsLayer = true
+    overviewStage.frame = container.bounds
+    container.addSubview(overviewStage)
+    overviewStage.addSubview(spaceSplitController.view)
     spaceSplitController.view.translatesAutoresizingMaskIntoConstraints = false
     sidebarChromeLayout.onTabDragAvailable = { [weak self] drag in self?.installDragOverlay(drag) }
+    sidebarChromeLayout.onSpaceOverviewChange = { [weak self] presented in
+      self?.setSpaceOverview(presented)
+    }
+    sidebarChromeLayout.onSpaceOverviewPreview = { [weak self] progress in
+      self?.previewSpaceOverview(progress: progress)
+    }
+    spaceOverviewMotion.onPresentation = { [weak self] pose in
+      self?.presentSpaceOverview(pose)
+    }
     NSLayoutConstraint.activate([
-      spaceSplitController.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-      spaceSplitController.view.topAnchor.constraint(equalTo: container.topAnchor),
+      spaceSplitController.view.leadingAnchor.constraint(equalTo: overviewStage.leadingAnchor),
+      spaceSplitController.view.topAnchor.constraint(equalTo: overviewStage.topAnchor),
       spaceSplitController.view.trailingAnchor.constraint(
-        equalTo: container.trailingAnchor),
+        equalTo: overviewStage.trailingAnchor),
       spaceSplitController.view.bottomAnchor.constraint(
-        equalTo: container.bottomAnchor),
+        equalTo: overviewStage.bottomAnchor),
     ])
     installWebPageDropView(in: container)
   }
@@ -175,7 +204,10 @@ final class BrowserMainViewController: NSViewController {
     updateSpaceToolbarVisibility(animated: false)
     workspaceObservation = runtime.workspaceStore.objectWillChange
       .receive(on: RunLoop.main).sink { [weak self] _ in
-        MainActor.assumeIsolated { self?.updateSpaceToolbarVisibility(animated: true) }
+        MainActor.assumeIsolated {
+          self?.updateSpaceToolbarVisibility(animated: true)
+          self?.updateSpaceOverviewWidth()
+        }
       }
     sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.initial, .new]) { [weak self] _, _ in
       MainActor.assumeIsolated {
@@ -192,6 +224,17 @@ final class BrowserMainViewController: NSViewController {
         MainActor.assumeIsolated {
           guard let self, self.runtime.presentedInternalPanel == nil else { return }
           self.toggleSpaceSidebar()
+        }
+      }
+    spaceOverviewCommandObservation = NotificationCenter.default.publisher(
+      for: .browserToggleSpaceOverview, object: runtime.workspaceStore).sink { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self, self.runtime.presentedInternalPanel == nil, self.overlayDrag?.tabID == nil else { return }
+          if self.sidebarItem.isCollapsed {
+            self.sidebarItem.isCollapsed = false
+            self.spaceSplitView.setPosition(self.expandedSidebarWidth, ofDividerAt: 0)
+          }
+          self.sidebarChromeLayout.setSpaceOverview(!self.sidebarChromeLayout.isSpaceOverview)
         }
       }
   }
@@ -215,17 +258,139 @@ final class BrowserMainViewController: NSViewController {
 
   override func viewDidLayout() {
     super.viewDidLayout()
+    let extraWidth = hasPreparedSpaceOverview ? max(0, overviewBaseWidth - expandedSidebarWidth) : 0
+    let stageSize = CGSize(width: view.bounds.width + extraWidth, height: view.bounds.height)
+    if overviewStage.frame.size != stageSize { overviewStage.setFrameSize(stageSize) }
+    if hasPreparedSpaceOverview {
+      browserViewport.retainedWidth = max(1,
+        view.bounds.width - expandedSidebarWidth - spaceSplitView.dividerThickness)
+    }
+    updateSpaceOverviewWidth()
     onToolbarLayoutChange?()
+  }
+
+  private func setSpaceOverview(_ presented: Bool) {
+    splitDropTarget = nil
+    runtime.surfaceDriver.previewSplit(at: nil)
+    prepareSpaceOverview()
+    sidebarItem.viewController.view.layer?.mask = overviewSidebarMask
+    if presented { runtime.dismissSpotlight() }
+    let targetWidth = desiredSpaceOverviewWidth()
+    spaceOverviewWidth = targetWidth
+    sidebarItem.maximumThickness = max(BrowserLayout.sidebarMaximumWidth,
+      targetWidth, spaceOverviewMotion.presentation.overviewWidth)
+    spaceOverviewMotion.move(spaceSplitView, presented: presented, normalWidth: expandedSidebarWidth,
+      overviewWidth: targetWidth) { [weak self] in self?.commitSpaceOverview() }
+  }
+
+  private func prepareSpaceOverview() {
+    guard !hasPreparedSpaceOverview else { return }
+    hasPreparedSpaceOverview = true
+    expandedSidebarWidth = min(BrowserLayout.sidebarMaximumWidth,
+      max(BrowserLayout.sidebarMinimumWidth, sidebarItem.viewController.view.frame.width))
+    browserViewport.retainedWidth = browserViewport.content.frame.width
+    configureOverviewStage(width: desiredSpaceOverviewWidth())
+  }
+
+  /// Resolve the full native layout once, before scrubbing. During the flight
+  /// it stays fixed; only native origins and the sidebar crop change.
+  private func configureOverviewStage(width: CGFloat) {
+    guard overviewBaseWidth != width else { return }
+    isConfiguringSpaceOverview = true
+    defer { isConfiguringSpaceOverview = false }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    overviewBaseWidth = width
+    spaceOverviewWidth = width
+    sidebarItem.maximumThickness = max(BrowserLayout.sidebarMaximumWidth, width)
+    sidebarItem.viewController.view.layer?.mask = overviewSidebarMask
+    let extraWidth = max(0, width - expandedSidebarWidth)
+    overviewStage.frame = CGRect(origin: .zero,
+      size: CGSize(width: view.bounds.width + extraWidth, height: view.bounds.height))
+    overviewStage.layoutSubtreeIfNeeded()
+    spaceSplitView.setPosition(width, ofDividerAt: 0)
+    spaceSplitView.layoutSubtreeIfNeeded()
+    browserViewport.refreshContentGeometry()
+    onToolbarLayoutChange?()
+    presentSpaceOverview(spaceOverviewMotion.presentation)
+    CATransaction.commit()
+  }
+
+  private func presentSpaceOverview(_ pose: SpaceOverviewPresentation) {
+    guard hasPreparedSpaceOverview else { return }
+    let translation = pose.sidebarWidth - sidebarItem.viewController.view.frame.width
+    let crop = CGRect(x: -translation, y: 0, width: pose.sidebarWidth, height: view.bounds.height)
+    overviewSidebarMask.path = CGPath(rect: crop, transform: nil)
+    overviewStage.setFrameOrigin(CGPoint(x: translation, y: 0))
+    onSpaceOverviewTranslation?(translation)
+  }
+
+  private func commitSpaceOverview() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    let presented = sidebarChromeLayout.isSpaceOverview
+    let width = presented ? desiredSpaceOverviewWidth() : expandedSidebarWidth
+    isConfiguringSpaceOverview = true
+    if !presented { overviewStage.frame = view.bounds }
+    spaceSplitView.setPosition(width, ofDividerAt: 0)
+    spaceSplitView.layoutSubtreeIfNeeded()
+    overviewStage.setFrameOrigin(.zero)
+    browserViewport.clipsToBounds = true
+    browserViewport.layer?.masksToBounds = true
+    sidebarItem.viewController.view.layer?.mask = nil
+    onSpaceOverviewTranslation?(0)
+    browserViewport.refreshContentGeometry()
+    onToolbarLayoutChange?()
+    if !presented {
+      sidebarItem.maximumThickness = BrowserLayout.sidebarMaximumWidth
+      hasPreparedSpaceOverview = false
+      overviewBaseWidth = 0
+      spaceOverviewWidth = nil
+      browserViewport.retainedWidth = nil
+    }
+    isConfiguringSpaceOverview = false
+    CATransaction.commit()
+  }
+
+  private func previewSpaceOverview(progress: CGFloat) {
+    prepareSpaceOverview()
+    let width = desiredSpaceOverviewWidth()
+    // Reopen the crop when taking over an overview that had already settled.
+    sidebarItem.viewController.view.layer?.mask = overviewSidebarMask
+    spaceOverviewMotion.preview(spaceSplitView, progress: progress,
+      normalWidth: expandedSidebarWidth, overviewWidth: width)
+  }
+
+  private func desiredSpaceOverviewWidth() -> CGFloat {
+    let available = view.bounds.width
+    let desired = CGFloat(runtime.workspaceStore.spaces.count)
+      * (sidebarChromeLayout.overviewColumnWidth + BrowserLayout.spaceOverviewColumnSpacing)
+      + BrowserLayout.spaceOverviewColumnSpacing
+    return max(expandedSidebarWidth, min(desired,
+      available * BrowserLayout.spaceOverviewMaximumFraction,
+      available - BrowserLayout.spaceOverviewMinimumBrowserWidth))
+  }
+
+  private func updateSpaceOverviewWidth() {
+    guard sidebarChromeLayout.isSpaceOverview, hasPreparedSpaceOverview,
+          !isConfiguringSpaceOverview, !spaceOverviewMotion.isInteracting else { return }
+    let target = desiredSpaceOverviewWidth()
+    guard spaceOverviewWidth != target else { return }
+    configureOverviewStage(width: target)
+    spaceOverviewMotion.move(spaceSplitView, presented: true,
+      normalWidth: expandedSidebarWidth, overviewWidth: target) { [weak self] in self?.commitSpaceOverview() }
   }
 
   func layoutSpaceToolbar(in host: NSView, windowControlsTrailingEdge: CGFloat) {
     let anchor = browserItem.viewController.view.convert(browserItem.viewController.view.bounds, to: host)
-    spaceToolbar.layout(in: host, sidebarAnchor: anchor, windowControlsTrailingEdge: windowControlsTrailingEdge)
+    spaceToolbar.layout(in: host, sidebarAnchor: anchor, windowControlsTrailingEdge: windowControlsTrailingEdge,
+      followsOverview: hasPreparedSpaceOverview || spaceOverviewMotion.isTransitioning || sidebarChromeLayout.isSpaceOverview)
   }
 
   private func showSection(_ panel: BrowserInternalPanel?) {
     // Space owns both sidebar state and the lifetime/visibility of its control.
     if panel != nil {
+      sidebarChromeLayout.setSpaceOverview(false)
       if !wasShowingLibrary {
         sidebarWasCollapsedBeforeLibrary = sidebarItem.isCollapsed
         if !sidebarItem.isCollapsed { toggleSpaceSidebar() }
@@ -245,6 +410,10 @@ final class BrowserMainViewController: NSViewController {
   }
 
   private func toggleSpaceSidebar() {
+    if sidebarChromeLayout.isSpaceOverview {
+      sidebarChromeLayout.setSpaceOverview(false)
+      return
+    }
     if sidebarItem.isCollapsed {
       NSAnimationContext.runAnimationGroup { context in
         context.duration = AnimationValues.Sidebar.collapseDuration
@@ -253,7 +422,12 @@ final class BrowserMainViewController: NSViewController {
       let width = expandedSidebarWidth
       DispatchQueue.main.async { [weak self] in self?.spaceSplitView.setPosition(width, ofDividerAt: 0) }
     } else {
-      expandedSidebarWidth = sidebarItem.viewController.view.frame.width
+      if spaceOverviewMotion.isRunning {
+        spaceOverviewMotion.restoreNormalWidth(expandedSidebarWidth)
+        commitSpaceOverview()
+      } else {
+        expandedSidebarWidth = sidebarItem.viewController.view.frame.width
+      }
       NSAnimationContext.runAnimationGroup { context in
         context.duration = AnimationValues.Sidebar.collapseDuration
         sidebarItem.animator().isCollapsed = true

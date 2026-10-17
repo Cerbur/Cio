@@ -72,7 +72,8 @@ final class SpaceToolbarController: NSObject {
   /// Attaches the stable control as a shell-host overlay. Both the sidebar
   /// anchor and the window-controls trailing edge are in host coordinates.
   /// The toolbar stays at the host's top edge with no safe-area/titlebar offset.
-  func layout(in host: NSView, sidebarAnchor: NSRect, windowControlsTrailingEdge: CGFloat) {
+  func layout(in host: NSView, sidebarAnchor: NSRect, windowControlsTrailingEdge: CGFloat,
+              followsOverview: Bool = false) {
     if controlHost.superview !== host {
       host.addSubview(controlHost, positioned: .above, relativeTo: nil)
     }
@@ -92,12 +93,12 @@ final class SpaceToolbarController: NSObject {
     let y = host.isFlipped ? host.bounds.minY + topInset : host.bounds.maxY - topInset - height
     let frame = NSRect(x: left, y: y, width: height, height: height)
     if controlHost.frame != frame {
-      let source = presentation.isVisible ? layoutMotion.capture(controlHost) : nil
+      let source = presentation.isVisible && !followsOverview ? layoutMotion.capture(controlHost) : nil
       CATransaction.begin()
       CATransaction.setDisableActions(true)
       controlHost.frame = frame
       controlHost.layoutSubtreeIfNeeded()
-      layoutMotion.animate(controlHost, from: source, enabled: presentation.isVisible)
+      layoutMotion.animate(controlHost, from: source, enabled: presentation.isVisible && !followsOverview)
       CATransaction.commit()
     }
   }

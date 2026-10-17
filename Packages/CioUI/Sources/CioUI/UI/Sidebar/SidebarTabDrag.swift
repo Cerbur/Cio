@@ -29,8 +29,13 @@ public struct SidebarTabDropTarget: Equatable {
 
 }
 
-/// The selected Space's tier orders, read each time the pointer moves.
+/// Tier orders read each time the pointer moves, including overview columns.
 struct SidebarTabDragLayout {
+  struct SpaceOrder {
+    var pinnedTabIDs: [UUID]
+    var temporaryTabIDs: [UUID]
+  }
+
   var spaceID: UUID
   var globalTabIDs: [UUID]
   var globalPinnedTabCount: Int
@@ -40,12 +45,15 @@ struct SidebarTabDragLayout {
   var temporaryTabIDs: [UUID]
   var tileSize: CGSize
   var topInset: CGFloat
+  var spaceOrders: [UUID: SpaceOrder] = [:]
 
   func tabIDs(in tier: WorkspaceCollection.TabTier) -> [UUID] {
     switch tier {
     case .global: return globalTabIDs
-    case .space: return spacePinTabIDs
-    case .temporary: return temporaryTabIDs
+    case .space(let id):
+      return spaceOrders[id]?.pinnedTabIDs ?? (id == spaceID ? spacePinTabIDs : [])
+    case .temporary(let id):
+      return spaceOrders[id]?.temporaryTabIDs ?? (id == spaceID ? temporaryTabIDs : [])
     }
   }
 }
@@ -103,6 +111,13 @@ public final class SidebarTabDrag {
   /// Where the pointer took hold of the tab, as a fraction of its size.
   private(set) var grab = CGPoint(x: 0.5, y: 0.5)
   private(set) var autoscrollDirection = 0
+  /// Overview geometry uses the same sidebar-wide coordinates as the overlay.
+  var isSpaceOverview = false
+  private(set) var hoveredSpaceID: UUID?
+
+  func isAutoscrolling(in spaceID: UUID) -> Bool {
+    isDragging && autoscrollDirection != 0 && hoveredSpaceID == spaceID
+  }
 
   /// The tab that is out of its tier while it follows the pointer.
   var liftedTabID: UUID? { phase == .lifted ? tabID : nil }
@@ -144,6 +159,12 @@ public final class SidebarTabDrag {
   @ObservationIgnored private var items: [ItemKey: Item] = [:]
   @ObservationIgnored private var panelRows: [SpaceTabPanelRow.ID: (row: SpaceTabPanelRow, frame: CGRect, token: UUID)] = [:]
   @ObservationIgnored private var tierFrames: [WorkspaceCollection.TabTier: CGRect] = [:]
+  private struct SpaceGeometry {
+    var frame: CGRect
+    var token: UUID?
+  }
+  @ObservationIgnored private var spaceViewports: [UUID: SpaceGeometry] = [:]
+  @ObservationIgnored private var spaceHeaders: [UUID: SpaceGeometry] = [:]
   @ObservationIgnored private var rowSize: CGSize?
   @ObservationIgnored private var layout: SidebarTabDragLayout?
   @ObservationIgnored private var pointer = CGPoint.zero
@@ -161,6 +182,34 @@ public final class SidebarTabDrag {
   @ObservationIgnored private var lastDrop: (tabID: UUID, time: TimeInterval)?
 
   // MARK: - Geometry
+
+  /// Register the column's scroll viewport, including any fixed header overlay.
+  /// Pass a stable view token to keep an outgoing view's cleanup from removing
+  /// a replacement registration. The root `bounds` covers the full overview.
+  func registerSpaceViewport(_ spaceID: UUID, frame: CGRect, token: UUID? = nil) {
+    spaceViewports[spaceID] = SpaceGeometry(frame: frame, token: token)
+    updatePanelTierFrames(in: spaceID)
+    listDidScroll()
+  }
+
+  func unregisterSpaceViewport(_ spaceID: UUID, token: UUID? = nil) {
+    guard let geometry = spaceViewports[spaceID], geometry.token == token else { return }
+    spaceViewports[spaceID] = nil
+    listDidScroll()
+  }
+
+  func registerSpaceHeader(_ spaceID: UUID, frame: CGRect, token: UUID? = nil) {
+    spaceHeaders[spaceID] = SpaceGeometry(frame: frame, token: token)
+    updatePanelTierFrames(in: spaceID)
+    listDidScroll()
+  }
+
+  func unregisterSpaceHeader(_ spaceID: UUID, token: UUID? = nil) {
+    guard let geometry = spaceHeaders[spaceID], geometry.token == token else { return }
+    spaceHeaders[spaceID] = nil
+    updatePanelTierFrames(in: spaceID)
+    listDidScroll()
+  }
 
   /// Native webpage links always create temporary background tabs, including
   /// drops near pins. Use registered rows to avoid inserting inside a group.
@@ -204,7 +253,11 @@ public final class SidebarTabDrag {
     // Frames arrive while the tier is still animating; each one re-aims the
     // landing so the block meets the slot where it comes to rest.
     if id == tabID, phase == .landing, tier == landingTier, !programmaticLandingPending {
-      land(in: frame, style: Style(tier))
+      if isSpaceOverview && !visibleFrame(in: tier).intersects(frame) {
+        finish(animated: true)
+      } else {
+        land(in: frame, style: Style(tier))
+      }
     }
   }
 
@@ -237,11 +290,21 @@ public final class SidebarTabDrag {
       unregister(id, in: tier, token: token)
     }
     panelRows[row.id] = nil
+    switch row.id {
+    case .divider(let spaceID):
+      tierFrames[.space(spaceID)] = nil
+      updatePanelTierFrames(in: spaceID)
+    case .newTab(let spaceID), .footer(let spaceID):
+      tierFrames[.temporary(spaceID)] = nil
+      updatePanelTierFrames(in: spaceID)
+    default: break
+    }
   }
 
   private func updatePanelTierFrames(in spaceID: UUID) {
     if let divider = panelRows[.divider(spaceID)]?.frame {
-      let top = spaceHeaderFrame.maxY
+      let top = spaceHeaders[spaceID]?.frame.maxY
+        ?? (isSpaceOverview ? spaceViewports[spaceID]?.frame.minY ?? 0 : spaceHeaderFrame.maxY)
       // The divider's upper half remains a pin drop target even with no
       // visible pins. An empty tier needs no extra blank row in the panel.
       let bottom = max(top, divider.midY)
@@ -264,18 +327,35 @@ public final class SidebarTabDrag {
     items[ItemKey(id: id, tier: tier)]?.frame
   }
 
+  private func landingFrame(of id: UUID, in tier: WorkspaceCollection.TabTier) -> CGRect? {
+    guard let frame = frame(of: id, in: tier),
+          !isSpaceOverview || frame.intersects(visibleFrame(in: tier)) else { return nil }
+    return frame
+  }
+
   /// Only tab selection targets may receive clicks through Spotlight's shell overlay.
   func tabSelection(at point: CGPoint, in selectedSpaceID: UUID) -> UUID? {
-    if topPinFrame.contains(point),
+    if (!isSpaceOverview || bounds.contains(point)), topPinFrame.contains(point),
        let item = items.first(where: { key, item in
          key.tier == .global && item.frame.contains(point)
        }) {
       return item.key.id
     }
-    guard visibleSpaceFrame.contains(point) else { return nil }
+    let currentLayout = isSpaceOverview ? layoutProvider?() ?? layout : nil
+    let spaceID: UUID
+    if isSpaceOverview {
+      guard let layout = currentLayout,
+            let column = overviewSpace(at: point, in: layout),
+            visibleSpaceFrame(in: column).contains(point) else { return nil }
+      spaceID = column
+    } else {
+      guard visibleSpaceFrame.contains(point) else { return nil }
+      spaceID = selectedSpaceID
+    }
     return items.first(where: { key, item in
-      (key.tier == .space(selectedSpaceID) || key.tier == .temporary(selectedSpaceID))
+      (key.tier == .space(spaceID) || key.tier == .temporary(spaceID))
         && item.frame.contains(point)
+        && (!isSpaceOverview || currentLayout?.tabIDs(in: key.tier).contains(key.id) == true)
         // The trailing close control is not part of the tab selection button.
         && point.x < item.frame.maxX - item.closeWidth
     })?.key.id
@@ -481,6 +561,7 @@ public final class SidebarTabDrag {
     if !isPaneDrag { onPreviewEnd?() }
     let target = target
     setAutoscroll(0)
+    hoveredSpaceID = nil
     lastDrop = (id, ProcessInfo.processInfo.systemUptime)
     if let target, target != homeTarget, move(id, target) {
       phase = .landing
@@ -496,6 +577,7 @@ public final class SidebarTabDrag {
     if isDragging, let id = tabID {
       if !isPaneDrag { onPreviewEnd?() }
       setAutoscroll(0)
+      hoveredSpaceID = nil
       returnToSource(id)
     } else if !isExpandingIntoSplit {
       onPreviewEnd?()
@@ -506,14 +588,17 @@ public final class SidebarTabDrag {
   /// Re-resolves the drop target after the list scrolled beneath the pointer.
   func listDidScroll() {
     guard isDragging else { return }
+    if let layout = layoutProvider?() { self.layout = layout }
     resolveTarget()
+    updateAutoscroll()
   }
 
   private func begin(at start: CGPoint, in layout: SidebarTabDragLayout) -> Bool {
-    let visibleSpace = visibleSpaceFrame
     guard let (key, item) = items.first(where: { key, item in
       item.frame.contains(start)
-        && (key.tier == .global ? topPinFrame : visibleSpace).contains(start)
+        && visibleFrame(in: key.tier).contains(start)
+        && (isSpaceOverview || key.tier == .global
+          || key.tier == .space(layout.spaceID) || key.tier == .temporary(layout.spaceID))
         && layout.tabIDs(in: key.tier).contains(key.id)
     }) else { return false }
 
@@ -524,7 +609,7 @@ public final class SidebarTabDrag {
     startedFromStableTab = isStableTab?(id) ?? false
     let tierIDs = layout.tabIDs(in: key.tier)
     let next = tierIDs.firstIndex(of: id).flatMap { index in
-      index + 1 < tierIDs.count ? tierIDs[index + 1] : nil
+      tierIDs.dropFirst(index + 1).first { !liftedSourceTabIDs.contains($0) }
     }
     homeTarget = SidebarTabDropTarget(tier: key.tier, before: next)
     sourceTier = key.tier
@@ -616,8 +701,8 @@ public final class SidebarTabDrag {
                    move: @escaping (UUID, SidebarTabDropTarget) -> Bool) {
     guard !isDragging else { return }
     finish(animated: false)
-    guard !reduceMotion, let frame = frame(of: id, in: source),
-          frame.intersects(visibleSpaceFrame) else {
+    guard !reduceMotion, let frame = landingFrame(of: id, in: source),
+          frame.intersects(isSpaceOverview ? visibleFrame(in: source) : visibleSpaceFrame) else {
       withAnimation(reduceMotion ? nil : .smooth(duration: Values.reorderDuration)) {
         _ = move(id, target)
       }
@@ -646,7 +731,7 @@ public final class SidebarTabDrag {
       try? await Task.sleep(for: .milliseconds(16))
       guard let self, self.generation == generation, self.tabID == id else { return }
       self.programmaticLandingPending = false
-      if let frame = self.frame(of: id, in: moved ? target.tier : source) {
+      if let frame = self.landingFrame(of: id, in: moved ? target.tier : source) {
         self.land(in: frame, style: Style(moved ? target.tier : source))
       } else {
         self.settle(id, in: moved ? target.tier : source)
@@ -663,7 +748,7 @@ public final class SidebarTabDrag {
       try? await Task.sleep(for: .seconds(Values.landingFrameWaitDuration))
       guard let self, self.generation == generation, self.landingFlight == flight else { return }
       // The tab kept its frame, or it now sits outside the visible list.
-      if let frame = self.frame(of: id, in: tier) {
+      if let frame = self.landingFrame(of: id, in: tier) {
         self.land(in: frame, style: Style(tier))
       } else {
         self.finish(animated: true)
@@ -740,6 +825,7 @@ public final class SidebarTabDrag {
     programmaticLandingPending = false
     landingFlight += 1
     setAutoscroll(0)
+    hoveredSpaceID = nil
     let animateHandoff = animated && !reduceMotion
     var transaction = Transaction(animation: animateHandoff
       ? .easeOut(duration: Values.handoffDuration) : nil)
@@ -774,6 +860,38 @@ public final class SidebarTabDrag {
       width: spaceFrame.width, height: max(0, spaceFrame.maxY - top))
   }
 
+  private func visibleSpaceFrame(in spaceID: UUID) -> CGRect {
+    guard isSpaceOverview else { return visibleSpaceFrame }
+    guard let viewport = spaceViewports[spaceID]?.frame else { return .zero }
+    let clipped = viewport.intersection(bounds)
+    guard !clipped.isNull else { return .zero }
+    let top = max(clipped.minY, spaceHeaders[spaceID]?.frame.maxY ?? clipped.minY)
+    return CGRect(x: clipped.minX, y: top, width: clipped.width,
+                  height: max(0, clipped.maxY - top))
+  }
+
+  private func visibleFrame(in tier: WorkspaceCollection.TabTier) -> CGRect {
+    switch tier {
+    case .global: return isSpaceOverview ? topPinFrame.intersection(bounds) : topPinFrame
+    case .space(let id), .temporary(let id): return visibleSpaceFrame(in: id)
+    }
+  }
+
+  private func overviewSpace(at point: CGPoint, in layout: SidebarTabDragLayout) -> UUID? {
+    guard bounds.contains(point) else { return nil }
+    // A header can also be above its scroll viewport. Either region belongs
+    // to that column, but a header can never be used to lift a scrolled row.
+    return spaceViewports.sorted { lhs, rhs in
+      if lhs.value.frame.minX != rhs.value.frame.minX { return lhs.value.frame.minX < rhs.value.frame.minX }
+      return lhs.key.uuidString < rhs.key.uuidString
+    }.first { id, geometry in
+      // Stable pages can disappear when a Space is removed. Its previous
+      // geometry must stop accepting drops even before lifecycle cleanup.
+      (id == layout.spaceID || layout.spaceOrders[id] != nil)
+        && (geometry.frame.contains(point) || spaceHeaders[id]?.frame.contains(point) == true)
+    }?.key
+  }
+
   /// Targets are read from the tiers as drawn, gap included. Moving the gap
   /// past a tab moves that tab by the gap's size, so the pointer stays in the
   /// gap and the target cannot flicker between two slots.
@@ -789,14 +907,19 @@ public final class SidebarTabDrag {
     } else if pointer.x < bounds.minX - boundarySlop || pointer.x > bounds.maxX + boundarySlop {
       isOutsideSidebar = true
     }
-    // Keep the tile/row morph stable when the top-pin gap changes geometry.
-    if !isOutsideSidebar {
+    // Overview columns may extend alongside the Top Pins. Only the actual
+    // shared Top Pin region can turn a column row into a global tile.
+    if isSpaceOverview {
+      isOverTopPins = !isOutsideSidebar && topPinFrame.intersection(bounds).contains(pointer)
+    } else if !isOutsideSidebar {
       if isOverTopPins {
         if pointer.y > topPinFrame.maxY + boundarySlop { isOverTopPins = false }
       } else if pointer.y < topPinFrame.maxY - boundarySlop {
         isOverTopPins = true
       }
     }
+    hoveredSpaceID = isOutsideSidebar || isOverTopPins ? nil
+      : (isSpaceOverview ? overviewSpace(at: pointer, in: layout) : layout.spaceID)
     let resolved: SidebarTabDropTarget?
     // Leaving the sidebar sideways puts the tab back where it started.
     if isOutsideSidebar {
@@ -852,17 +975,34 @@ public final class SidebarTabDrag {
   }
 
   private func spaceTarget(for id: UUID, in layout: SidebarTabDragLayout) -> SidebarTabDropTarget? {
-    let visible = visibleSpaceFrame
+    guard let spaceID = isSpaceOverview ? hoveredSpaceID : layout.spaceID else { return nil }
+    let visible = visibleSpaceFrame(in: spaceID)
     guard visible.height > 0 else { return nil }
     let y = min(max(pointer.y, visible.minY), visible.maxY)
-    let pinTier = WorkspaceCollection.TabTier.space(layout.spaceID)
-    let inPins = tierFrames[pinTier].map { y <= $0.maxY } ?? false
-    let tier = inPins ? pinTier : .temporary(layout.spaceID)
+    let pinTier = WorkspaceCollection.TabTier.space(spaceID)
+    let inHeader = isSpaceOverview && spaceHeaders[spaceID]?.frame.contains(pointer) == true
+    let pinBoundary = isSpaceOverview
+      ? panelRows[.divider(spaceID)]?.frame.midY ?? tierFrames[pinTier]?.maxY
+      : tierFrames[pinTier]?.maxY
+    let inPins = inHeader || (pinBoundary.map { y <= $0 } ?? false)
+    let tier = inPins ? pinTier : .temporary(spaceID)
+    if isSpaceOverview, let target, target.tier == tier,
+       panelRows[.gap(spaceID)]?.frame.contains(pointer) == true { return target }
     // The source group remains visible, but dropping onto one of its members
     // is rejected by the workspace. Reserve the next valid list boundary.
-    let rows = layout.tabIDs(in: tier).filter { $0 != id && !paneSourceTabIDs.contains($0) }.compactMap { rowID in
-      frame(of: rowID, in: tier).map { (id: rowID, frame: $0) }
-    }
+    let excluded = isPaneDrag ? paneSourceTabIDs : liftedSourceTabIDs
+    let rows: [(id: UUID, frame: CGRect)] = layout.tabIDs(in: tier)
+      .filter { $0 != id && !excluded.contains($0) }.compactMap { rowID in
+        frame(of: rowID, in: tier).flatMap { frame in
+          // The first row below the viewport is still a list boundary. If
+          // it were discarded, passing the last visible row would append
+          // beyond unseen tabs and send the reservation to the list's end.
+          // Rows above the header or outside this column cannot receive it.
+          let isColumnBoundary = frame.maxY > visible.minY
+            && frame.maxX > visible.minX && frame.minX < visible.maxX
+          return !isSpaceOverview || isColumnBoundary ? (id: rowID, frame: frame) : nil
+        }
+      }
     let index = rows.firstIndex { y < $0.frame.midY } ?? rows.count
     return SidebarTabDropTarget(tier: tier, before: index < rows.count ? rows[index].id : nil)
   }
@@ -883,10 +1023,12 @@ public final class SidebarTabDrag {
   // MARK: - Autoscroll
 
   private func updateAutoscroll() {
-    let visible = visibleSpaceFrame
+    let visible = isSpaceOverview
+      ? hoveredSpaceID.map { visibleSpaceFrame(in: $0) } ?? .zero : visibleSpaceFrame
     let zone: CGFloat = 36
     var speed: CGFloat = 0
-    if visible.height > zone * 2, pointer.x >= bounds.minX, pointer.x <= bounds.maxX {
+    if visible.height > zone * 2, pointer.x >= bounds.minX, pointer.x <= bounds.maxX,
+       !isSpaceOverview || visible.contains(pointer) {
       if pointer.y >= visible.minY, pointer.y < visible.minY + zone {
         speed = -(80 + 520 * (1 - (pointer.y - visible.minY) / zone))
       } else if pointer.y > visible.maxY - zone {
@@ -932,6 +1074,7 @@ extension View {
 struct SidebarTabDragAutoscroll: ViewModifier {
   let drag: SidebarTabDrag
   let isActive: Bool
+  @Environment(\.sidebarDragRegistrationEnabled) private var registrationsEnabled
   @State private var position = ScrollPosition()
   @State private var metrics = Metrics()
 
@@ -947,11 +1090,12 @@ struct SidebarTabDragAutoscroll: ViewModifier {
       .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, geometry in
         metrics.geometry = geometry
       }
-      .task(id: isActive ? drag.autoscrollDirection : 0) {
-        guard isActive, drag.autoscrollDirection != 0 else { return }
+      .task(id: isActive && registrationsEnabled ? drag.autoscrollDirection : 0) {
+        guard isActive, registrationsEnabled, drag.autoscrollDirection != 0 else { return }
         var last = ContinuousClock.now
         while !Task.isCancelled {
           try? await Task.sleep(for: .milliseconds(16))
+          guard !Task.isCancelled else { return }
           let now = ContinuousClock.now
           let elapsed = CGFloat((now - last) / .seconds(1))
           last = now

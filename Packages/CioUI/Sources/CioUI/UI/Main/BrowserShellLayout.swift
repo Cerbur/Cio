@@ -145,6 +145,10 @@ public enum BrowserLayout {
   public static let sidebarMinimumWidth: CGFloat = 182
   public static let sidebarDefaultWidth = sidebarMinimumWidth
   public static let sidebarMaximumWidth: CGFloat = 480
+  static let spaceOverviewMaximumColumnWidth: CGFloat = 240
+  static let spaceOverviewColumnSpacing: CGFloat = 8
+  static let spaceOverviewMaximumFraction: CGFloat = 0.68
+  static let spaceOverviewMinimumBrowserWidth: CGFloat = 320
   public static let sidebarWidthPreferenceKey = "cio.sidebar.width"
   public static let sidebarWidthMigrationKey = "cio.sidebar.width.migrated-to-182"
   public static let devToolsDefaultFraction: CGFloat = 0.5

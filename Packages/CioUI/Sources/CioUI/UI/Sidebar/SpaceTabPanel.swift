@@ -13,6 +13,7 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
   @ViewBuilder let content: (SpaceTabPanelRow) -> Content
   @ViewBuilder let tabContent: (SpaceTabPanelRow, UUID) -> TabContent
   @ViewBuilder let rowBackground: (SpaceTabPanelRow) -> RowBackground
+  @Environment(\.sidebarDragRegistrationEnabled) private var registrationEnabled
 
   var body: some View {
     let layout = SidebarTabPanelLayout(rows: rows, columns: columns, rowHeight: rowHeight,
@@ -48,6 +49,7 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
     // of the destination, so swapping panes also moves their retained controls.
     .animation(drag.panelLayoutAnimation, value: layout.destinations)
     .onChange(of: layout.feedbackSnapshot) { previous, current in
+      guard registrationEnabled else { return }
       if let feedback = current.feedback(from: previous) { containerFeedback(feedback) }
     }
   }
@@ -73,6 +75,7 @@ private struct SpaceTabRowContainer<Content: View>: View {
   let row: SpaceTabPanelRow
   let drag: SidebarTabDrag
   @ViewBuilder let content: () -> Content
+  @Environment(\.sidebarDragRegistrationEnabled) private var registrationEnabled
   @State private var token = UUID()
   @State private var lastFrame = LastFrame()
 
@@ -103,15 +106,29 @@ private struct SpaceTabRowContainer<Content: View>: View {
       .transition(.identity)
       .onSidebarFrameChange { frame in
         lastFrame.value = frame
+        guard registrationEnabled else { return }
         drag.register(row, frame: frame, token: token)
       }
       .onAppear {
-        if let frame = lastFrame.value { drag.register(row, frame: frame, token: token) }
+        registerLatestFrame()
       }
-      .onChange(of: row) { _, _ in
+      .onChange(of: registrationEnabled) { _, enabled in
+        if enabled {
+          registerLatestFrame()
+        } else {
+          drag.unregister(row, token: token)
+        }
+      }
+      .onChange(of: row) { previous, _ in
         // Identity survives a tier change, even when its geometry is equal.
-        if let frame = lastFrame.value { drag.register(row, frame: frame, token: token) }
+        drag.unregister(previous, token: token)
+        registerLatestFrame()
       }
       .onDisappear { drag.unregister(row, token: token) }
+  }
+
+  private func registerLatestFrame() {
+    guard registrationEnabled, let frame = lastFrame.value else { return }
+    drag.register(row, frame: frame, token: token)
   }
 }

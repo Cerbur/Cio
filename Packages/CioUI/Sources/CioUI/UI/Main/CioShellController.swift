@@ -103,10 +103,10 @@ private final class BrowserShellView: NSView, BrowserToolbarLayoutHosting {
   override func layout() {
     super.layout()
     let frames = BrowserShellFrames(bounds: bounds)
-    toolbarView.frame = frames.toolbar
-    railView.frame = frames.navigationRail
-    mainView.frame = frames.mainView
-    splitPaneOverlayHost.frame = bounds
+    if toolbarView.frame != frames.toolbar { toolbarView.frame = frames.toolbar }
+    if railView.frame != frames.navigationRail { railView.frame = frames.navigationRail }
+    if mainView.frame != frames.mainView { mainView.frame = frames.mainView }
+    if splitPaneOverlayHost.frame != bounds { splitPaneOverlayHost.frame = bounds }
     onLayout?()
   }
 }
@@ -186,12 +186,24 @@ final class CioShellController: NSViewController {
       return shellView.subviews.compactMap { $0 as? ToolbarChromeView }
         .contains { $0.containsControl(at: point) }
     }
+    var overviewTranslation: CGFloat = 0
+    let translateOverview: (CGFloat) -> Void = { [weak self, weak shellView] x in
+      guard let self, let shellView else { return }
+      overviewTranslation = x
+      self.mainViewController.spaceToolbar.view.layer?.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
+      shellView.splitPaneOverlayHost.layer?.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
+      for case let pageChrome as ToolbarChromeView in shellView.subviews {
+        pageChrome.translateForSpaceOverview(x)
+      }
+    }
+    mainViewController.onSpaceOverviewTranslation = translateOverview
     let updateGeometry = { [weak self, weak shellView] in
       guard let self, let shellView else { return }
       let edge = shellView.convert(NSPoint(x: self.windowChrome.trafficLightsTrailingEdge, y: 0),
                                    from: self.windowChrome).x
       self.mainViewController.layoutSpaceToolbar(in: shellView, windowControlsTrailingEdge: edge)
       for case let pageChrome as ToolbarChromeView in shellView.subviews { pageChrome.refreshLayout() }
+      translateOverview(overviewTranslation)
     }
     shellView.onLayout = updateGeometry
     mainViewController.onToolbarLayoutChange = updateGeometry

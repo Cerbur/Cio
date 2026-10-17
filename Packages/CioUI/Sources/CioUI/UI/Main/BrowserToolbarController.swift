@@ -37,6 +37,14 @@ private final class AddressOverlayHostingView: NSHostingView<ToolbarAddressField
 final class ToolbarChromeView: NSView {
   var onGeometryRequest: (() -> Void)?
   func refreshLayout() { onGeometryRequest?() }
+
+  /// Follow the overview's captured geometry without laying out glass or editors.
+  /// Resting frames and native hit targets are restored at the endpoint.
+  func translateForSpaceOverview(_ x: CGFloat) {
+    let transform = CGAffineTransform(translationX: x, y: 0)
+    layer?.setAffineTransform(transform)
+    addressView.layer?.setAffineTransform(transform)
+  }
   private let navigationGroup: NSHostingView<ToolbarNavigationControlsView>
   private let navigationState = ToolbarNavigationState()
   private let addressView: AddressOverlayHostingView

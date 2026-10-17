@@ -3,7 +3,7 @@
 //  Cio
 //
 //  Notifications coordinating browser menu commands with their UI owners,
-//  including address focus (⌘L) and Space's sidebar/pin toggles (⌘S/⌘D).
+//  including address focus (⌘L) and Space's sidebar/overview/pin toggles (⌘S/⌘⌥S/⌘D).
 //
 //  AppKit menu key equivalents are dispatched by NSMenu before the first
 //  responder sees the event, so ⌘L reaches the application even while the
@@ -17,6 +17,7 @@ import Foundation
 public extension Notification.Name {
   /// Space-only menu commands target the window/sidebar for this workspace.
   static let browserToggleSidebar = Notification.Name("Cio.toggleSidebar")
+  static let browserToggleSpaceOverview = Notification.Name("Cio.toggleSpaceOverview")
   static let browserToggleSpacePin = Notification.Name("Cio.toggleSpacePin")
 
   /// Posted by a browser command (⌘L) to ask the address field to take focus.

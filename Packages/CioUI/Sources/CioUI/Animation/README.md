@@ -14,6 +14,8 @@ UI 组件负责状态和交互，这个包负责动画参数、速度偏好以�
 | `SplitControlAnimationValues.swift` | `AnimationValues.SplitControl` | 页面到位后的分割线 / 三点把手同步淡入、热区悬停强调 |
 | `TabDragAnimationValues.swift` | `AnimationValues.TabDrag` | 浮块托起、变形、排序、落点和交接 |
 | `SidebarAnimationValues.swift` | `AnimationValues.Sidebar` | 侧栏开合、Space 分页、悬停、清空反馈 |
+| `SpaceOverviewGesture.swift` | `SpaceOverviewGesture` | 进入/退出共用可逆进度，抬手决定目标，取消返回原目标 |
+| `SpaceOverviewAnimationValues.swift` | `AnimationValues.SpaceOverview` | Space 整体右移退场、Manager 从左进入、原生层共用显示刷新时钟；逐帧不发布 SwiftUI 状态、不移动分割线、不遍历页面布局；固定 Chromium 渲染宽度只改变裁切；双向手势跟随、回弹和中途反向保留进度与速度 |
 | `GlassComponentAnimationValues.swift` | `AnimationValues.GlassComponent` | 一级玻璃聚拢/扩散、移动与弹性尺寸模板 |
 | `ToolbarAnimationValues.swift` | `AnimationValues.Toolbar` | 工具栏一级控件出现、消失和销毁等待 |
 | `AddressFieldAnimationValues.swift` | `AnimationValues.AddressField` | 地址胶囊、焦点环、站点信息和按钮反馈 |

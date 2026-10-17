@@ -116,6 +116,13 @@ struct BrowserCommands: Commands {
       }
       .keyboardShortcut("s", modifiers: .command)
       .disabled(runtime.presentedInternalPanel != nil)
+
+      Button("Manage Spaces") {
+        guard runtime.presentedInternalPanel == nil else { return }
+        NotificationCenter.default.post(name: .browserToggleSpaceOverview, object: workspace)
+      }
+      .keyboardShortcut("s", modifiers: [.command, .option])
+      .disabled(runtime.presentedInternalPanel != nil)
     }
 
     // Tabs. A dedicated menu keeps the tab lifecycle commands together and keeps

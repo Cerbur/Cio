@@ -14,6 +14,11 @@ import SwiftUI
 @MainActor
 final class SidebarChromeLayout: ObservableObject {
   @Published private(set) var topInset: CGFloat = 0
+  @Published private(set) var isSpaceOverview = false
+  @Published private(set) var overviewColumnWidth = BrowserLayout.sidebarMinimumWidth
+  let overviewMotion = SpaceOverviewLayoutMotion()
+  var onSpaceOverviewChange: ((Bool) -> Void)?
+  var onSpaceOverviewPreview: ((CGFloat) -> Void)?
   weak var splitView: NSSplitView?
   weak var tabDrag: SidebarTabDrag?
   var onTabDragAvailable: ((SidebarTabDrag) -> Void)?
@@ -29,12 +34,32 @@ final class SidebarChromeLayout: ObservableObject {
   }
 
   func resizeSidebar(toWindowX x: CGFloat) {
-    guard let splitView else { return }
+    guard !isSpaceOverview, !overviewMotion.isTransitioning, let splitView else { return }
     let splitOriginX = splitView.convert(.zero, to: nil).x
     let width = min(max(x - splitOriginX + 5,
                         BrowserLayout.sidebarMinimumWidth), BrowserLayout.sidebarMaximumWidth)
     splitView.setPosition(width, ofDividerAt: 0)
     UserDefaults.standard.set(Double(width), forKey: BrowserLayout.sidebarWidthPreferenceKey)
+  }
+
+  func setSpaceOverview(_ presented: Bool) {
+    guard tabDrag?.tabID == nil,
+          isSpaceOverview != presented || overviewMotion.isInteracting else { return }
+    prepareOverviewColumnWidth()
+    isSpaceOverview = presented
+    onSpaceOverviewChange?(presented)
+  }
+
+  func previewSpaceOverview(progress: CGFloat) {
+    guard tabDrag?.tabID == nil else { return }
+    prepareOverviewColumnWidth()
+    onSpaceOverviewPreview?(progress)
+  }
+
+  private func prepareOverviewColumnWidth() {
+    guard !overviewMotion.isTransitioning, overviewMotion.presentation.progress == 0 else { return }
+    overviewColumnWidth = min(BrowserLayout.spaceOverviewMaximumColumnWidth,
+      max(BrowserLayout.sidebarMinimumWidth, splitView?.arrangedSubviews.first?.frame.width ?? 0))
   }
 }
 
@@ -43,18 +68,34 @@ private final class SpacePageSwipeState: ObservableObject {
   @Published private(set) var offset: CGFloat = 0
   private(set) var displacement: CGFloat = 0
   private var readyDestinationIndex: Int?
+  private(set) var overviewGesture: SpaceOverviewGesture?
+
+  func beginOverview(progress: CGFloat, originalDestination: Bool) {
+    overviewGesture = SpaceOverviewGesture(progress: progress, originalDestination: originalDestination)
+    readyDestinationIndex = originalDestination ? -1 : nil
+  }
+
+  func scrollOverview(_ delta: CGFloat, travel: CGFloat) -> CGFloat {
+    guard var gesture = overviewGesture else { return 0 }
+    gesture.scroll(delta, travel: travel)
+    overviewGesture = gesture
+    let destination = gesture.destination ? -1 : nil
+    if destination != readyDestinationIndex { BrowserDragHaptics.perform(.spaceSwitchReady) }
+    readyDestinationIndex = destination
+    return gesture.progress
+  }
 
   func scroll(_ delta: CGFloat, selectedIndex: Int, count: Int, width: CGFloat) {
-    let atFirst = selectedIndex == 0 && delta > 0
     let atLast = selectedIndex == count - 1 && delta < 0
-    let resistance: CGFloat = atFirst || atLast ? 0.22 : 1
+    let resistance: CGFloat = atLast ? AnimationValues.SpaceOverview.edgeResistance : 1
     displacement = max(-width, min(width, displacement + delta * resistance))
     offset = displacement
 
     // Use the release decision so feedback only marks a reachable Space.
     let destination = SpacePaging.destinationIndex(current: selectedIndex, count: count,
       displacement: displacement, width: width)
-    let readyDestination = destination == selectedIndex ? nil : destination
+    let readyDestination = SpacePaging.entersOverview(current: selectedIndex,
+      displacement: displacement, width: width) ? -1 : (destination == selectedIndex ? nil : destination)
     if let readyDestination, readyDestination != readyDestinationIndex {
       BrowserDragHaptics.perform(.spaceSwitchReady)
     }
@@ -65,6 +106,7 @@ private final class SpacePageSwipeState: ObservableObject {
     readyDestinationIndex = nil
     displacement = 0
     offset = 0
+    overviewGesture = nil
   }
 }
 
@@ -72,35 +114,98 @@ private struct SpacePageTrack: View {
   @ObservedObject var swipeState: SpacePageSwipeState
   let selectedIndex: Int
   let pages: [AnyView]
-  @State private var outgoingIndex: Int?
+  let spaceIDs: [UUID]
+  let isOverview: Bool
+  let columnWidth: CGFloat
+  let drag: SidebarTabDrag
+  @ObservedObject var overviewMotion: SpaceOverviewLayoutMotion
+  @Environment(\.sidebarDragRegistrationEnabled) private var registrationsEnabled
+  @State private var scrollPosition = ScrollPosition()
+  @State private var scrollMetrics = ScrollMetrics()
 
-  private var firstVisibleIndex: Int {
-    max(0, min(selectedIndex, outgoingIndex ?? selectedIndex) - 1)
-  }
+  private final class ScrollMetrics { var geometry: ScrollGeometry? }
 
-  private var lastVisibleIndex: Int {
-    min(pages.count - 1, max(selectedIndex, outgoingIndex ?? selectedIndex) + 1)
+  private func horizontalAutoscrollDirection(width: CGFloat) -> Int {
+    guard registrationsEnabled, isOverview, drag.isDragging,
+          drag.anchor.x >= 0, drag.anchor.x <= width else { return 0 }
+    if drag.anchor.x < 36 { return -1 }
+    if drag.anchor.x > width - 36 { return 1 }
+    return 0
   }
 
   var body: some View {
     GeometryReader { geometry in
-      HStack(spacing: 0) {
-        ForEach(firstVisibleIndex...lastVisibleIndex, id: \.self) { index in
-          pages[index]
-            .frame(width: geometry.size.width, height: geometry.size.height)
+      ScrollView(isOverview ? .horizontal : []) {
+        HStack(spacing: isOverview ? BrowserLayout.spaceOverviewColumnSpacing : 0) {
+          ForEach(Array(spaceIDs.enumerated()), id: \.element) { index, _ in
+            pages[index]
+              .frame(width: isOverview ? columnWidth : geometry.size.width, height: geometry.size.height)
+              .accessibilityHidden(!isOverview && index != selectedIndex)
+              .background {
+                if isOverview {
+                  RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius)
+                    .fill(.primary.opacity(0.035))
+                }
+              }
+              .clipShape(RoundedRectangle(cornerRadius: isOverview ? BrowserLayout.contentCornerRadius : 0))
+          }
+        }
+        .padding(.horizontal, isOverview ? BrowserLayout.spaceOverviewColumnSpacing : 0)
+        .offset(x: isOverview ? 0 : -CGFloat(selectedIndex) * geometry.size.width
+          + (overviewMotion.isTransitioning ? 0 : swipeState.offset))
+      }
+      .scrollPosition($scrollPosition)
+      .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, value in
+        scrollMetrics.geometry = value
+      }
+      .scrollIndicators(isOverview ? .automatic : .hidden)
+      .clipped()
+      .task(id: horizontalAutoscrollDirection(width: geometry.size.width)) {
+        let direction = horizontalAutoscrollDirection(width: geometry.size.width)
+        guard direction != 0 else { return }
+        var last = ContinuousClock.now
+        while !Task.isCancelled {
+          try? await Task.sleep(for: .milliseconds(16))
+          guard !Task.isCancelled, let metrics = scrollMetrics.geometry else { return }
+          let now = ContinuousClock.now
+          let elapsed = CGFloat((now - last) / .seconds(1))
+          last = now
+          let maximum = max(0, metrics.contentSize.width - metrics.containerSize.width)
+          let x = min(max(0, metrics.contentOffset.x + CGFloat(direction) * 440 * elapsed), maximum)
+          if abs(x - metrics.contentOffset.x) > 0.1 {
+            scrollPosition.scrollTo(x: x)
+            drag.listDidScroll()
+          }
         }
       }
-        .offset(x: -CGFloat(selectedIndex - firstVisibleIndex) * geometry.size.width + swipeState.offset)
-        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
-        .clipped()
     }
-    .onChange(of: selectedIndex) { oldIndex, _ in
-      outgoingIndex = oldIndex
-      Task { @MainActor in
-        try? await Task.sleep(for: .seconds(AnimationValues.Sidebar.pageRetentionDuration))
-        if outgoingIndex == oldIndex { outgoingIndex = nil }
+    .onChange(of: isOverview) { _, _ in scrollPosition.scrollTo(x: 0) }
+  }
+}
+
+/// GestureState must live in the same hosting graph as its recognizer.
+/// Both retained surfaces still drive the single existing drag coordinator.
+private struct SidebarSurfaceDrag: ViewModifier {
+  let drag: SidebarTabDrag
+  let isEnabled: Bool
+  let layout: () -> SidebarTabDragLayout
+  let move: (UUID, SidebarTabDropTarget) -> Bool
+  @GestureState private var isActive = false
+
+  func body(content: Content) -> some View {
+    content
+      .simultaneousGesture(
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(SidebarTabDragSpace.name))
+          .updating($isActive) { _, active, _ in active = true }
+          .onChanged { value in
+            guard isEnabled else { return }
+            drag.pointerMoved(from: value.startLocation, to: value.location, layout: layout())
+          }
+          .onEnded { _ in drag.drop(move) })
+      .onChange(of: isActive) { _, active in
+        guard !active else { return }
+        Task { @MainActor in drag.gestureDidEnd() }
       }
-    }
   }
 }
 
@@ -118,7 +223,6 @@ struct TabSidebarView: View {
   // becomes inactive later. Pins added after that snapshot stay visible.
   @State private var hiddenSpacePinIDs: [UUID: Set<UUID>] = [:]
   @State private var dumpAngle: Double = 0
-  @GestureState private var isTabDragGestureActive = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let topPinEdgeInset = BrowserLayout.sidebarContentInset
   private let topPinHeight: CGFloat = 40.5  // 75% of the former 54-point tiles.
@@ -129,17 +233,32 @@ struct TabSidebarView: View {
 
   var body: some View {
     GeometryReader { geometry in
-      VStack(spacing: 0) {
-        pinnedGrid(columns: columns(for: geometry.size.width))
-          .padding(.horizontal, topPinEdgeInset)
-          .padding(.top, chromeLayout.topInset + topPinEdgeInset)
-          .onSidebarFrameChange { tabDrag.topPinFrame = $0 }
-          .zIndex(1)
-
-        spacePages
-          .frame(maxHeight: .infinity)
-
-        footer
+      SpaceOverviewLayers(motion: chromeLayout.overviewMotion, isOverview: chromeLayout.isSpaceOverview) { width in
+        VStack(spacing: 0) {
+          pinnedGrid(columns: columns(for: width))
+            .padding(.horizontal, topPinEdgeInset)
+            .padding(.top, chromeLayout.topInset + topPinEdgeInset)
+            .sidebarDragGeometry(.topPins, drag: tabDrag)
+            .zIndex(1)
+          spacePages(isOverview: false)
+            .frame(maxHeight: .infinity)
+          footer
+        }
+        .coordinateSpace(.named(SidebarTabDragSpace.name))
+        .modifier(SidebarSurfaceDrag(drag: tabDrag,
+          isEnabled: !chromeLayout.overviewMotion.isTransitioning,
+          layout: { tabDragLayout(width: width) }, move: move))
+      } manager: {
+        VStack(spacing: 0) {
+          overviewHeader
+            .padding(.top, chromeLayout.topInset + topPinEdgeInset)
+          spacePages(isOverview: true)
+            .frame(maxHeight: .infinity)
+        }
+        .coordinateSpace(.named(SidebarTabDragSpace.name))
+        .modifier(SidebarSurfaceDrag(drag: tabDrag,
+          isEnabled: !chromeLayout.overviewMotion.isTransitioning,
+          layout: { tabDragLayout(width: chromeLayout.overviewMotion.presentation.overviewWidth) }, move: move))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .contentShape(Rectangle())
@@ -149,60 +268,87 @@ struct TabSidebarView: View {
       }
       // The local scroll monitor receives trackpad swipes before Spotlight's
       // shell overlay handles pointer clicks.
-      .background(SpaceSwipeMonitor { delta in
-        pageSwipeState.scroll(delta, selectedIndex: selectedSpaceIndex,
-                              count: workspace.spaces.count, width: geometry.size.width)
-      } onEnd: {
-        let next = SpacePaging.destinationIndex(
-          current: selectedSpaceIndex,
-          count: workspace.spaces.count,
-          displacement: pageSwipeState.displacement,
-          width: geometry.size.width)
-        withAnimation(.smooth(duration: AnimationValues.Sidebar.pagingDuration)) {
-          pageSwipeState.reset()
-          workspace.selectSpace(id: workspace.spaces[next].id)
+      .background(SpaceSwipeMonitor(isEnabled: tabDrag.tabID == nil) { delta in
+        let motion = chromeLayout.overviewMotion
+        let startsOverview = chromeLayout.isSpaceOverview || motion.isTransitioning
+          || (selectedSpaceIndex == 0 && pageSwipeState.displacement + delta > 0)
+        if pageSwipeState.overviewGesture != nil || startsOverview {
+          var input = delta
+          if pageSwipeState.overviewGesture == nil {
+            if !motion.isTransitioning && !chromeLayout.isSpaceOverview {
+              input += pageSwipeState.displacement
+            }
+            // Prepare the manager's full travel before converting points to progress.
+            chromeLayout.previewSpaceOverview(progress: motion.presentation.progress)
+            pageSwipeState.beginOverview(progress: motion.presentation.progress,
+              originalDestination: chromeLayout.isSpaceOverview)
+          }
+          let progress = pageSwipeState.scrollOverview(input, travel: motion.presentation.overviewWidth)
+          chromeLayout.previewSpaceOverview(progress: progress)
+        } else {
+          pageSwipeState.scroll(delta, selectedIndex: selectedSpaceIndex,
+            count: workspace.spaces.count, width: geometry.size.width)
         }
+      } onEnd: {
+        if let gesture = pageSwipeState.overviewGesture {
+          chromeLayout.setSpaceOverview(gesture.destination)
+          pageSwipeState.reset()
+        } else {
+          let next = SpacePaging.destinationIndex(current: selectedSpaceIndex,
+            count: workspace.spaces.count, displacement: pageSwipeState.displacement, width: geometry.size.width)
+          withAnimation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.pagingDuration)) {
+            pageSwipeState.reset()
+            if workspace.spaces.indices.contains(next) { workspace.selectSpace(id: workspace.spaces[next].id) }
+          }
+        }
+      } onCancel: {
+        if let gesture = pageSwipeState.overviewGesture {
+          chromeLayout.setSpaceOverview(gesture.originalDestination)
+          pageSwipeState.reset()
+        } else {
+          withAnimation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.pagingDuration)) {
+            pageSwipeState.reset()
+          }
+        }
+      } onToggleOverview: {
+        NotificationCenter.default.post(name: .browserToggleSpaceOverview, object: workspace)
+      } onEscape: {
+        guard !workspace.isSpotlightPresented else { return false }
+        if tabDrag.isDragging { tabDrag.gestureDidEnd(); return true }
+        guard chromeLayout.isSpaceOverview || chromeLayout.overviewMotion.isTransitioning else { return false }
+        chromeLayout.setSpaceOverview(false)
+        return true
       })
       .overlay(alignment: .trailing) {
-        SidebarResizeHandle(layout: chromeLayout)
-          .frame(width: 10)
-          .accessibilityLabel("Resize Sidebar")
+        if !chromeLayout.isSpaceOverview {
+          SidebarResizeHandle(layout: chromeLayout)
+            .frame(width: 10)
+            .accessibilityLabel("Resize Sidebar")
+        }
       }
-      .simultaneousGesture(tabDragGesture(width: geometry.size.width))
       .onGeometryChange(for: CGSize.self, of: \.size) { tabDrag.bounds = CGRect(origin: .zero, size: $0) }
       .coordinateSpace(.named(SidebarTabDragSpace.name))
       .onAppear {
         tabDrag.splitGroupProvider = { [weak workspace] id in workspace?.splitGroup(containing: id) }
+        let hiddenPins = $hiddenSpacePinIDs
         tabDrag.layoutProvider = { [weak workspace, weak chromeLayout, weak tabDrag] in
           guard let workspace, let chromeLayout, let tabDrag else { return nil }
-          let space = workspace.selectedSpace
-          let globals = workspace.globalPinnedTabs.map(\.id)
-          let rightIDs = Set(workspace.spaces.flatMap { $0.splitGroups.flatMap { $0.tabIDs.dropFirst() } })
-          let width = max(BrowserLayout.sidebarMinimumWidth, tabDrag.bounds.width)
-          let columns: CGFloat = width >= 365 ? 4 : (width >= 275 ? 3 : 2)
-          return SidebarTabDragLayout(spaceID: workspace.selectedSpaceID,
-            globalTabIDs: globals.filter { !rightIDs.contains($0) }, globalPinnedTabCount: globals.count,
-            groupedTabIDs: Set(workspace.spaces.flatMap { $0.splitGroups.flatMap(\.tabIDs) }),
-            groupSizes: Dictionary(uniqueKeysWithValues: workspace.spaces.flatMap {
-              $0.splitGroups.map { ($0.leftTabID, $0.tabIDs.count) }
-            }),
-            spacePinTabIDs: (space?.pinnedTabIDs ?? []).filter { !rightIDs.contains($0) },
-            temporaryTabIDs: (space?.tabIDs ?? []).filter {
-              !(space?.pinnedTabIDs.contains($0) ?? false) && !globals.contains($0) && !rightIDs.contains($0)
-            },
-            tileSize: CGSize(width: (width - 2 * BrowserLayout.sidebarContentInset
-              - BrowserLayout.sidebarTopPinSpacing * (columns - 1)) / columns, height: 40.5),
-            topInset: chromeLayout.topInset)
+          return Self.makeTabDragLayout(workspace: workspace, width: tabDrag.bounds.width,
+            topInset: chromeLayout.topInset, isOverview: chromeLayout.isSpaceOverview,
+            hiddenPins: hiddenPins.wrappedValue)
         }
         chromeLayout.attachTabDrag(tabDrag)
       }
+      .onChange(of: chromeLayout.isSpaceOverview, initial: true) { _, presented in
+        tabDrag.isSpaceOverview = presented
+        if presented { tabDrag.topPinFrame = .zero }
+      }
+      .onExitCommand {
+        if tabDrag.isDragging { tabDrag.gestureDidEnd() }
+        else if tabDrag.tabID == nil { chromeLayout.setSpaceOverview(false) }
+      }
       .onReceive(NotificationCenter.default.publisher(for: .browserToggleSpacePin, object: workspace)) { notification in
         if let id = notification.userInfo?["tabID"] as? UUID { toggleSpacePin(id) }
-      }
-      .onChange(of: isTabDragGestureActive) { _, isActive in
-        guard !isActive else { return }
-        // Runs after `onEnded`, so only a cancelled gesture is still dragging.
-        Task { @MainActor in tabDrag.gestureDidEnd() }
       }
       .onChange(of: reduceMotion, initial: true) { tabDrag.reduceMotion = reduceMotion }
       .onChange(of: spacePinMembership) { _, membership in
@@ -228,15 +374,19 @@ struct TabSidebarView: View {
     workspace.spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
   }
 
-  private var spacePages: some View {
+  private func spacePages(isOverview: Bool) -> some View {
     SpacePageTrack(swipeState: pageSwipeState, selectedIndex: selectedSpaceIndex,
-                   pages: workspace.spaces.map { AnyView(spacePage($0)) })
-    .onSidebarFrameChange { tabDrag.spaceFrame = $0 }
+      pages: workspace.spaces.map { AnyView(spacePage($0, isOverview: isOverview)) },
+      spaceIDs: workspace.spaces.map(\.id),
+      isOverview: isOverview, columnWidth: chromeLayout.overviewColumnWidth, drag: tabDrag,
+      overviewMotion: chromeLayout.overviewMotion)
+    .sidebarDragGeometry(.spaceArea, drag: tabDrag)
     .accessibilityIdentifier("space-pages")
   }
 
-  private func spacePage(_ space: BrowserSpace) -> some View {
-    let pinnedTabs = visiblePinnedTabs(in: space)
+  private func spacePage(_ space: BrowserSpace, isOverview: Bool) -> some View {
+    let pinnedTabs = isOverview
+      ? space.pinnedTabIDs.compactMap(workspace.tab(withID:)) : visiblePinnedTabs(in: space)
     let globalIDs = Set(workspace.globalPinnedTabs.map(\.id))
     let temporaryTabs = space.tabIDs
       .filter { !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) }
@@ -273,6 +423,12 @@ struct TabSidebarView: View {
     .overlay(alignment: .top) {
       SidebarSpaceRow(space: space, isCollapsed: hiddenSpacePinIDs[space.id] != nil,
                       isTabDragActive: tabDrag.tabID != nil) {
+        if isOverview {
+          guard tabDrag.tabID == nil else { return }
+          workspace.selectSpace(id: space.id)
+          chromeLayout.setSpaceOverview(false)
+          return
+        }
         withAnimation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
           if hiddenSpacePinIDs[space.id] != nil {
             hiddenSpacePinIDs.removeValue(forKey: space.id)
@@ -288,12 +444,12 @@ struct TabSidebarView: View {
       .padding(.horizontal, BrowserLayout.sidebarContentInset)
       .padding(.top, BrowserLayout.sidebarSpaceHeaderTopInset)
       .padding(.bottom, BrowserLayout.sidebarSpaceHeaderSpacing)
-      .onSidebarFrameChange { frame in
-        if space.id == workspace.selectedSpaceID { tabDrag.spaceHeaderFrame = frame }
-      }
+      .sidebarDragGeometry(.header(space.id, isSelected: space.id == workspace.selectedSpaceID), drag: tabDrag)
     }
     .coordinateSpace(name: SidebarScrollEdge.coordinateSpace)
-    .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: space.id == workspace.selectedSpaceID))
+    .sidebarDragGeometry(.viewport(space.id), drag: tabDrag)
+    .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: isOverview
+      ? tabDrag.hoveredSpaceID == space.id : space.id == workspace.selectedSpaceID))
   }
 
   @ViewBuilder
@@ -343,6 +499,7 @@ struct TabSidebarView: View {
   private func newTabElement(in space: BrowserSpace, spotlightIsActive: Bool, newTabIsHovered: Bool) -> some View {
     Button {
       workspace.selectSpace(id: space.id)
+      chromeLayout.setSpaceOverview(false)
       workspace.presentSpotlight()
     } label: {
       Label("New Tab", systemImage: "plus")
@@ -424,6 +581,29 @@ struct TabSidebarView: View {
     Dictionary(uniqueKeysWithValues: workspace.spaces.map { ($0.id, Set($0.pinnedTabIDs)) })
   }
 
+  private var overviewHeader: some View {
+    HStack(spacing: 12) {
+      Label("Spaces", systemImage: "rectangle.split.3x1")
+        .font(.headline)
+        .accessibilityIdentifier("space-overview-title")
+      Spacer()
+      Button {
+        _ = workspace.createSpace()
+      } label: {
+        Image(systemName: "plus")
+      }
+      .help("New Space")
+      .accessibilityLabel("New Space")
+      Button("Done") { chromeLayout.setSpaceOverview(false) }
+        .accessibilityIdentifier("space-overview-done")
+    }
+    .buttonStyle(.borderless)
+    .disabled(tabDrag.tabID != nil)
+    .padding(.horizontal, BrowserLayout.sidebarContentInset)
+    .frame(height: topPinHeight)
+    .padding(.bottom, BrowserLayout.spaceOverviewColumnSpacing)
+  }
+
   private func visiblePinnedTabs(in space: BrowserSpace) -> [BrowserTab] {
     let hiddenIDs = hiddenSpacePinIDs[space.id] ?? []
     return space.pinnedTabIDs.filter { !hiddenIDs.contains($0) }.compactMap(workspace.tab(withID:))
@@ -468,7 +648,7 @@ struct TabSidebarView: View {
       selected: workspace.selectedTabID == tab.id && !workspace.isSpotlightPresented,
       tier: tier, group: group, isCompact: compact,
       isTabDragActive: tabDrag.tabID != nil,
-      onSelect: { select(tab.id) }, onClose: { workspace.closeTab(id: tab.id) },
+      onSelect: { select(tab.id, in: tier) }, onClose: { workspace.closeTab(id: tab.id) },
       onPinGlobally: {
         withAnimation(tabDrag.panelLayoutAnimation) {
           if group != nil { workspace.moveSplitGroup(containing: anchor, to: .global) }
@@ -480,21 +660,25 @@ struct TabSidebarView: View {
             if group != nil { workspace.moveSplitGroup(containing: anchor, to: .space(workspace.selectedSpaceID)) }
             else { _ = workspace.moveTab(tab.id, to: .space(workspace.selectedSpaceID)) }
           }
-        } else { toggleSpacePin(anchor) }
+        } else { toggleSpacePin(anchor, in: tier) }
       }, onMakeTemporary: {
         if tier == .global {
           withAnimation(tabDrag.panelLayoutAnimation) {
             if group != nil { workspace.moveSplitGroup(containing: anchor, to: .temporary(workspace.selectedSpaceID)) }
             else { _ = workspace.moveTab(tab.id, to: .temporary(workspace.selectedSpaceID)) }
           }
-        } else { toggleSpacePin(anchor) }
+        } else { toggleSpacePin(anchor, in: tier) }
       }, onUngroup: { workspace.ungroupSplit(containing: anchor) },
       onSwap: { workspace.swapSplitSides(containing: anchor) })
   }
 
-  private func select(_ id: UUID) {
+  private func select(_ id: UUID, in tier: WorkspaceCollection.TabTier) {
     let containerID = workspace.splitGroup(containing: id)?.leftTabID ?? id
     guard !tabDrag.suppressesClick(on: containerID) else { return }
+    switch tier {
+    case .space(let spaceID), .temporary(let spaceID): workspace.selectSpace(id: spaceID)
+    case .global: break
+    }
     // AppKit ends the address field's editing before this button action runs.
     // An explicit sidebar selection supplies the page-focus intent rather than
     // trying to infer it after the old native editor has already resigned.
@@ -503,7 +687,7 @@ struct TabSidebarView: View {
 
   private func move(_ id: UUID, to target: SidebarTabDropTarget) -> Bool {
     var moved = false
-    withAnimation(.smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
+    withAnimation(tabDrag.panelLayoutAnimation) {
       if workspace.splitGroup(containing: id) != nil {
         moved = workspace.moveSplitGroup(containing: id, to: target.tier, before: target.before)
       } else {
@@ -511,6 +695,25 @@ struct TabSidebarView: View {
       }
     }
     return moved
+  }
+
+  private func toggleSpacePin(_ id: UUID, in tier: WorkspaceCollection.TabTier) {
+    guard chromeLayout.isSpaceOverview else { toggleSpacePin(id); return }
+    let target: SidebarTabDropTarget
+    switch tier {
+    case .space(let spaceID):
+      let movingIDs = Set(workspace.splitGroup(containing: id)?.tabIDs ?? [id])
+      let space = workspace.spaces.first { $0.id == spaceID }
+      let globalIDs = Set(workspace.globalPinnedTabs.map(\.id))
+      let firstTemporary = space?.tabIDs.first {
+        !movingIDs.contains($0) && !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0)
+      }
+      target = .init(tier: .temporary(spaceID), before: firstTemporary)
+    case .temporary(let spaceID): target = .init(tier: .space(spaceID), before: nil)
+    case .global: return
+    }
+    tabDrag.animateMove(workspace.splitGroup(containing: id)?.leftTabID ?? id,
+      from: tier, to: target, move: move)
   }
 
   private func toggleSpacePin(_ id: UUID) {
@@ -527,26 +730,32 @@ struct TabSidebarView: View {
     }
   }
 
-  private func tabDragGesture(width: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 4, coordinateSpace: .named(SidebarTabDragSpace.name))
-      .updating($isTabDragGestureActive) { _, isActive, _ in isActive = true }
-      .onChanged { value in
-        tabDrag.pointerMoved(from: value.startLocation, to: value.location,
-                             layout: tabDragLayout(width: width))
-      }
-      .onEnded { _ in
-        tabDrag.drop(move)
-      }
+  private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
+    Self.makeTabDragLayout(workspace: workspace, width: width, topInset: chromeLayout.topInset,
+      isOverview: chromeLayout.isSpaceOverview, hiddenPins: hiddenSpacePinIDs)
   }
 
-  private func tabDragLayout(width: CGFloat) -> SidebarTabDragLayout {
+  private static func makeTabDragLayout(workspace: any BrowserWorkspaceProtocol, width: CGFloat,
+                                        topInset: CGFloat, isOverview: Bool,
+                                        hiddenPins: [UUID: Set<UUID>]) -> SidebarTabDragLayout {
     let space = workspace.spaces.first { $0.id == workspace.selectedSpaceID }
     let globalIDs = workspace.globalPinnedTabs.map(\.id)
     let globalRightIDs = Set(globalIDs.flatMap { workspace.splitGroup(containing: $0)?.tabIDs.dropFirst() ?? [] })
     let groupedRightIDs = Set(space?.splitGroups.flatMap { $0.tabIDs.dropFirst() } ?? [])
-    let pinIDs = (space.map { visiblePinnedTabs(in: $0).map(\.id) } ?? [])
+    let pinIDs = (space?.pinnedTabIDs ?? [])
+      .filter { isOverview || !(hiddenPins[space?.id ?? workspace.selectedSpaceID]?.contains($0) ?? false) }
       .filter { !groupedRightIDs.contains($0) }
-    let columns = CGFloat(columns(for: width))
+    let columns: CGFloat = width >= 365 ? 4 : (width >= 275 ? 3 : 2)
+    let orders = Dictionary(uniqueKeysWithValues: workspace.spaces.map { space in
+      let rightIDs = Set(space.splitGroups.flatMap { $0.tabIDs.dropFirst() })
+      return (space.id, SidebarTabDragLayout.SpaceOrder(
+        pinnedTabIDs: space.pinnedTabIDs.filter {
+          !rightIDs.contains($0) && (isOverview || !(hiddenPins[space.id]?.contains($0) ?? false))
+        },
+        temporaryTabIDs: space.tabIDs.filter {
+          !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) && !rightIDs.contains($0)
+        }))
+    })
     return SidebarTabDragLayout(
       spaceID: workspace.selectedSpaceID,
       globalTabIDs: globalIDs.filter { !globalRightIDs.contains($0) },
@@ -559,14 +768,26 @@ struct TabSidebarView: View {
       temporaryTabIDs: (space?.tabIDs ?? []).filter {
         !(space?.pinnedTabIDs.contains($0) ?? false) && !globalIDs.contains($0) && !groupedRightIDs.contains($0)
       },
-      tileSize: CGSize(width: (width - 2 * topPinEdgeInset - BrowserLayout.sidebarTopPinSpacing * (columns - 1)) / columns,
-                       height: topPinHeight),
-      topInset: chromeLayout.topInset)
+      tileSize: CGSize(width: (width - 2 * BrowserLayout.sidebarContentInset
+        - BrowserLayout.sidebarTopPinSpacing * (columns - 1)) / columns, height: 40.5),
+      topInset: topInset, spaceOrders: orders)
   }
 
   private var footer: some View {
     VStack(spacing: 7) {
       HStack(spacing: 0) {
+        Button {
+          chromeLayout.setSpaceOverview(true)
+        } label: {
+          Image(systemName: "rectangle.split.3x1")
+            .frame(width: 27, height: 27)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Manage Spaces")
+        .accessibilityLabel("Manage Spaces")
+        .accessibilityIdentifier("manage-spaces")
+        .disabled(tabDrag.tabID != nil)
         let spaces = workspace.spaces
         let selectedIndex = spaces.firstIndex(where: { $0.id == workspace.selectedSpaceID }) ?? 0
         let start = min(max(0, selectedIndex - 1), max(0, spaces.count - 4))
@@ -627,6 +848,9 @@ struct TabSidebarView: View {
 }
 
 enum SpacePaging {
+  static func entersOverview(current: Int, displacement: CGFloat, width: CGFloat) -> Bool {
+    width > 0 && current == 0 && displacement >= min(width * 0.22, 72)
+  }
   static func destinationIndex(current: Int, count: Int, displacement: CGFloat, width: CGFloat) -> Int {
     guard count > 0, width > 0 else { return current }
     let threshold = min(width * 0.22, 72)
@@ -933,19 +1157,31 @@ private struct SidebarTabRow: View {
 /// Locks each precision-scroll gesture to one axis. Horizontal events are
 /// consumed so their vertical component cannot move the tab list.
 private struct SpaceSwipeMonitor: NSViewRepresentable {
+  let isEnabled: Bool
   let onScroll: (CGFloat) -> Void
   let onEnd: () -> Void
+  let onCancel: () -> Void
+  let onToggleOverview: () -> Void
+  let onEscape: () -> Bool
 
   func makeNSView(context: Context) -> MonitorView {
     let view = MonitorView()
+    view.isEnabled = isEnabled
     view.onScroll = onScroll
     view.onEnd = onEnd
+    view.onCancel = onCancel
+    view.onToggleOverview = onToggleOverview
+    view.onEscape = onEscape
     return view
   }
 
   func updateNSView(_ view: MonitorView, context: Context) {
+    view.isEnabled = isEnabled
     view.onScroll = onScroll
     view.onEnd = onEnd
+    view.onCancel = onCancel
+    view.onToggleOverview = onToggleOverview
+    view.onEscape = onEscape
   }
 
   final class MonitorView: NSView {
@@ -953,6 +1189,10 @@ private struct SpaceSwipeMonitor: NSViewRepresentable {
 
     var onScroll: ((CGFloat) -> Void)?
     var onEnd: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var onToggleOverview: (() -> Void)?
+    var onEscape: (() -> Bool)?
+    var isEnabled = true
     nonisolated(unsafe) private var monitor: Any?
     private var lockedAxis: Axis?
     private var accumulatedX: CGFloat = 0
@@ -964,7 +1204,7 @@ private struct SpaceSwipeMonitor: NSViewRepresentable {
       if let monitor { NSEvent.removeMonitor(monitor) }
       monitor = nil
       guard window != nil else { return }
-      monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+      monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .keyDown]) { [weak self] event in
         guard let self else { return event }
         return self.handle(event)
       }
@@ -974,23 +1214,41 @@ private struct SpaceSwipeMonitor: NSViewRepresentable {
       if let monitor { NSEvent.removeMonitor(monitor) }
     }
 
-    private func finishGesture() {
-      if lockedAxis == .horizontal { onEnd?() }
+    private func finishGesture(cancelled: Bool = false) {
+      let wasHorizontal = lockedAxis == .horizontal
       lockedAxis = nil
       accumulatedX = 0
       accumulatedY = 0
+      if wasHorizontal {
+        if cancelled { onCancel?() } else { onEnd?() }
+      }
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
+      if event.type == .keyDown {
+        guard event.window === window else { return event }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        // Chromium and non-Latin input sources can consume the menu key
+        // equivalent. Route the same command before the page's responder.
+        if event.keyCode == 1, modifiers == [.command, .option] {
+          if !event.isARepeat { onToggleOverview?() }
+          return nil
+        }
+        guard event.window === window, event.keyCode == 53,
+              event.modifierFlags.intersection([.command, .option, .shift, .control]).isEmpty else { return event }
+        return onEscape?() == true ? nil : event
+      }
+      guard isEnabled else { return event }
       guard let window, event.window === window, event.hasPreciseScrollingDeltas else { return event }
       guard event.momentumPhase == [] else { return event }
       if event.phase == .ended || event.phase == .cancelled {
         let wasHorizontal = lockedAxis == .horizontal
-        finishGesture()
+        finishGesture(cancelled: event.phase == .cancelled)
         return wasHorizontal ? nil : event
       }
       let point = convert(event.locationInWindow, from: nil)
-      guard bounds.contains(point) else { return event }
+      // Once claimed, keep scrubbing even as the closing crop passes the pointer.
+      guard lockedAxis != nil || bounds.contains(point) else { return event }
       if event.phase == .began || (event.phase == [] && event.timestamp - lastEventTime > 0.5) {
         finishGesture()
       }
