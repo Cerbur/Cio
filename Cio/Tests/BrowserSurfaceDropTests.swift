@@ -6,6 +6,49 @@ import XCTest
 
 final class BrowserSurfaceDropTests: XCTestCase {
   @MainActor
+  func testUnevenPaneReorderMovesSurvivorWithoutResizingDuringPreviewOrCommit() throws {
+    try withHost { host in
+      let leftID = UUID(), rightID = UUID()
+      let left = DropTestSurface(), right = DropTestSurface()
+      let attachments = [leftID: BrowserSurfaceAttachment(surface: left),
+                         rightID: BrowserSurfaceAttachment(surface: right)]
+      let split = BrowserSplitLayout(leftTabID: leftID, rightTabID: rightID, fraction: 0.7)
+      host.present(containers: attachments, selectedTabID: rightID, split: split)
+      let original = left.nativeView.frame.size
+      let draggedSize = right.nativeView.frame.size
+      left.clearRenderSizes()
+      right.clearRenderSizes()
+      host.previewPaneDrag(rightID, index: 1)
+      for index in [0, 1, 0] {
+        host.previewPaneDrag(rightID, index: index)
+        sampleLayout(host, duration: AnimationValues.SplitPages.layoutDuration * 2) {
+          XCTAssertEqual(left.nativeView.frame.size, original)
+          if let viewport = left.nativeView.superview, let layer = viewport.layer {
+            let shown = layer.presentation() ?? layer
+            XCTAssertEqual(shown.transform.m11, 1, accuracy: 0.0001)
+            XCTAssertEqual(shown.transform.m22, 1, accuracy: 0.0001)
+          }
+        }
+      }
+      let committed = split.movingPane(rightID, to: 0)
+      XCTAssertTrue(host.commitSplitDrop {
+        host.present(containers: attachments, selectedTabID: rightID, split: committed)
+        return true
+      })
+      host.revealSplitPages(for: [rightID],
+        from: host.convert(CGRect(origin: CGPoint(x: 100, y: 100),
+          size: AnimationValues.SplitPages.cardSize), to: nil)) {}
+      sampleLayout(host, duration: AnimationValues.SplitPages.enterDuration * 2) {
+        XCTAssertEqual(left.nativeView.frame.size, original)
+        XCTAssertEqual(right.nativeView.frame.size, draggedSize)
+      }
+      XCTAssertTrue(left.renderSizes.isEmpty, "Reordering must translate the survivor without resizing Chromium")
+      XCTAssertTrue(right.renderSizes.isEmpty, "The dropped pane must retain its original Chromium size")
+      XCTAssertEqual(left.nativeView.superview?.frame.maxX, host.bounds.maxX)
+    }
+  }
+
+  @MainActor
   func testPreviewAndInterruptedReturnNeverResizeTheLiveDocument() throws {
     try withHost { host in
       let id = UUID(), surface = DropTestSurface()

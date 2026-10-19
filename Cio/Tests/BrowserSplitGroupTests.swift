@@ -287,8 +287,15 @@ final class BrowserSplitGroupTests: XCTestCase {
           XCTAssertTrue(workspace.reorderSplitPane(id, to: destination))
           XCTAssertEqual(workspace.activeSplit?.id, group.id)
           XCTAssertEqual(workspace.activeSplit?.tabIDs, expected)
-          XCTAssertEqual(workspace.activeSplit?.fraction, group.fraction)
-          XCTAssertEqual(workspace.activeSplit?.secondFraction, group.secondFraction)
+          let bounds = CGRect(x: 11, y: 7, width: 1800, height: 700)
+          let originalSizes = Dictionary(uniqueKeysWithValues:
+            zip(group.tabIDs, group.paneFrames(in: bounds).panes.map(\.size)))
+          let reordered = try XCTUnwrap(workspace.activeSplit)
+          for (id, frame) in zip(reordered.tabIDs, reordered.paneFrames(in: bounds).panes) {
+            let original = try XCTUnwrap(originalSizes[id])
+            XCTAssertEqual(frame.width, original.width, accuracy: 1)
+            XCTAssertEqual(frame.height, original.height)
+          }
           XCTAssertEqual(workspace.selectedTabID, group.focusedTabID)
           XCTAssertEqual(Array(workspace.currentTabIDs.prefix(count)), expected)
           let restored = try WorkspaceCollection(restoring: WorkspaceSessionSnapshot(workspace: workspace))

@@ -25,15 +25,24 @@ public struct BrowserSplitLayout: Identifiable, Codable, Equatable, Sendable {
   public var tabIDs: [UUID] { [leftTabID] + (middleTabID.map { [$0] } ?? []) + [rightTabID] }
   public func contains(_ id: UUID?) -> Bool { id.map { tabIDs.contains($0) } ?? false }
 
-  /// Reorder one pane without displacing or duplicating any other member.
+  /// Move each pane with its share of the usable width, rather than assigning
+  /// it the width of the destination slot. Preview and commit use this together.
   public func movingPane(_ tabID: UUID, to index: Int) -> BrowserSplitLayout {
     guard contains(tabID) else { return self }
     var ids = tabIDs.filter { $0 != tabID }
     ids.insert(tabID, at: min(max(0, index), ids.count))
+    guard ids != tabIDs else { return self }
+    let edges: [CGFloat] = middleTabID == nil
+      ? [0, fraction, 1] : [0, fraction, secondFraction ?? 2.0 / 3, 1]
+    let widths = Dictionary(uniqueKeysWithValues: tabIDs.enumerated().map {
+      ($0.element, edges[$0.offset + 1] - edges[$0.offset])
+    })
     var result = self
     result.leftTabID = ids[0]
     result.rightTabID = ids.last!
     result.middleTabID = ids.count == 3 ? ids[1] : nil
+    result.fraction = widths[ids[0]]!
+    result.secondFraction = ids.count == 3 ? result.fraction + widths[ids[1]]! : nil
     return result
   }
 
