@@ -429,17 +429,17 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   func zoomIn() {
     guard closeState == .open, hasBrowser, !rendererCrashed else { return }
-    bridge?.zoomIn()
+    if let percent = bridge?.zoomIn(), percent > 0 { containerView?.showPageZoom(percent) }
   }
 
   func zoomOut() {
     guard closeState == .open, hasBrowser, !rendererCrashed else { return }
-    bridge?.zoomOut()
+    if let percent = bridge?.zoomOut(), percent > 0 { containerView?.showPageZoom(percent) }
   }
 
   func resetZoom() {
     guard closeState == .open, hasBrowser, !rendererCrashed else { return }
-    bridge?.resetZoom()
+    if let percent = bridge?.resetZoom(), percent > 0 { containerView?.showPageZoom(percent) }
   }
 
   func toggleDevTools() {
@@ -485,6 +485,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   }
 
   private func beginNavigation() {
+    containerView?.dismissPageZoom()
     lastErrorCode = nil
     lastMainFrameLoadFailed = false
     rendererCrashed = false
@@ -651,7 +652,10 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     view.findBar.onFocusChanged = { [weak self] in self?.findFieldFocusChanged($0) }
   }
 
-  private func updateFindUI() { containerView?.findBar.apply(findState) }
+  private func updateFindUI() {
+    containerView?.findBar.apply(findState)
+    containerView?.needsLayout = true
+  }
 
   func showFindBar() {
     openFindBar(forward: true)

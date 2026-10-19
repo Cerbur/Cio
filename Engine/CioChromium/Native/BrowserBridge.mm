@@ -9,6 +9,7 @@
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
 #include "components/zoom/page_zoom.h"
+#include "components/zoom/zoom_controller.h"
 
 #include <map>
 #include <deque>
@@ -260,17 +261,26 @@ class PageObserver final : public content::WebContentsObserver,
 - (void)reload { if (_contents) _contents->GetController().Reload(content::ReloadType::NORMAL, false); }
 - (void)reloadIgnoringCache { if (_contents) _contents->GetController().Reload(content::ReloadType::BYPASSING_CACHE, false); }
 - (void)stopLoading { if (_contents) _contents->Stop(); }
-- (void)zoomIn {
-  if (_contents && !_closed && !_closing)
-    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_IN);
+- (NSInteger)changePageZoom:(content::PageZoom)direction {
+  if (!_contents || _closed || _closing) return 0;
+  auto* controller = zoom::ZoomController::FromWebContents(_contents);
+  if (!controller) return 0;
+  // A split's WebContents can share an origin. Never write its HostZoomMap:
+  // keyboard zoom belongs to this container, even for two identical URLs.
+  controller->SetZoomMode(zoom::ZoomController::ZOOM_MODE_ISOLATED);
+  const int previous = controller->GetZoomPercent();
+  zoom::PageZoom::Zoom(_contents, direction);
+  const int current = controller->GetZoomPercent();
+  return current != previous ? current : 0;
 }
-- (void)zoomOut {
-  if (_contents && !_closed && !_closing)
-    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_OUT);
+- (NSInteger)zoomIn {
+  return [self changePageZoom:content::PAGE_ZOOM_IN];
 }
-- (void)resetZoom {
-  if (_contents && !_closed && !_closing)
-    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_RESET);
+- (NSInteger)zoomOut {
+  return [self changePageZoom:content::PAGE_ZOOM_OUT];
+}
+- (NSInteger)resetZoom {
+  return [self changePageZoom:content::PAGE_ZOOM_RESET];
 }
 - (void)viewPageSource {
   if (_contents) [self.delegate browserBridge:self didRequestNewTabWithURL:

@@ -8,8 +8,8 @@
 //  These are AppKit menu items in the main menu, not SwiftUI keyboard
 //  handlers: NSMenu matches a key equivalent before the event reaches the first
 //  responder, so they work while the Chromium view owns the keyboard. There is
-//  no global key polling and no Chromium key interception anywhere in the
-//  application.
+//  no global key polling. Chromium's native pre-handler routes page-owned
+//  shortcuts through this same menu, canonicalizing input-source '+' variants.
 //
 //  Every command targets the workspace's effective selected session. The
 //  closures resolve `workspace.selectedSession` when they run instead of capturing a session, so a
@@ -110,15 +110,15 @@ struct BrowserCommands: Commands {
     }
 
     CommandGroup(after: .toolbar) {
-      Button("Zoom In") { workspace.selectedSession?.zoomIn() }
-        .keyboardShortcut("+", modifiers: .command)
+      Button("Zoom In") { workspace.pageZoomSession?.zoomIn() }
+        .keyboardShortcut("=", modifiers: .command)
         .disabled(!canZoomPage)
 
-      Button("Zoom Out") { workspace.selectedSession?.zoomOut() }
+      Button("Zoom Out") { workspace.pageZoomSession?.zoomOut() }
         .keyboardShortcut("-", modifiers: .command)
         .disabled(!canZoomPage)
 
-      Button("Actual Size") { workspace.selectedSession?.resetZoom() }
+      Button("Actual Size") { workspace.pageZoomSession?.resetZoom() }
         .keyboardShortcut("0", modifiers: .command)
         .disabled(!canZoomPage)
 
@@ -193,9 +193,10 @@ struct BrowserCommands: Commands {
   }
 
   private var canZoomPage: Bool {
-    runtime.presentedInternalPanel == nil && workspace.selectedSession?.isClosed == false
-      && workspace.selectedSession?.rendererCrashed == false
-      && workspace.selectedSession?.hasBrowser == true
+    runtime.presentedInternalPanel == nil && !workspace.isSpotlightPresented
+      && workspace.pageZoomSession?.isClosed == false
+      && workspace.pageZoomSession?.rendererCrashed == false
+      && workspace.pageZoomSession?.hasBrowser == true
   }
 
   private var selectedIsSpacePin: Bool {

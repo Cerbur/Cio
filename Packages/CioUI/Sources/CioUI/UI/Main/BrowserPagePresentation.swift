@@ -34,6 +34,7 @@ final class BrowserPagePresentation {
   func configureToolbar(workspace: any BrowserWorkspaceProtocol, history: HistoryService) {
     guard toolbar == nil else { return }
     let id = tabID
+    splitControl.onActivate = { [weak workspace] in workspace?.selectTab(id: id, focusingPage: true) }
     splitControl.onClose = { [weak workspace] in workspace?.closeTab(id: id) }
     splitControl.onMinimize = { [weak self, weak workspace] in
       if let action = self?.onMinimizeToSidebar { action() }

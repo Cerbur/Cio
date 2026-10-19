@@ -24,6 +24,7 @@ final class BrowserSplitPaneControl: NSView {
   private var expandedFrame = CGRect.zero
   private var handleSymbolSize = BrowserLayout.splitPaneHandleSymbolSize
   var onDrag: ((BrowserSplitPaneDragEvent) -> Bool)?
+  var onActivate: (() -> Void)?
   var onClose: (() -> Void)?
   var onMinimize: (() -> Void)?
   var onExpand: (() -> Void)?
@@ -239,6 +240,9 @@ final class BrowserSplitPaneControl: NSView {
   }
 
   @objc private func toggleCapsule() {
+    // The handle lives above the content host's pane-click monitor. Explicitly
+    // activate its page so subsequent keyboard commands use this container.
+    onActivate?()
     if expanded { collapse(); return }
     addressLayoutDidChange()
     expanded = true

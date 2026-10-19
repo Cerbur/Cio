@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #include "chrome/browser/ui/cio/CioWindowHooks.h"
+#include "chrome/browser/ui/cio/CioMenuKeyEquivalent.h"
 
 // AppKit actions remain owned by Cio's SwiftUI shell. Chromium's window adapter
 // uses this small router instead of importing Mori's SwiftUI root or window.
@@ -12,7 +13,7 @@
       !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption |
                               NSEventModifierFlagControl | NSEventModifierFlagShift));
   if (!(event.modifierFlags & NSEventModifierFlagCommand) && !inspectorFunctionKey) return NO;
-  return [NSApp.mainMenu performKeyEquivalent:event];
+  return cio::PerformMenuKeyEquivalent(NSApp.mainMenu, event);
 }
 + (void)focusOmnibox {
   [NSNotificationCenter.defaultCenter postNotificationName:@"CioFocusAddress" object:nil];

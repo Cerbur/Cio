@@ -36,6 +36,7 @@ final class ChromiumContainerView: NSView {
   let devToolsHostView = NSView()
   let devToolsEmulationHostView = NSView()
   let findBar = BrowserFindBarView(frame: .zero)
+  private var zoomIndicator: BrowserPageZoomIndicator?
   private var inspectedPageBounds: CGRect?
   private(set) var isDevToolsVisible = false
   private(set) var isSurfaceVisible = true
@@ -127,6 +128,29 @@ final class ChromiumContainerView: NSView {
     layoutPanes()
   }
 
+  func showPageZoom(_ percent: Int) {
+    guard isSurfaceVisible else { return }
+    if zoomIndicator == nil {
+      let indicator = BrowserPageZoomIndicator(frame: .zero)
+      zoomIndicator = indicator
+      addSubview(indicator, positioned: .above, relativeTo: nil)
+    }
+    layoutZoomIndicator()
+    zoomIndicator?.layoutSubtreeIfNeeded()
+    zoomIndicator?.show(percent: percent)
+  }
+
+  func dismissPageZoom() { zoomIndicator?.dismiss() }
+
+  private func layoutZoomIndicator() {
+    guard let indicator = zoomIndicator else { return }
+    let page = pageContentView.frame
+    let size = BrowserPageZoomIndicator.hostSize
+    let top = findBar.isHidden ? page.minY : findBar.frame.maxY
+    indicator.frame = CGRect(x: max(page.minX, page.maxX - size.width), y: top,
+      width: min(size.width, page.width), height: min(size.height, max(0, page.maxY - top)))
+  }
+
   private func layoutPanes() {
     devToolsHostView.frame = bounds
     devToolsEmulationHostView.frame = bounds
@@ -136,6 +160,7 @@ final class ChromiumContainerView: NSView {
     let findWidth = max(0, min(366, pageBounds.width - 12))
     findBar.frame = CGRect(x: pageBounds.maxX - findWidth - 6, y: pageBounds.minY + 6,
       width: findWidth, height: BrowserFindBarView.height(for: findWidth))
+    layoutZoomIndicator()
     delegate?.containerViewDidResize(self)
   }
 
@@ -148,6 +173,7 @@ final class ChromiumContainerView: NSView {
   func setSurfaceVisible(_ visible: Bool) {
     guard isSurfaceVisible != visible else { return }
     isSurfaceVisible = visible
+    if !visible { zoomIndicator?.dismiss() }
     isHidden = !visible
     delegate?.containerViewDidChangeVisibility(self, isVisible: visible)
   }
