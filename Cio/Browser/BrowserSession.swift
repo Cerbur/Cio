@@ -427,6 +427,21 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     bridge?.stopLoading()
   }
 
+  func zoomIn() {
+    guard closeState == .open, hasBrowser, !rendererCrashed else { return }
+    bridge?.zoomIn()
+  }
+
+  func zoomOut() {
+    guard closeState == .open, hasBrowser, !rendererCrashed else { return }
+    bridge?.zoomOut()
+  }
+
+  func resetZoom() {
+    guard closeState == .open, hasBrowser, !rendererCrashed else { return }
+    bridge?.resetZoom()
+  }
+
   func toggleDevTools() {
     guard closeState == .open, let bridge else { return }
     if isDevToolsOpen {

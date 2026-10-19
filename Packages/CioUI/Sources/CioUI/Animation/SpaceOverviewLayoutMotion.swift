@@ -59,6 +59,7 @@ final class SpaceOverviewLayoutMotion: ObservableObject {
   private(set) var presentation = SpaceOverviewPresentation()
   let frames = PassthroughSubject<SpaceOverviewPresentation, Never>()
   @Published private(set) var isTransitioning = false
+  @Published var retainedNormalWidth: CGFloat?
   private(set) var isInteracting = false
   var isRunning: Bool { flight != nil }
   private weak var splitView: NSSplitView?

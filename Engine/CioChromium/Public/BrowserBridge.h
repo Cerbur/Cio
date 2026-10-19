@@ -180,6 +180,11 @@ __attribute__((visibility("default")))
 - (void)stopLoading;
 - (void)viewPageSource;
 
+/// Uses Chromium's standard page zoom steps and default zoom reset.
+- (void)zoomIn;
+- (void)zoomOut;
+- (void)resetZoom;
+
 /// FindTabHelper owns matching, highlighting, frame traversal and wraparound.
 - (void)showFindBarWithQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation;
 - (void)findQuery:(NSString *)query forward:(BOOL)forward generation:(NSInteger)generation;

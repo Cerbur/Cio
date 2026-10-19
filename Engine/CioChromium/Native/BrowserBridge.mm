@@ -8,6 +8,7 @@
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "components/find_in_page/find_tab_helper.h"
 #include "components/find_in_page/find_types.h"
+#include "components/zoom/page_zoom.h"
 
 #include <map>
 #include <deque>
@@ -259,6 +260,18 @@ class PageObserver final : public content::WebContentsObserver,
 - (void)reload { if (_contents) _contents->GetController().Reload(content::ReloadType::NORMAL, false); }
 - (void)reloadIgnoringCache { if (_contents) _contents->GetController().Reload(content::ReloadType::BYPASSING_CACHE, false); }
 - (void)stopLoading { if (_contents) _contents->Stop(); }
+- (void)zoomIn {
+  if (_contents && !_closed && !_closing)
+    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_IN);
+}
+- (void)zoomOut {
+  if (_contents && !_closed && !_closing)
+    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_OUT);
+}
+- (void)resetZoom {
+  if (_contents && !_closed && !_closing)
+    zoom::PageZoom::Zoom(_contents, content::PAGE_ZOOM_RESET);
+}
 - (void)viewPageSource {
   if (_contents) [self.delegate browserBridge:self didRequestNewTabWithURL:
       [@"view-source:" stringByAppendingString:base::SysUTF8ToNSString(_contents->GetLastCommittedURL().spec())]];

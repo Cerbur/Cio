@@ -12,6 +12,7 @@ struct SpaceOverviewLayers<Normal: View, Manager: View>: NSViewRepresentable {
 
   func makeNSView(context: Context) -> SurfaceView {
     let view = SurfaceView()
+    view.motion = motion
     view.observation = motion.frames.sink { [weak view] pose in view?.present(pose) }
     updateNSView(view, context: context)
     return view
@@ -19,7 +20,8 @@ struct SpaceOverviewLayers<Normal: View, Manager: View>: NSViewRepresentable {
 
   func updateNSView(_ view: SurfaceView, context: Context) {
     let pose = motion.presentation
-    let normalWidth = motion.isTransitioning || isOverview ? pose.normalWidth : view.bounds.width
+    let normalWidth = motion.retainedNormalWidth
+      ?? (motion.isTransitioning || isOverview ? pose.normalWidth : view.bounds.width)
     view.normal.rootView = AnyView(normal(normalWidth > 0 ? normalWidth : pose.normalWidth)
       .environment(\.sidebarDragRegistrationEnabled, !isOverview && !motion.isTransitioning)
       .allowsHitTesting(!isOverview && !motion.isTransitioning)
@@ -39,6 +41,7 @@ struct SpaceOverviewLayers<Normal: View, Manager: View>: NSViewRepresentable {
     private let normalContainer = NSView()
     private let managerContainer = NSView()
     var observation: AnyCancellable?
+    weak var motion: SpaceOverviewLayoutMotion?
     var isOverview = false
     var isTransitioning = false
     private var pose = SpaceOverviewPresentation()
@@ -73,8 +76,11 @@ struct SpaceOverviewLayers<Normal: View, Manager: View>: NSViewRepresentable {
     }
 
     private func placeSurfaces() {
-      let width = isTransitioning || isOverview ? pose.normalWidth : bounds.width
-      let compensation = isTransitioning || isOverview ? bounds.width - pose.sidebarWidth : 0
+      // Native layout can run before SwiftUI receives a transition boundary.
+      // Keep the captured width until the split has committed its normal frame.
+      let retainsGeometry = motion?.retainedNormalWidth != nil || isTransitioning || isOverview
+      let width = motion?.retainedNormalWidth ?? (retainsGeometry ? pose.normalWidth : bounds.width)
+      let compensation = retainsGeometry ? bounds.width - pose.sidebarWidth : 0
       let normalFrame = CGRect(x: pose.normalOffset + compensation, y: 0, width: max(1, width), height: bounds.height)
       let managerFrame = CGRect(x: pose.overviewOffset + compensation, y: 0, width: pose.overviewWidth, height: bounds.height)
       if normalContainer.frame != normalFrame { normalContainer.frame = normalFrame }

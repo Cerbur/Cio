@@ -186,22 +186,28 @@ final class CioShellController: NSViewController {
       return shellView.subviews.compactMap { $0 as? ToolbarChromeView }
         .contains { $0.containsControl(at: point) }
     }
-    var overviewTranslation: CGFloat = 0
-    let translateOverview: (CGFloat) -> Void = { [weak self, weak shellView] x in
+    let layoutSpaceToolbar = { [weak self, weak shellView] in
       guard let self, let shellView else { return }
+      let edge = shellView.convert(NSPoint(x: self.windowChrome.trafficLightsTrailingEdge, y: 0),
+                                   from: self.windowChrome).x
+      self.mainViewController.layoutSpaceToolbar(in: shellView, windowControlsTrailingEdge: edge)
+    }
+    var overviewTranslation: CGFloat = 0
+    let translateOverview: (CGFloat) -> Void = { [weak shellView] x in
+      guard let shellView else { return }
       overviewTranslation = x
-      self.mainViewController.spaceToolbar.view.layer?.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
+      // The sidebar anchor already includes the moving stage's native origin.
+      // Resolve its traffic-light reservation once, without a second translation.
+      layoutSpaceToolbar()
       shellView.splitPaneOverlayHost.layer?.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
       for case let pageChrome as ToolbarChromeView in shellView.subviews {
         pageChrome.translateForSpaceOverview(x)
       }
     }
     mainViewController.onSpaceOverviewTranslation = translateOverview
-    let updateGeometry = { [weak self, weak shellView] in
-      guard let self, let shellView else { return }
-      let edge = shellView.convert(NSPoint(x: self.windowChrome.trafficLightsTrailingEdge, y: 0),
-                                   from: self.windowChrome).x
-      self.mainViewController.layoutSpaceToolbar(in: shellView, windowControlsTrailingEdge: edge)
+    let updateGeometry = { [weak shellView] in
+      guard let shellView else { return }
+      layoutSpaceToolbar()
       for case let pageChrome as ToolbarChromeView in shellView.subviews { pageChrome.refreshLayout() }
       translateOverview(overviewTranslation)
     }

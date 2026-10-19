@@ -92,6 +92,9 @@ final class SpaceToolbarController: NSObject {
     let topInset = (BrowserLayout.chromeThickness - height) / 2
     let y = host.isFlipped ? host.bounds.minY + topInset : host.bounds.maxY - topInset - height
     let frame = NSRect(x: left, y: y, width: height, height: height)
+    if followsOverview {
+      layoutMotion.animate(controlHost, from: nil, enabled: false)
+    }
     if controlHost.frame != frame {
       let source = presentation.isVisible && !followsOverview ? layoutMotion.capture(controlHost) : nil
       CATransaction.begin()

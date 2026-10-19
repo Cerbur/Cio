@@ -45,6 +45,60 @@ final class SpaceOverviewMotionTests: XCTestCase {
   }
 
   @MainActor
+  func testNormalSurfaceKeepsCapturedWidthBeforeTransitionStateReachesSwiftUI() {
+    let motion = SpaceOverviewLayoutMotion()
+    let surfaces = SpaceOverviewLayers<EmptyView, EmptyView>.SurfaceView(
+      frame: CGRect(x: 0, y: 0, width: 240, height: 900))
+    surfaces.motion = motion
+    motion.retainedNormalWidth = 240
+    surfaces.present(.init(progress: 0, normalWidth: 240, overviewWidth: 720))
+
+    // Native divider preparation precedes the representable's state update.
+    surfaces.frame.size.width = 720
+    surfaces.needsLayout = true
+    surfaces.layoutSubtreeIfNeeded()
+    XCTAssertFalse(surfaces.isTransitioning)
+    XCTAssertFalse(surfaces.isOverview)
+    XCTAssertEqual(surfaces.normal.frame.width, 240)
+    XCTAssertEqual(surfaces.normal.superview!.frame.minX, 480)
+  }
+
+  @MainActor
+  func testReturningSurfaceDoesNotExpandWhenTransitionEndsBeforeNativeCommit() {
+    for width: CGFloat in [182, 320, 480] {
+      let motion = SpaceOverviewLayoutMotion()
+      let surfaces = SpaceOverviewLayers<EmptyView, EmptyView>.SurfaceView(
+        frame: CGRect(x: 0, y: 0, width: 720, height: 900))
+      surfaces.motion = motion
+      motion.retainedNormalWidth = width
+      surfaces.isTransitioning = true
+      surfaces.present(.init(progress: 0, normalWidth: width, overviewWidth: 720))
+
+      // SwiftUI can clear its transition flag while the split is still wide.
+      surfaces.isTransitioning = false
+      surfaces.needsLayout = true
+      surfaces.layoutSubtreeIfNeeded()
+      XCTAssertEqual(surfaces.normal.frame.width, width)
+      XCTAssertEqual(surfaces.normal.superview!.frame.minX, 720 - width)
+
+      surfaces.frame.size.width = width
+      surfaces.needsLayout = true
+      surfaces.layoutSubtreeIfNeeded()
+      motion.retainedNormalWidth = nil
+      surfaces.needsLayout = true
+      surfaces.layoutSubtreeIfNeeded()
+      XCTAssertEqual(surfaces.normal.frame.width, width)
+      XCTAssertEqual(surfaces.normal.superview!.frame.minX, 0)
+
+      surfaces.frame.size.width = width + 40
+      surfaces.needsLayout = true
+      surfaces.layoutSubtreeIfNeeded()
+      XCTAssertEqual(surfaces.normal.frame.width, width + 40,
+        "Ordinary sidebar resizing resumes after the native commit")
+    }
+  }
+
+  @MainActor
   private final class CountingSplitView: NSSplitView {
     var dividerUpdates = 0
     override func setPosition(_ position: CGFloat, ofDividerAt dividerIndex: Int) {

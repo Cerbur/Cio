@@ -110,6 +110,20 @@ struct BrowserCommands: Commands {
     }
 
     CommandGroup(after: .toolbar) {
+      Button("Zoom In") { workspace.selectedSession?.zoomIn() }
+        .keyboardShortcut("+", modifiers: .command)
+        .disabled(!canZoomPage)
+
+      Button("Zoom Out") { workspace.selectedSession?.zoomOut() }
+        .keyboardShortcut("-", modifiers: .command)
+        .disabled(!canZoomPage)
+
+      Button("Actual Size") { workspace.selectedSession?.resetZoom() }
+        .keyboardShortcut("0", modifiers: .command)
+        .disabled(!canZoomPage)
+
+      Divider()
+
       Button("Toggle Sidebar") {
         guard runtime.presentedInternalPanel == nil else { return }
         NotificationCenter.default.post(name: .browserToggleSidebar, object: workspace)
@@ -173,6 +187,12 @@ struct BrowserCommands: Commands {
   }
 
   private var canFindInPage: Bool {
+    runtime.presentedInternalPanel == nil && workspace.selectedSession?.isClosed == false
+      && workspace.selectedSession?.rendererCrashed == false
+      && workspace.selectedSession?.hasBrowser == true
+  }
+
+  private var canZoomPage: Bool {
     runtime.presentedInternalPanel == nil && workspace.selectedSession?.isClosed == false
       && workspace.selectedSession?.rendererCrashed == false
       && workspace.selectedSession?.hasBrowser == true

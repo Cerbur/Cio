@@ -288,6 +288,7 @@ final class BrowserMainViewController: NSViewController {
     hasPreparedSpaceOverview = true
     expandedSidebarWidth = min(BrowserLayout.sidebarMaximumWidth,
       max(BrowserLayout.sidebarMinimumWidth, sidebarItem.viewController.view.frame.width))
+    spaceOverviewMotion.retainedNormalWidth = expandedSidebarWidth
     browserViewport.retainedWidth = browserViewport.content.frame.width
     configureOverviewStage(width: desiredSpaceOverviewWidth())
   }
@@ -347,6 +348,7 @@ final class BrowserMainViewController: NSViewController {
       overviewBaseWidth = 0
       spaceOverviewWidth = nil
       browserViewport.retainedWidth = nil
+      spaceOverviewMotion.retainedNormalWidth = nil
     }
     isConfiguringSpaceOverview = false
     CATransaction.commit()
