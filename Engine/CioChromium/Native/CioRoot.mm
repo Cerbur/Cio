@@ -8,11 +8,17 @@
 @end
 @implementation CioRoot
 + (BOOL)handleShortcutEvent:(NSEvent *)event {
+  if (cio::PerformRecentTabSwitcherArrow(event)) return YES;
   const BOOL inspectorFunctionKey =
       [event.charactersIgnoringModifiers isEqualToString:[NSString stringWithFormat:@"%C", static_cast<unichar>(NSF12FunctionKey)]] &&
       !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption |
                               NSEventModifierFlagControl | NSEventModifierFlagShift));
-  if (!(event.modifierFlags & NSEventModifierFlagCommand) && !inspectorFunctionKey) return NO;
+  const BOOL tabTraversal =
+      (event.modifierFlags & NSEventModifierFlagControl) &&
+      !(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagOption)) &&
+      ([event.charactersIgnoringModifiers isEqualToString:@"\t"] ||
+       [event.charactersIgnoringModifiers isEqualToString:@"\x19"]);
+  if (!(event.modifierFlags & NSEventModifierFlagCommand) && !inspectorFunctionKey && !tabTraversal) return NO;
   return cio::PerformMenuKeyEquivalent(NSApp.mainMenu, event);
 }
 + (void)focusOmnibox {

@@ -21,6 +21,7 @@ UI 组件负责状态和交互，这个包负责动画参数、速度偏好以�
 | `ToolbarAnimationValues.swift` | `AnimationValues.Toolbar` | 工具栏一级控件出现、消失和销毁等待 |
 | `AddressFieldAnimationValues.swift` | `AnimationValues.AddressField` | 地址胶囊、焦点环、站点信息和按钮反馈 |
 | `SpotlightAnimationValues.swift` | `AnimationValues.Spotlight` | 新标签页玻璃与建议列表动画、宿主移除等待 |
+| `RecentTabsAnimationValues.swift` | `AnimationValues.RecentTabs` | 最近页面候选卡片整体退场、原生玻璃收尾，以及扩散/模糊的透明绘制余量 |
 
 `BrowserAnimationPreferences.swift` 保存档位偏好；`SplitPages/` 保存共享分屏动画实现。
 一级玻璃控件必须遵守 [Liquid Glass component motion](GLASS_COMPONENT_MOTION.md)，

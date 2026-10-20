@@ -180,6 +180,12 @@ __attribute__((visibility("default")))
 - (void)stopLoading;
 - (void)viewPageSource;
 
+/// Reads the compositor, never the desktop. Bounded in-memory preview; nil when
+/// no rendered surface is available. Completion returns on Chromium's UI thread.
+- (void)capturePagePreviewWithMaximumPixelSize:(NSInteger)maximumPixelSize
+    completion:(void (^)(NSImage * _Nullable image))completion
+    NS_SWIFT_NAME(capturePagePreview(maximumPixelSize:completion:));
+
 /// Isolated per-page zoom. Returns the resulting percentage, or zero if unchanged.
 - (NSInteger)zoomIn;
 - (NSInteger)zoomOut;

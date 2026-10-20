@@ -35,6 +35,8 @@ public struct WorkspaceSessionSnapshot: Codable, Equatable, Sendable {
   /// state such as loading, navigation capabilities and recently-closed tabs
   /// cannot enter this value by construction.
   public init(workspace: WorkspaceCollection) {
+    var workspace = workspace
+    workspace.trimPresentationCache()
     schemaVersion = Self.currentSchemaVersion
     selectedSpaceID = workspace.selectedSpaceID
     globalPinnedTabIDs = workspace.globalPinnedTabIDs
@@ -134,9 +136,9 @@ public struct PersistedTab: Codable, Equatable, Sendable {
     faviconData: Data? = nil
   ) {
     self.id = id
-    self.title = title
+    self.title = BrowserPresentationLimits.title(title)
     self.url = url
-    self.faviconData = faviconData
+    self.faviconData = BrowserPresentationLimits.favicon(faviconData)
     self.createdAt = createdAt
     self.lastActivatedAt = lastActivatedAt
     self.spacePinURL = spacePinURL
@@ -161,10 +163,10 @@ public struct PersistedTab: Codable, Equatable, Sendable {
   public init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(UUID.self, forKey: .id)
-    title = try values.decode(String.self, forKey: .title)
+    title = BrowserPresentationLimits.title(try values.decode(String.self, forKey: .title))
     url = try values.decodeIfPresent(String.self, forKey: .url)
     // Missing legacy artwork or a damaged cache must not prevent tab restore.
-    faviconData = try? values.decode(Data.self, forKey: .faviconData)
+    faviconData = BrowserPresentationLimits.favicon(try? values.decode(Data.self, forKey: .faviconData))
     createdAt = try values.decode(Date.self, forKey: .createdAt)
     lastActivatedAt = try values.decode(Date.self, forKey: .lastActivatedAt)
     let bookmark = try values.decodeIfPresent(String.self, forKey: .spacePinURL)

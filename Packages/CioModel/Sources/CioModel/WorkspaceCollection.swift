@@ -253,6 +253,52 @@ public struct WorkspaceCollection: Equatable, Sendable {
     selectedSpace?.tabIDs ?? []
   }
 
+  /// Keyboard traversal follows the sidebar tiers, including every split pane.
+  /// Global pins appear once even when their owning Space is selected.
+  public var tabTraversalIDs: [UUID] {
+    globalPinnedTabIDs + currentSpacePinnedTabs.map(\.id) + currentTemporaryTabs.map(\.id)
+  }
+
+  /// MRU presentation units span Spaces. A split counts once and restores its
+  /// focused pane; rank uses the most recently activated member of the group.
+  /// Deduplicate before limiting so split panes never consume extra slots.
+  public func recentTabIDs(excluding excluded: Set<UUID> = []) -> [UUID] {
+    let order = allTabIDs.filter { !excluded.contains($0) && tabsByID[$0]?.isSpacePinClosed == false }
+    let ranked = order.enumerated().sorted { lhs, rhs in
+      if lhs.element == selectedTabID { return rhs.element != selectedTabID }
+      if rhs.element == selectedTabID { return false }
+      let left = tabsByID[lhs.element]!.lastActivatedAt
+      let right = tabsByID[rhs.element]!.lastActivatedAt
+      return left == right ? lhs.offset < rhs.offset : left > right
+    }.map(\.element)
+    let available = Set(order)
+    var seen = Set<UUID>()
+    return Array(ranked.compactMap { id -> UUID? in
+      guard let group = splitGroup(containing: id) else {
+        return seen.insert(id).inserted ? id : nil
+      }
+      guard seen.insert(group.id).inserted else { return nil }
+      if let selectedTabID, group.contains(selectedTabID), available.contains(selectedTabID) {
+        return selectedTabID
+      }
+      if let focused = group.focusedTabID, available.contains(focused) { return focused }
+      return group.tabIDs.first { available.contains($0) }
+    }.prefix(5))
+  }
+
+  public func adjacentTabID(forward: Bool, excluding excluded: Set<UUID> = []) -> UUID? {
+    let ids = tabTraversalIDs
+    guard let selectedTabID, let index = ids.firstIndex(of: selectedTabID) else {
+      return forward ? ids.first { !excluded.contains($0) } : ids.last { !excluded.contains($0) }
+    }
+    guard ids.count > 1 else { return nil }
+    for step in 1..<ids.count {
+      let candidate = ids[(index + (forward ? step : ids.count - step)) % ids.count]
+      if !excluded.contains(candidate) { return candidate }
+    }
+    return nil
+  }
+
   public var activeSplit: BrowserSplitLayout? {
     selectedTabID.flatMap { splitGroup(containing: $0) }
   }
@@ -587,6 +633,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
   public mutating func selectSpace(id: UUID) -> Bool {
     guard spaces.contains(where: { $0.id == id }) else { return false }
     guard selectedSpaceID != id else { return false }
+    if let outgoing = selectedTabID { tabsByID[outgoing]?.lastActivatedAt = Date() }
     selectedSpaceID = id
     if selectedGlobalTabID == nil,
       let selectedTabID = space(withID: id)?.selectedTabID {
@@ -675,6 +722,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
   public mutating func selectTab(id: UUID) -> Bool {
     if globalPinnedTabIDs.contains(id) {
       guard selectedTabID != id else { return false }
+      if let outgoing = selectedTabID { tabsByID[outgoing]?.lastActivatedAt = Date() }
       selectedGlobalTabID = id
       tabsByID[id]?.lastActivatedAt = Date()
       if let selectedIndex = index(of: selectedSpaceID) {
@@ -687,6 +735,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
       spaces[spaceIndex].tabIDs.contains(id)
     else { return false }
     guard selectedTabID != id else { return false }
+    if let outgoing = selectedTabID { tabsByID[outgoing]?.lastActivatedAt = Date() }
     tabsByID[id]?.isSpacePinClosed = false
     spaces[spaceIndex].selectedTabID = id
     selectedGlobalTabID = nil
@@ -705,6 +754,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
     else { return false }
 
     let changed = selectedGlobalTabID != nil || selectedSpaceID != spaceID || spaces[spaceIndex].selectedTabID != tabID
+    if changed, let outgoing = selectedTabID { tabsByID[outgoing]?.lastActivatedAt = Date() }
     selectedSpaceID = spaceID
     tabsByID[tabID]?.isSpacePinClosed = false
     spaces[spaceIndex].selectedTabID = tabID
@@ -732,12 +782,38 @@ public struct WorkspaceCollection: Equatable, Sendable {
   public mutating func refresh(_ tab: BrowserTab) -> Bool {
     guard let existing = tabsByID[tab.id], !existing.isSpacePinClosed else { return false }
     var refreshed = tab
+    refreshed.title = BrowserPresentationLimits.title(refreshed.title)
+    refreshed.faviconData = BrowserPresentationLimits.favicon(refreshed.faviconData)
     refreshed.spacePinURL = existing.spacePinURL
     refreshed.isSpacePinClosed = existing.isSpacePinClosed
     guard existing != refreshed else { return false }
     tabsByID[tab.id] = refreshed
     validateInvariants()
     return true
+  }
+
+  /// Artwork is advisory: retain the most recently activated tabs within both
+  /// budgets, without removing tabs, titles, pins or split membership.
+  public mutating func trimPresentationCache() {
+    let ids = allTabIDs
+    let ranked = ids.enumerated().sorted { left, right in
+      if left.element == selectedTabID { return right.element != selectedTabID }
+      if right.element == selectedTabID { return false }
+      let lhs = tabsByID[left.element]!.lastActivatedAt
+      let rhs = tabsByID[right.element]!.lastActivatedAt
+      return lhs == rhs ? left.offset < right.offset : lhs > rhs
+    }.map(\.element)
+    var count = 0, bytes = 0
+    for id in ranked {
+      let title = BrowserPresentationLimits.title(tabsByID[id]!.title)
+      tabsByID[id]?.title = title
+      guard let data = tabsByID[id]?.faviconData else { continue }
+      if data.count <= BrowserPresentationLimits.faviconBytes,
+         count < BrowserPresentationLimits.faviconCount,
+         bytes + data.count <= BrowserPresentationLimits.faviconTotalBytes {
+        count += 1; bytes += data.count
+      } else { tabsByID[id]?.faviconData = nil }
+    }
   }
 
   /// Temporary tabs are removed; Space Pins close their runtime but retain

@@ -732,9 +732,14 @@ private struct BrowserTabDragPresentation: View {
   var body: some View {
     SidebarTabDragOverlay(drag: drag) { id, style in
       if !drag.isPaneDrag, let members = drag.splitLandingTabIDs ?? workspace.splitGroup(containing: id)?.tabIDs {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
           ForEach(members, id: \.self) { memberID in
-            dragLabel(memberID, style: style)
+            dragLabel(memberID, style: style, compact: true)
+            if memberID != members.last {
+              Divider()
+                .frame(height: BrowserLayout.sidebarSplitSeparatorHeight)
+                .frame(width: BrowserLayout.sidebarSplitMemberSpacing)
+            }
           }
         }
       } else {
@@ -744,82 +749,20 @@ private struct BrowserTabDragPresentation: View {
   }
 
   @ViewBuilder
-  fileprivate func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
+  fileprivate func dragLabel(_ id: UUID, style: SidebarTabDrag.Style, compact: Bool = false) -> some View {
     if let tab = workspace.tab(withID: id) {
-      DragContent(
+      SidebarRetainedTabLabel(
         pageURL: tab.url, faviconData: tab.faviconData, session: workspace.browserSession(for: id),
-        title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
-        rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
+        title: tab.displayTitle, fallbackLetter: style == .tile ? tab.pinFallbackLetter : nil,
+        compactAmount: compact ? 1 : 0, topPinAmount: style == .tile ? 1 : 0,
+        cardAmount: style == .card ? 1 : 0)
+        .padding(.trailing, style == .row ? BrowserLayout.sidebarTabTrailingInset : 0)
     }
   }
 
-  /// Land with the idle row's real typography and title width. Drag
-  /// labels have different weight/truncation and visibly jump at the handoff.
+  /// Pickup and landing use the same typography, icon grid and title width.
   @ViewBuilder
   fileprivate func collapseLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
-    if let tab = workspace.tab(withID: id) {
-      if style == .row {
-        SidebarRowLabel(title: tab.displayTitle) {
-          TabFaviconView(pageURL: tab.url, session: workspace.browserSession(for: id),
-            size: SidebarTabAppearance.faviconSize, cachedData: tab.faviconData)
-        }
-        .padding(.trailing, BrowserLayout.sidebarTabTrailingInset)
-      } else {
-        dragLabel(id, style: style)
-      }
-    }
-  }
-
-  /// All styles share one favicon and two permanently mounted title layouts.
-  /// Interpolating layout values keeps the icon's size and position continuous;
-  /// title opacity can change without replacing either text view.
-  private struct DragContent: View, Animatable {
-    let pageURL: URL?
-    let faviconData: Data?
-    let session: (any BrowserSessionProtocol)?
-    let title: String
-    let fallbackLetter: String?
-    nonisolated var rowAmount: CGFloat
-    nonisolated var cardAmount: CGFloat
-
-    nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
-      get { AnimatablePair(rowAmount, cardAmount) }
-      set {
-        rowAmount = newValue.first
-        cardAmount = newValue.second
-      }
-    }
-
-    var body: some View {
-      GeometryReader { geometry in
-        let width = geometry.size.width
-        let height = geometry.size.height
-        let iconSize = SidebarTabAppearance.faviconSize + 22 * cardAmount
-        let rowTitleWidth = max(width - 51, 1)
-        ZStack(alignment: .topLeading) {
-          TabFaviconView(
-            pageURL: pageURL, session: session, size: iconSize,
-            fallbackLetter: fallbackLetter, cachedData: faviconData)
-            .position(
-              x: width / 2 + (21 - width / 2) * rowAmount,
-              y: height / 2)
-
-          Text(title)
-            .font(.callout.weight(.medium))
-            .lineLimit(1)
-            .frame(width: rowTitleWidth, alignment: .leading)
-            .position(x: 40 + rowTitleWidth / 2, y: height / 2)
-            .opacity(Double(min(max(rowAmount, 0), 1)))
-
-          Text(title)
-            .font(.callout.weight(.medium))
-            .multilineTextAlignment(.center)
-            .lineLimit(3)
-            .frame(width: max(width - 24, 1), height: max(height * 0.3, 1))
-            .position(x: width / 2, y: height * 0.79)
-            .opacity(Double(min(max(cardAmount, 0), 1)))
-        }
-      }
-    }
+    dragLabel(id, style: style)
   }
 }

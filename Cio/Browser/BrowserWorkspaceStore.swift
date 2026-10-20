@@ -23,6 +23,7 @@ final class BrowserWorkspaceStore: ObservableObject {
   let homeURL: URL
   let sessionManager: BrowserSessionManager
   let sessionStore: SessionStore
+  let pagePreviews: BrowserPagePreviewCache
 
   private var workspace: WorkspaceCollection
   private var lastSavedSnapshot: WorkspaceSessionSnapshot?
@@ -39,6 +40,9 @@ final class BrowserWorkspaceStore: ObservableObject {
   init(initialTabURL: URL, sessionStore: SessionStore = SessionStore()) {
     homeURL = initialTabURL
     self.sessionStore = sessionStore
+    pagePreviews = BrowserPagePreviewCache(directory: sessionStore.isEnabled
+      ? sessionStore.sessionFileURL.deletingLastPathComponent().appendingPathComponent("Cache/PagePreviews-v1", isDirectory: true)
+      : nil)
     let manager = BrowserSessionManager()
     sessionManager = manager
 
@@ -85,6 +89,9 @@ final class BrowserWorkspaceStore: ObservableObject {
       self.activateSelectedTabRuntimeIfNeeded()
     }
 
+    workspace.trimPresentationCache()
+    let recentIDs = workspace.recentTabIDs().flatMap { workspace.splitGroup(containing: $0)?.tabIDs ?? [$0] }
+    pagePreviews.restore(tabs: workspace.allTabs, recentIDs: recentIDs)
     // Restore both panes of the selected group. Other groups remain lazy until
     // selected, keeping startup cost proportional to the visible presentation.
     ensureSelectedPresentationSessions()
@@ -481,6 +488,28 @@ final class BrowserWorkspaceStore: ObservableObject {
     return selectedTabID == id
   }
 
+  var canCycleTabs: Bool {
+    !isTerminating && recentTabCandidates.count > 1
+  }
+
+  var recentTabCandidates: [BrowserTab] {
+    let closing = Set(workspace.allTabIDs.filter { sessionManager.isClosing(tabID: $0) })
+    return workspace.recentTabIDs(excluding: closing).compactMap { workspace.tab(withID: $0) }
+  }
+
+  func activateRecentTab(_ id: UUID) {
+    guard !isTerminating, !sessionManager.isClosing(tabID: id),
+          let tab = workspace.tab(withID: id), !tab.isSpacePinClosed,
+          let spaceID = workspace.spaceID(containing: id) else { return }
+    withSelectionTransition(pageHeldKeyboardOverride: true) {
+      if workspace.globalPinnedTabIDs.contains(id) { _ = workspace.selectTab(id: id) }
+      else { _ = workspace.select(spaceID: spaceID, tabID: id) }
+      ensureSelectedPresentationSessions()
+    }
+    engineSelectedSession?.focusPage()
+    emit("tab:selected")
+  }
+
   /// Requests a runtime close. The domain tab remains visible until Chromium
   /// accepts the request, because a beforeunload dialog may cancel it.
   func closeTab(id: UUID) {
@@ -589,6 +618,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     _ change: () -> T
   ) -> T {
     let outgoing = engineSelectedSession
+    for session in liveSessions where session.isSurfaceVisible { pagePreviews.capture(session) }
     let previousSelection = workspace.selectedTabID
     let previousSpace = workspace.selectedSpaceID
     // A tab owns the keyboard through either Chromium or its native address
@@ -683,6 +713,7 @@ final class BrowserWorkspaceStore: ObservableObject {
     }
 
     guard let result, result.outcome != .unknownTab else { return }
+    pagePreviews.invalidate(id)
     AppLog.session.info(
       "tab closed id=\(id.uuidString, privacy: .public) live=\(self.sessionManager.liveSessionCount, privacy: .public)"
     )
@@ -693,11 +724,15 @@ final class BrowserWorkspaceStore: ObservableObject {
     guard var tab = workspace.tab(withID: session.tabID), !tab.isSpacePinClosed,
       !sessionManager.isClosing(tabID: session.tabID) else { return }
     let beforeSnapshot = sessionSnapshot
+    let finishedLoading = tab.isLoading && !session.isLoading
     if !session.title.isEmpty { tab.title = session.title }
+    if let url = session.url, tab.url != url { pagePreviews.invalidate(tab.id) }
     if session.url != nil { tab.url = session.url }
     tab.faviconData = session.faviconData
     tab.isLoading = session.isLoading
     guard workspace.refresh(tab) else { return }
+    workspace.trimPresentationCache()
+    if finishedLoading, let live = sessionManager.session(for: tab.id) { pagePreviews.capture(live) }
     // Loading state is intentionally part of the live BrowserTab projection so
     // the sidebar can render progress, but it is absent from the snapshot. A
     // URL/title/favicon callback therefore persists; a transient loading callback does

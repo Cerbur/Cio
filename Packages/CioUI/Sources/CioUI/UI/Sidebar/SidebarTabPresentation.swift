@@ -20,6 +20,8 @@ struct SidebarTabPresentation {
   var isDragged = false
   var isLifted = false
   var preservesGlassContinuity = false
+  /// Sidebar pickup moves the existing-looking object without restyling it.
+  var preservesLiftAppearance = false
   var grab = CGPoint(x: 0.5, y: 0.5)
 
   var isFloating: Bool { placement != .row }
@@ -57,10 +59,17 @@ struct SidebarTabSurface: ViewModifier {
     if presentation.isFloating {
       content
         .clipShape(SidebarTabAppearance.glassShape)
+        // Keep the label inside the native glass effect's foreground. A
+        // separate background effect in GlassEffectContainer samples the
+        // detached label as backdrop, blurring it beneath the glass surface.
+        // The native effect also owns the edge; another stroke doubles it.
         .glassEffect(.regular, in: SidebarTabAppearance.glassShape)
         .glassEffectTransition(reduceMotion || presentation.preservesGlassContinuity ? .identity : .materialize)
-        .scaleEffect(presentation.isLifted && !reduceMotion ? AnimationValues.TabDrag.liftedScale : 1,
-                     anchor: UnitPoint(x: presentation.grab.x, y: presentation.grab.y))
+        .scaleEffect(presentation.preservesLiftAppearance
+                     ? (presentation.placement == .topPin && isStable ? AnimationValues.Sidebar.selectedTopPinScale : 1)
+                     : (presentation.isLifted && !reduceMotion ? AnimationValues.TabDrag.liftedScale : 1),
+                     anchor: presentation.preservesLiftAppearance
+                       ? .center : UnitPoint(x: presentation.grab.x, y: presentation.grab.y))
         .shadow(color: .black.opacity(presentation.isLifted
                   ? AnimationValues.TabDrag.liftedShadowOpacity : AnimationValues.TabDrag.restingShadowOpacity),
                 radius: presentation.isLifted
@@ -120,12 +129,14 @@ struct SidebarRetainedTabLabel: View, Animatable {
   let fallbackLetter: String?
   nonisolated var compactAmount: CGFloat
   nonisolated var topPinAmount: CGFloat
+  nonisolated var cardAmount: CGFloat = 0
 
-  nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
-    get { AnimatablePair(compactAmount, topPinAmount) }
+  nonisolated var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
+    get { AnimatablePair(AnimatablePair(compactAmount, topPinAmount), cardAmount) }
     set {
-      compactAmount = newValue.first
-      topPinAmount = newValue.second
+      compactAmount = newValue.first.first
+      topPinAmount = newValue.first.second
+      cardAmount = newValue.second
     }
   }
 
@@ -133,6 +144,8 @@ struct SidebarRetainedTabLabel: View, Animatable {
     GeometryReader { geometry in
       let compact = min(1, max(0, compactAmount))
       let tile = min(1, max(0, topPinAmount))
+      let card = min(1, max(0, cardAmount))
+      let centered = min(1, tile + card)
       // Split members keep the ordinary row's favicon size and leading grid.
       let leading = BrowserLayout.sidebarTabLabelInset
       let iconWidth = BrowserLayout.sidebarTabIconSlotWidth
@@ -143,9 +156,9 @@ struct SidebarRetainedTabLabel: View, Animatable {
       let iconX = leading + iconWidth / 2
       ZStack(alignment: .topLeading) {
         TabFaviconView(pageURL: pageURL, session: session,
-          size: SidebarTabAppearance.faviconSize,
+          size: SidebarTabAppearance.faviconSize + 22 * card,
           fallbackLetter: fallbackLetter, cachedData: faviconData)
-          .position(x: iconX + (geometry.size.width / 2 - iconX) * tile, y: geometry.size.height / 2)
+          .position(x: iconX + (geometry.size.width / 2 - iconX) * centered, y: geometry.size.height / 2)
         Text(title)
           .font(.system(size: BrowserLayout.sidebarTabLabelFontSize
             + (BrowserLayout.sidebarSplitLabelFontSize - BrowserLayout.sidebarTabLabelFontSize) * compact,
@@ -153,7 +166,14 @@ struct SidebarRetainedTabLabel: View, Animatable {
           .lineLimit(1)
           .frame(width: titleWidth, alignment: .leading)
           .position(x: titleLeading + titleWidth / 2, y: geometry.size.height / 2)
-          .opacity(1 - tile)
+          .opacity(1 - centered)
+        Text(title)
+          .font(.callout.weight(.regular))
+          .multilineTextAlignment(.center)
+          .lineLimit(3)
+          .frame(width: max(geometry.size.width - 24, 1), height: max(geometry.size.height * 0.3, 1))
+          .position(x: geometry.size.width / 2, y: geometry.size.height * 0.79)
+          .opacity(card)
       }
     }
     .accessibilityHidden(true)

@@ -63,6 +63,7 @@ final class ApplicationRuntime: ObservableObject {
   /// Owns all Spaces, tabs, selection policy and the runtime manager for the
   /// single application window.
   let workspaceStore: BrowserWorkspaceStore
+  lazy var recentTabSwitcher = RecentTabSwitcherCoordinator(workspace: workspaceStore)
 
   /// Owns only durable workspace file IO. The domain projection remains in the
   /// workspace store and Chromium objects never cross this boundary.
@@ -652,6 +653,8 @@ final class ApplicationRuntime: ObservableObject {
     private var didFinish = false
     private var didMarkFirstStep = false
     private var didRequestClosure = false
+    private var didRequestPreviewFlush = false
+    private var didCompletePreviewFlush = false
     private var didRequestCookieFlush = false
     private var didCompleteCookieFlush = false
     private var pendingStep: Timer?
@@ -701,6 +704,15 @@ final class ApplicationRuntime: ObservableObject {
         didMarkFirstStep = true
         runtime.markShutdownPhase("firstStep")
       }
+      if !didRequestPreviewFlush {
+        didRequestPreviewFlush = true
+        runtime.workspaceStore.pagePreviews.prepareForTermination(sessions: runtime.workspaceStore.liveSessions) { [weak self] in
+          self?.didCompletePreviewFlush = true
+          self?.scheduleStep()
+        }
+        return
+      }
+      guard didCompletePreviewFlush else { return }
       // The close is requested here, on a clean stack, rather than inline in
       // -applicationShouldTerminate: (see start()). Every live browser is asked
       // to close in this one call; none is waited for before the next.

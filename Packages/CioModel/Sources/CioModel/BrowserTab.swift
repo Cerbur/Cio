@@ -59,9 +59,9 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
     lastActivatedAt: Date = Date()
   ) {
     self.id = id
-    self.title = title
+    self.title = BrowserPresentationLimits.title(title)
     self.url = url
-    self.faviconData = faviconData
+    self.faviconData = BrowserPresentationLimits.favicon(faviconData)
     self.isLoading = isLoading
     self.spacePinURL = spacePinURL
     self.isSpacePinClosed = isSpacePinClosed

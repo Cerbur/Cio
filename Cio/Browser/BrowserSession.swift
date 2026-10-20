@@ -200,10 +200,12 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
     self.tabID = tabID
     self.initialURL = initialURL
     self.requestedURL = initialURL
-    self.title = initialTitle
+    self.title = BrowserPresentationLimits.title(initialTitle)
     self.url = initialURL
-    self.faviconData = initialFaviconData
-    self.faviconImage = initialFaviconData.flatMap { NSImage(data: $0) }
+    let artwork = initialFaviconData.flatMap { BrowserArtwork.normalized($0, as: .favicon) }
+    self.faviconData = artwork
+    self.faviconImage = artwork.flatMap { BrowserArtwork.decode($0, as: .favicon) }
+      .map { NSImage(cgImage: $0, size: .zero) }
     super.init()
     addressField.applyBrowserURL(initialURL)
   }
@@ -513,6 +515,11 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   func focus() {
     bridge?.setFocus(true)
+  }
+
+  func capturePagePreview(_ completion: @escaping @MainActor (NSImage?) -> Void) {
+    guard !isClosed, didReceiveMainFrameURL, !lastMainFrameLoadFailed, let bridge else { completion(nil); return }
+    bridge.capturePagePreview(maximumPixelSize: BrowserArtwork.Kind.preview.pixelLimit) { image in completion(image) }
   }
 
   /// Releases the keyboard from this session's page content.
@@ -953,6 +960,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, didUpdateTitle title: String) {
     guard acceptsCallback(from: bridge) else { return }
     guard didReceiveMainFrameURL || requestedURL.absoluteString == "about:blank" else { return }
+    let title = BrowserPresentationLimits.title(title)
     guard self.title != title else { return }
     self.title = title
     AppLog.navigation.debug("title changed (present=\(!title.isEmpty, privacy: .public))")
@@ -978,10 +986,12 @@ extension BrowserSession: BrowserBridgeDelegate {
     // finishes, Chromium's current result replaces the cache, including nil.
     guard didReceiveMainFrameURL else { return }
     guard image != nil || (!isLoading && !lastMainFrameLoadFailed) else { return }
-    let data = image?.tiffRepresentation
+    let data = image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+      .flatMap { BrowserArtwork.encode($0, as: .favicon) }
     guard faviconData != data || (faviconImage == nil) != (image == nil) else { return }
     faviconData = data
-    faviconImage = image
+    faviconImage = data.flatMap { BrowserArtwork.decode($0, as: .favicon) }
+      .map { NSImage(cgImage: $0, size: .zero) }
     onTabMetadataChanged?(self)
   }
 

@@ -11,6 +11,7 @@
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 
+#include <algorithm>
 #include <map>
 #include <deque>
 #include <memory>
@@ -23,6 +24,8 @@
 #include "content/public/browser/ssl_status.h"
 #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
 #include "base/functional/bind.h"
+#include "base/task/bind_post_task.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/devtools/devtools_toggle_action.h"
@@ -349,6 +352,22 @@ class PageObserver final : public content::WebContentsObserver,
 - (BOOL)nativeCanFocus {
   return !_closed && !_closing && _parent.window && !_parent.isHiddenOrHasHiddenAncestor &&
       [self.delegate browserBridge:self allowsFocusRequestFromSystem:NO];
+}
+- (void)capturePagePreviewWithMaximumPixelSize:(NSInteger)maximumPixelSize completion:(void (^)(NSImage *))completion {
+  auto* view = _contents && !_closed && !_closing ? _contents->GetRenderWidgetHostView() : nullptr;
+  if (!view || !view->IsSurfaceAvailableForCopy()) { completion(nil); return; }
+  const gfx::Size size = view->GetViewBounds().size();
+  if (size.IsEmpty()) { completion(nil); return; }
+  const double scale = std::min(1.0, static_cast<double>(std::clamp<NSInteger>(maximumPixelSize, 1, 512))
+      / std::max(size.width(), size.height()));
+  const gfx::Size output(std::max(1, static_cast<int>(size.width() * scale)),
+                         std::max(1, static_cast<int>(size.height() * scale)));
+  view->CopyFromSurface(gfx::Rect(), output,
+      base::Milliseconds(500), base::BindPostTaskToCurrentDefault(base::BindOnce(
+          [](void (^completion)(NSImage*), const content::CopyFromSurfaceResult& result) {
+            completion(result.has_value() && !result->bitmap.drawsNothing()
+                ? gfx::Image::CreateFrom1xBitmap(result->bitmap).AsNSImage() : nil);
+          }, completion)));
 }
 - (void)setFocus:(BOOL)focused {
   if (!_contents) return;

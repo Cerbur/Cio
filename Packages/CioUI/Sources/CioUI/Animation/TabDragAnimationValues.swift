@@ -3,7 +3,6 @@ import Foundation
 extension AnimationValues {
   /// 侧栏浮块的托起、变形、排序、落点与交接；与分屏页面动画共用速度设置。
   enum TabDrag {
-    @MainActor static var liftDuration: TimeInterval { AnimationValues.duration(0.2) }
     @MainActor static var liftResponse: TimeInterval { AnimationValues.duration(0.3) }
     @MainActor static var morphResponse: TimeInterval { AnimationValues.duration(0.3) }
     @MainActor static var reorderDuration: TimeInterval { AnimationValues.duration(0.28) }

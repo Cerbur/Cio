@@ -35,8 +35,13 @@ have no idle fill; hovering either member highlights the entire group with the
 same surface as an ordinary tab. Native vertical `Divider`s separate members. The group
 surface is a separate background layer so glass never overlays the native tab
 labels or intercepts their controls. The foreground decoration adds the existing
-hover ungroup control. Lifting a stable tab/group preserves its glass continuity;
-other floating cards materialize their glass.
+hover ungroup control. Sidebar pickup uses the resting tab's retained label,
+regular weight, icon grid, compact member geometry and native separators.
+The floating surface applies one native glass effect around its label, keeping
+the label in the effect's foreground and letting the system draw its sole edge.
+It hands off immediately without materializing, fading or scaling the object;
+only elevation changes. Selected Top Pins retain their existing selection scale.
+Pane-to-card flights retain their separate page morph and lift treatment.
 
 `SidebarTabDrag` coordinates lifting, targeting, autoscroll and landing. A split
 supplies one draggable row; registered divider/New Tab/footer frames define tier

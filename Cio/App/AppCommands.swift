@@ -155,6 +155,20 @@ struct BrowserCommands: Commands {
         .keyboardShortcut("t", modifiers: [.command, .shift])
         .disabled(!workspace.canReopenClosedTab)
 
+      Divider()
+
+      Button("Next Tab") { runtime.recentTabSwitcher.advance(forward: true) }
+        .keyboardShortcut(.tab, modifiers: .control)
+        .disabled(!canCycleTabs)
+
+      Button("Previous Tab") { runtime.recentTabSwitcher.advance(forward: false) }
+        // AppKit represents Shift-Tab as NSBackTabCharacter, not a tab with
+        // only an extra modifier. This also works in native field editors.
+        .keyboardShortcut(KeyEquivalent(Character("\u{19}")), modifiers: [.control, .shift])
+        .disabled(!canCycleTabs)
+
+      Divider()
+
       Button(selectedIsSpacePin ? "Make Temporary" : "Pin in This Space") {
         guard runtime.presentedInternalPanel == nil, let id = workspace.selectedTabID,
               workspace.spacePinToggleTarget(for: id) != nil else { return }
@@ -190,6 +204,10 @@ struct BrowserCommands: Commands {
     runtime.presentedInternalPanel == nil && workspace.selectedSession?.isClosed == false
       && workspace.selectedSession?.rendererCrashed == false
       && workspace.selectedSession?.hasBrowser == true
+  }
+
+  private var canCycleTabs: Bool {
+    runtime.presentedInternalPanel == nil && workspace.canCycleTabs
   }
 
   private var canZoomPage: Bool {

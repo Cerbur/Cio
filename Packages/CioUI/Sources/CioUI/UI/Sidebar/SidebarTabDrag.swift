@@ -624,7 +624,9 @@ public final class SidebarTabDrag {
     anchor = start
     // The tab's slot becomes a gap in the same place, under the new block.
     target = homeTarget
-    withAnimation(reduceMotion ? nil : .smooth(duration: Values.liftDuration)) {
+    // Pickup is a direct handoff, not the appearance of a differently styled
+    // card. The next transaction only raises its shadow above the sidebar.
+    withAnimation(nil) {
       tabID = id
     }
     // Rise on the next frame so the block visibly lifts out of its slot.
@@ -1126,10 +1128,11 @@ struct SidebarTabDragOverlay<Label: View>: View {
         let presentation = SidebarTabPresentation(
           placement: drag.style == .card ? .splitPreview : (drag.style == .tile ? .topPin : .liftedRow),
           isDragged: true, isLifted: drag.isLifted,
-          preservesGlassContinuity: drag.startedFromStableTab, grab: drag.grab)
+          preservesGlassContinuity: !drag.isPaneDrag || drag.startedFromStableTab,
+          preservesLiftAppearance: !drag.isPaneDrag, grab: drag.grab)
         SidebarFloatingRowContainer(size: drag.size, grab: drag.grab) {
           label(id, drag.style)
-            .modifier(SidebarTabSurface(usesScrollEdge: false))
+            .modifier(SidebarTabSurface(isStable: drag.startedFromStableTab, usesScrollEdge: false))
             .glassEffectID(id, in: glassNamespace)
             .environment(\.sidebarTabPresentation, presentation)
         }
