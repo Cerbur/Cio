@@ -15,6 +15,7 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   var url: URL? { get }
   var faviconURLs: [URL] { get }
   var faviconImage: NSImage? { get }
+  var faviconData: Data? { get }
   var isLoading: Bool { get }
   var canGoBack: Bool { get }
   var canGoForward: Bool { get }

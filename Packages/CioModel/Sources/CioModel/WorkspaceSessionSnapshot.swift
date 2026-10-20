@@ -117,6 +117,7 @@ public struct PersistedTab: Codable, Equatable, Sendable {
   public let id: UUID
   public let title: String
   public let url: String?
+  public let faviconData: Data?
   public let createdAt: Date
   public let lastActivatedAt: Date
   public let spacePinURL: String?
@@ -129,11 +130,13 @@ public struct PersistedTab: Codable, Equatable, Sendable {
     createdAt: Date,
     lastActivatedAt: Date,
     spacePinURL: String? = nil,
-    isSpacePinClosed: Bool = false
+    isSpacePinClosed: Bool = false,
+    faviconData: Data? = nil
   ) {
     self.id = id
     self.title = title
     self.url = url
+    self.faviconData = faviconData
     self.createdAt = createdAt
     self.lastActivatedAt = lastActivatedAt
     self.spacePinURL = spacePinURL
@@ -148,10 +151,11 @@ public struct PersistedTab: Codable, Equatable, Sendable {
       createdAt: tab.createdAt,
       lastActivatedAt: tab.lastActivatedAt,
       spacePinURL: tab.spacePinURL?.absoluteString,
-      isSpacePinClosed: tab.isSpacePinClosed)
+      isSpacePinClosed: tab.isSpacePinClosed,
+      faviconData: tab.faviconData)
   }
   private enum CodingKeys: String, CodingKey {
-    case id, title, url, createdAt, lastActivatedAt, spacePinURL, isSpacePinClosed
+    case id, title, url, faviconData, createdAt, lastActivatedAt, spacePinURL, isSpacePinClosed
   }
 
   public init(from decoder: Decoder) throws {
@@ -159,6 +163,8 @@ public struct PersistedTab: Codable, Equatable, Sendable {
     id = try values.decode(UUID.self, forKey: .id)
     title = try values.decode(String.self, forKey: .title)
     url = try values.decodeIfPresent(String.self, forKey: .url)
+    // Missing legacy artwork or a damaged cache must not prevent tab restore.
+    faviconData = try? values.decode(Data.self, forKey: .faviconData)
     createdAt = try values.decode(Date.self, forKey: .createdAt)
     lastActivatedAt = try values.decode(Date.self, forKey: .lastActivatedAt)
     let bookmark = try values.decodeIfPresent(String.self, forKey: .spacePinURL)

@@ -3,25 +3,30 @@ import AppKit
 import SwiftUI
 
 /// One favicon renderer for top pin, space pin and temporary tabs. A live
-/// session supplies Chromium's decoded artwork; a lazily restored tab can still show
-/// its origin's favicon without creating a browser session.
+/// session supplies Chromium's decoded artwork; a lazily restored tab displays
+/// its persisted artwork without creating a browser session or network request.
 struct TabFaviconView: View {
   let pageURL: URL?
   let session: (any BrowserSessionProtocol)?
   let size: CGFloat
   let fallbackLetter: String?
+  let cachedData: Data?
 
-  init(pageURL: URL?, session: (any BrowserSessionProtocol)?, size: CGFloat, fallbackLetter: String? = nil) {
+  init(pageURL: URL?, session: (any BrowserSessionProtocol)?, size: CGFloat,
+       fallbackLetter: String? = nil, cachedData: Data? = nil) {
     self.pageURL = pageURL
     self.session = session
     self.size = size
     self.fallbackLetter = fallbackLetter
+    self.cachedData = cachedData
   }
 
   var body: some View {
     if let session {
       LiveTabFaviconView(session: session, pageURL: pageURL,
                          size: size, fallbackLetter: fallbackLetter)
+    } else if let cachedData, let image = NSImage(data: cachedData) {
+      FaviconArtworkView(image: image, size: size, fallbackLetter: fallbackLetter)
     } else {
       ResolvedTabFaviconView(pageURL: pageURL, preferredURLs: [],
                              size: size, fallbackLetter: fallbackLetter)

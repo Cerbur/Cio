@@ -114,6 +114,7 @@ struct SidebarRowLabel<Icon: View>: View {
 /// no separate compact text subtree or appearance/disappearance transition.
 struct SidebarRetainedTabLabel: View, Animatable {
   let pageURL: URL?
+  let faviconData: Data?
   let session: (any BrowserSessionProtocol)?
   let title: String
   let fallbackLetter: String?
@@ -143,7 +144,7 @@ struct SidebarRetainedTabLabel: View, Animatable {
       ZStack(alignment: .topLeading) {
         TabFaviconView(pageURL: pageURL, session: session,
           size: SidebarTabAppearance.faviconSize,
-          fallbackLetter: fallbackLetter)
+          fallbackLetter: fallbackLetter, cachedData: faviconData)
           .position(x: iconX + (geometry.size.width / 2 - iconX) * tile, y: geometry.size.height / 2)
         Text(title)
           .font(.system(size: BrowserLayout.sidebarTabLabelFontSize

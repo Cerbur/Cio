@@ -664,6 +664,20 @@ private struct BrowserShellContentView: View {
     ZStack {
       BrowserSurfaceView(manager: runtime.surfaceDriver, workspace: workspace, history: runtime.historyService, isCovered: runtime.presentedInternalPanel != nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+          if workspace.selectedTabID == nil, runtime.presentedInternalPanel == nil {
+            // Join the sidebar with a straight leading edge, like Chromium.
+            // Main View still clips the outer corners when the sidebar closes.
+            Color.clear
+              .glassEffect(.regular, in: UnevenRoundedRectangle(
+                topLeadingRadius: 0, bottomLeadingRadius: 0,
+                bottomTrailingRadius: BrowserLayout.contentCornerRadius,
+                topTrailingRadius: BrowserLayout.contentCornerRadius,
+                style: .continuous))
+              .allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
 
       if let panel = runtime.presentedInternalPanel {
         BrowserLibraryView(
@@ -701,8 +715,8 @@ private struct BrowserShellContentView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    // Chromium containers paint their own page background. Keep the surface
-    // between panes transparent so it exposes the same backdrop as the toolbar.
+    // Chromium containers paint their own page background. With a selected
+    // tab, gaps between panes still expose the toolbar's shared backdrop.
   }
 }
 
@@ -733,7 +747,7 @@ private struct BrowserTabDragPresentation: View {
   fileprivate func dragLabel(_ id: UUID, style: SidebarTabDrag.Style) -> some View {
     if let tab = workspace.tab(withID: id) {
       DragContent(
-        pageURL: tab.url, session: workspace.browserSession(for: id),
+        pageURL: tab.url, faviconData: tab.faviconData, session: workspace.browserSession(for: id),
         title: tab.displayTitle, fallbackLetter: tab.pinFallbackLetter,
         rowAmount: style == .row ? 1 : 0, cardAmount: style == .card ? 1 : 0)
     }
@@ -747,7 +761,7 @@ private struct BrowserTabDragPresentation: View {
       if style == .row {
         SidebarRowLabel(title: tab.displayTitle) {
           TabFaviconView(pageURL: tab.url, session: workspace.browserSession(for: id),
-            size: SidebarTabAppearance.faviconSize)
+            size: SidebarTabAppearance.faviconSize, cachedData: tab.faviconData)
         }
         .padding(.trailing, BrowserLayout.sidebarTabTrailingInset)
       } else {
@@ -761,6 +775,7 @@ private struct BrowserTabDragPresentation: View {
   /// title opacity can change without replacing either text view.
   private struct DragContent: View, Animatable {
     let pageURL: URL?
+    let faviconData: Data?
     let session: (any BrowserSessionProtocol)?
     let title: String
     let fallbackLetter: String?
@@ -784,7 +799,7 @@ private struct BrowserTabDragPresentation: View {
         ZStack(alignment: .topLeading) {
           TabFaviconView(
             pageURL: pageURL, session: session, size: iconSize,
-            fallbackLetter: fallbackLetter)
+            fallbackLetter: fallbackLetter, cachedData: faviconData)
             .position(
               x: width / 2 + (21 - width / 2) * rowAmount,
               y: height / 2)

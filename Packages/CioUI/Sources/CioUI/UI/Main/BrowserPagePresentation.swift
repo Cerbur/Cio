@@ -7,7 +7,7 @@ import AppKit
 /// the shell overlay so expanded address panels remain outside content clipping.
 @MainActor
 final class BrowserPagePresentation {
-  let tabID: UUID
+  private(set) var tabID: UUID
   let surface: any BrowserNativeSurface
   let viewport: NSView
   private(set) var toolbar: BrowserToolbarController?
@@ -33,19 +33,32 @@ final class BrowserPagePresentation {
   /// configures the toolbar once, retaining it for the lifetime of this page.
   func configureToolbar(workspace: any BrowserWorkspaceProtocol, history: HistoryService) {
     guard toolbar == nil else { return }
-    let id = tabID
-    splitControl.onActivate = { [weak workspace] in workspace?.selectTab(id: id, focusingPage: true) }
-    splitControl.onClose = { [weak workspace] in workspace?.closeTab(id: id) }
+    splitControl.onActivate = { [weak self, weak workspace] in
+      guard let self else { return }
+      workspace?.selectTab(id: self.tabID, focusingPage: true)
+    }
+    splitControl.onClose = { [weak self, weak workspace] in
+      guard let self else { return }
+      workspace?.closeTab(id: self.tabID)
+    }
     splitControl.onMinimize = { [weak self, weak workspace] in
       if let action = self?.onMinimizeToSidebar { action() }
-      else { workspace?.detachSplitPane(id) }
+      else if let self { workspace?.detachSplitPane(self.tabID) }
     }
-    splitControl.onExpand = { [weak workspace] in workspace?.detachSplitPane(id, selectDetached: true) }
+    splitControl.onExpand = { [weak self, weak workspace] in
+      guard let self else { return }
+      workspace?.detachSplitPane(self.tabID, selectDetached: true)
+    }
     let toolbar = BrowserToolbarController(workspace: workspace, history: history,
       browserView: viewport, tabID: tabID, initiallyVisible: false)
     self.toolbar = toolbar
     splitControl.addressFrameProvider = { [weak toolbar] in toolbar?.addressCapsuleFrame(in: nil) }
     toolbar.onAddressCapsuleLayout = { [weak control = splitControl] in control?.addressLayoutDidChange() }
+  }
+
+  func transferOwnership(to tabID: UUID) {
+    self.tabID = tabID
+    toolbar?.transferOwnership(to: tabID)
   }
 
   func layout(in contentHost: NSView, chromeHost: NSView?, frame: CGRect,

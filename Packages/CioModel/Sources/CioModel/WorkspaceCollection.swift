@@ -128,6 +128,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
           id: persistedTab.id,
           title: persistedTab.title,
           url: url,
+          faviconData: persistedTab.faviconData,
           isLoading: false,
           spacePinURL: persistedSpace.pinnedTabIDs.contains(persistedTab.id) ? spacePinURL : nil,
           isSpacePinClosed: persistedTab.isSpacePinClosed,
@@ -279,6 +280,18 @@ public struct WorkspaceCollection: Equatable, Sendable {
 
   @discardableResult
   public mutating func createSplit(with tabID: UUID, at target: BrowserSplitLayout.DropTarget) -> Bool {
+    var copies: [UUID: UUID] = [:]
+    return createSplit(with: tabID, at: target, pinnedTabCopies: &copies)
+  }
+
+  /// Reports each retained pin's new temporary identity so the runtime owner
+  /// can hand off its live page before creating any missing split sessions.
+  @discardableResult
+  public mutating func createSplit(
+    with tabID: UUID, at target: BrowserSplitLayout.DropTarget,
+    pinnedTabCopies: inout [UUID: UUID]
+  ) -> Bool {
+    pinnedTabCopies = [:]
     guard canSplit(with: tabID), let selectedTabID,
           let spaceIndex = index(of: selectedSpaceID) else { return false }
     let prior = activeSplit
@@ -300,8 +313,8 @@ public struct WorkspaceCollection: Equatable, Sendable {
       displaced = retained.filter { !placement.contains($0) }
       retained = retained.filter { placement.contains($0) }
     }
-    let existingIDs = retained.map { existingIsPinned ? duplicateForSplit($0) : $0 }
-    let incomingIDs = originalIncoming.map { incomingIsPinned ? duplicateForSplit($0) : $0 }
+    let existingIDs = retained.map { existingIsPinned ? duplicateForSplit($0, copies: &pinnedTabCopies) : $0 }
+    let incomingIDs = originalIncoming.map { incomingIsPinned ? duplicateForSplit($0, copies: &pinnedTabCopies) : $0 }
     let memberIDs: [UUID]
     switch side {
     case .left: memberIDs = incomingIDs + existingIDs
@@ -336,11 +349,14 @@ public struct WorkspaceCollection: Equatable, Sendable {
     return true
   }
 
-  private mutating func duplicateForSplit(_ tabID: UUID) -> UUID {
+  private mutating func duplicateForSplit(_ tabID: UUID, copies: inout [UUID: UUID]) -> UUID {
     let source = tabsByID[tabID]!
-    let copy = BrowserTab(title: source.title, url: source.url)
+    let copy = BrowserTab(title: source.title, url: source.url,
+      faviconData: source.faviconData, isLoading: source.isLoading)
     _ = insertTab(copy, in: selectedSpaceID,
       at: newTabInsertionIndex(in: selectedSpaceID), select: false)
+    tabsByID[tabID]?.isLoading = false
+    copies[tabID] = copy.id
     return copy.id
   }
 
@@ -588,6 +604,17 @@ public struct WorkspaceCollection: Equatable, Sendable {
   public mutating func insertDroppedWebPage(
     _ tab: BrowserTab, before targetID: UUID? = nil, splittingOnRight: Bool = false
   ) -> Bool {
+    var copies: [UUID: UUID] = [:]
+    return insertDroppedWebPage(tab, before: targetID, splittingOnRight: splittingOnRight,
+      pinnedTabCopies: &copies)
+  }
+
+  @discardableResult
+  public mutating func insertDroppedWebPage(
+    _ tab: BrowserTab, before targetID: UUID? = nil, splittingOnRight: Bool = false,
+    pinnedTabCopies: inout [UUID: UUID]
+  ) -> Bool {
+    pinnedTabCopies = [:]
     if splittingOnRight {
       guard selectedTabID != nil, (activeSplit?.tabIDs.count ?? 1) < 3 else { return false }
     }
@@ -596,7 +623,10 @@ public struct WorkspaceCollection: Equatable, Sendable {
     let insertion = anchor.flatMap { candidate.index(of: $0, in: selectedSpaceID) }
       ?? (selectedSpace?.tabIDs.count ?? 0)
     guard candidate.insertTab(tab, in: selectedSpaceID, at: insertion, select: false) else { return false }
-    if splittingOnRight, !candidate.createSplit(with: tab.id, on: .right) { return false }
+    if splittingOnRight,
+       !candidate.createSplit(with: tab.id, at: .init(side: .right), pinnedTabCopies: &pinnedTabCopies) {
+      return false
+    }
     self = candidate
     return true
   }
@@ -745,6 +775,7 @@ public struct WorkspaceCollection: Equatable, Sendable {
     _ = detachSplitPane(tabID)
     if retainsPin {
       if !isTopPin {
+        if tab.url != tab.spacePinURL { tabsByID[tabID]?.faviconData = nil }
         tabsByID[tabID]?.url = tab.spacePinURL
         tabsByID[tabID]?.isLoading = false
         tabsByID[tabID]?.isSpacePinClosed = true

@@ -109,6 +109,21 @@ DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
 
+2026-10-20：FedCM 登录账号选择气泡在没有 Views 页面锚点的 Cio 窗口中
+触发 `CreateBubbleWidget` 的父窗口断言，导致主进程 SIGABRT。
+`Native/CioFedCmDialogs.*` 保留 Chromium 原有气泡／模态内容与账号决策，
+创建时避开 Chrome 专属锚点和 NativeWidgetMac 父窗口，使用 AppKit 原生
+子窗口承载。定位沿用气泡的页面边距、RTL 和视口约束；模态界面居中于
+所属页面，并保留页面输入抑制。显示／隐藏绕过依赖 Chrome 主窗口的
+TabDialogManager，失活标签隐藏弹窗，导航、移除、关闭仍由原 FedCM owner
+清理，销毁前解除原生父子窗口关系。误触保护、安全弹窗登记和 PiP 遮挡
+观察仍使用 Chromium 实现。
+`PYTHONDONTWRITEBYTECODE=1 python3 Scripts/verify_fedcm_dialog.py` 提取实际
+工厂、配置和显示路由函数进行隔离检查；修复前在无 Views 父窗口断言处
+退出 -6，修复后覆盖 Cio／stock Chrome 的气泡与模态创建、安全登记、
+模态输入抑制及隐藏释放、非活动标签和显示条件。此检查不启动应用，
+不代表具体身份提供商的完整登录验收。
+
 2026-10-14：ChatGPT favicon 的 SVG 带有内嵌 CSS。AppKit 接受该图像，但
 绘制得到 0 个可见像素；相同资源经 Chromium 解码的 32 px 缓存有 459 个
 可见像素。独立请求备用 `/favicon.ico` 返回 403，无法补救透明 SVG。

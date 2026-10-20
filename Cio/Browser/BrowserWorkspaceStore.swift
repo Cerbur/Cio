@@ -188,8 +188,14 @@ final class BrowserWorkspaceStore: ObservableObject {
     guard canSplit(with: tabID) else { return false }
     var committed = false
     withSelectionTransition {
-      committed = workspace.createSplit(with: tabID, at: target)
-      if committed { ensureSelectedPresentationSessions() }
+      var copies: [UUID: UUID] = [:]
+      committed = workspace.createSplit(with: tabID, at: target, pinnedTabCopies: &copies)
+      if committed {
+        for (sourceID, destinationID) in copies {
+          sessionManager.transferSession(from: sourceID, to: destinationID)
+        }
+        ensureSelectedPresentationSessions()
+      }
     }
     if committed {
       engineSelectedSession?.focusPage()
@@ -341,8 +347,13 @@ final class BrowserWorkspaceStore: ObservableObject {
     let tab = BrowserTab(url: url)
     var inserted = false
     withSelectionTransition {
-      inserted = workspace.insertDroppedWebPage(tab, before: tabID, splittingOnRight: splittingOnRight)
+      var copies: [UUID: UUID] = [:]
+      inserted = workspace.insertDroppedWebPage(tab, before: tabID, splittingOnRight: splittingOnRight,
+        pinnedTabCopies: &copies)
       guard inserted else { return }
+      for (sourceID, destinationID) in copies {
+        sessionManager.transferSession(from: sourceID, to: destinationID)
+      }
       _ = sessionManager.createSession(for: tab.id, initialURL: url, initialTitle: "")
       if splittingOnRight { ensureSelectedPresentationSessions() }
     }
@@ -684,11 +695,12 @@ final class BrowserWorkspaceStore: ObservableObject {
     let beforeSnapshot = sessionSnapshot
     if !session.title.isEmpty { tab.title = session.title }
     if session.url != nil { tab.url = session.url }
+    tab.faviconData = session.faviconData
     tab.isLoading = session.isLoading
     guard workspace.refresh(tab) else { return }
     // Loading state is intentionally part of the live BrowserTab projection so
     // the sidebar can render progress, but it is absent from the snapshot. A
-    // URL/title callback therefore persists; a transient loading callback does
+    // URL/title/favicon callback therefore persists; a transient loading callback does
     // not create a write storm.
     persistIfNeeded(comparedTo: beforeSnapshot)
     objectWillChange.send()
@@ -737,7 +749,8 @@ final class BrowserWorkspaceStore: ObservableObject {
     return sessionManager.createSession(
       for: tab.id,
       initialURL: tab.url ?? homeURL,
-      initialTitle: tab.title)
+      initialTitle: tab.title,
+      initialFaviconData: tab.faviconData)
   }
 
   /// Saves only when the durable projection changed since the last successful

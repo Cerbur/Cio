@@ -6,6 +6,38 @@ import XCTest
 
 final class BrowserSurfaceDropTests: XCTestCase {
   @MainActor
+  func testPinHandoffKeepsTheMountedViewportWhenThePinIsReopenedAndTemporaryClosed() throws {
+    try withHost { host in
+      let pinID = UUID(), temporaryID = UUID(), otherID = UUID()
+      let running = DropTestSurface(), other = DropTestSurface()
+      host.present(containers: [pinID: .init(surface: running), otherID: .init(surface: other)], selectedTabID: pinID)
+      let viewport = try XCTUnwrap(running.nativeView.superview)
+      let originalFrame = running.nativeView.frame
+      running.clearRenderSizes()
+      host.transferPage(from: pinID, to: temporaryID)
+      XCTAssertTrue(running.nativeView.superview === viewport)
+      XCTAssertEqual(running.nativeView.frame, originalFrame)
+      XCTAssertTrue(running.renderSizes.isEmpty)
+      let split = BrowserSplitLayout(leftTabID: temporaryID, rightTabID: otherID)
+      var attachments: [UUID: BrowserSurfaceAttachment] = [temporaryID: .init(surface: running), otherID: .init(surface: other)]
+      host.present(containers: attachments, selectedTabID: otherID, split: split)
+      XCTAssertTrue(running.nativeView.superview === viewport)
+
+      let reopened = DropTestSurface()
+      attachments[pinID] = .init(surface: reopened)
+      host.present(containers: attachments, selectedTabID: pinID)
+      sampleLayout(host, duration: AnimationValues.Toolbar.retirementDuration * 2) {
+        XCTAssertTrue(running.nativeView.superview === viewport)
+        XCTAssertTrue(viewport.superview === host, "The transferred page must not be retired under its old pin ID")
+      }
+      XCTAssertFalse(reopened.nativeView.superview === viewport)
+      attachments.removeValue(forKey: temporaryID)
+      host.present(containers: attachments, selectedTabID: pinID)
+      XCTAssertTrue(reopened.nativeView.superview?.superview === host)
+    }
+  }
+
+  @MainActor
   func testUnevenPaneReorderMovesSurvivorWithoutResizingDuringPreviewOrCommit() throws {
     try withHost { host in
       let leftID = UUID(), rightID = UUID()

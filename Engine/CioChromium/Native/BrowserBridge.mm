@@ -122,7 +122,13 @@ class PageObserver final : public content::WebContentsObserver,
     if (type == NON_TOUCH_16_DIP) [bridge_ nativeFaviconChanged];
   }
   void DidStartLoading() override { if (!devtools_) [bridge_ nativeLoadingChanged]; }
-  void DidStopLoading() override { if (!devtools_) [bridge_ nativeLoadingChanged]; }
+  void DidStopLoading() override {
+    if (devtools_) return;
+    [bridge_ nativeLoadingChanged];
+    // Reconcile even an empty final result after Swift exits the loading state.
+    // FaviconDriverObserver continues delivering later downloads/JS changes.
+    [bridge_ nativeFaviconChanged];
+  }
   void DidFirstVisuallyNonEmptyPaint() override {
     if (devtools_) [bridge_ nativeDevToolsPainted];
   }

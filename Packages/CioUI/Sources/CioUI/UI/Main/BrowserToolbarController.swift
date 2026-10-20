@@ -167,8 +167,8 @@ final class BrowserToolbarController: NSObject {
   private let workspace: any BrowserWorkspaceProtocol
   private let addressAutocomplete: AddressAutocompleteModel
   private let browserView: NSView
-  /// Identity is fixed for the lifetime of this page, regardless of layout.
-  let tabID: UUID
+  /// Follows the running page through a pin-to-temporary ownership handoff.
+  private(set) var tabID: UUID
   var arePageControlsVisible: Bool { toolbarPresentation.isVisible }
   var onAddressCapsuleLayout: (() -> Void)?
   private let isActivePane: (() -> Bool)?
@@ -229,6 +229,14 @@ final class BrowserToolbarController: NSObject {
 
   private var boundSession: (any BrowserSessionProtocol)? {
     workspace.browserSession(for: tabID)
+  }
+
+  func transferOwnership(to tabID: UUID) {
+    self.tabID = tabID
+    // Keep the hosting view, glass identity and native editor mounted. The
+    // runtime ID used by the address field is unchanged across this update.
+    addressOverlay?.rootView.tabID = tabID
+    bindSession(boundSession)
   }
 
   private func isActive(_ session: any BrowserSessionProtocol) -> Bool {

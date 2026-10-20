@@ -146,7 +146,8 @@ final class BrowserSessionManager: ObservableObject {
   func createSession(
     for tabID: UUID,
     initialURL: URL,
-    initialTitle: String = ""
+    initialTitle: String = "",
+    initialFaviconData: Data? = nil
   ) -> BrowserSession? {
     guard !isTerminating else {
       AppLog.session.error("refusing to create a session while the application is terminating")
@@ -160,7 +161,8 @@ final class BrowserSessionManager: ObservableObject {
     let session = BrowserSession(
       tabID: tabID,
       initialURL: initialURL,
-      initialTitle: initialTitle)
+      initialTitle: initialTitle,
+      initialFaviconData: initialFaviconData)
     session.onLifecycleEvent = { [weak self] event in
       self?.onLifecycleEvent?(event)
     }
@@ -201,6 +203,29 @@ final class BrowserSessionManager: ObservableObject {
     sessionOrder.append(tabID)
     publishRuntimeState()
     return session
+  }
+
+  /// A retained pin gives its live runtime and mounted UI to its temporary
+  /// copy. Leave the pin unregistered so its next activation is a lazy load.
+  @discardableResult
+  func transferSession(from sourceID: UUID, to destinationID: UUID) -> Bool {
+    guard !isTerminating, sourceID != destinationID,
+          let session = sessions[sourceID], !session.isClosed,
+          !isClosing(tabID: sourceID), sessions[destinationID] == nil else { return false }
+    sessions.removeValue(forKey: sourceID)
+    sessions[destinationID] = session
+    session.transferOwnership(to: destinationID)
+    sessionOrder = sessionOrder.map { $0 == sourceID ? destinationID : $0 }
+    if let container = containers.removeValue(forKey: sourceID) {
+      containers[destinationID] = container
+    }
+    if selectedSurfaceTabID == sourceID { selectedSurfaceTabID = destinationID }
+    surfaceHost?.transferPage(from: sourceID, to: destinationID)
+    // Do not synchronize the old selection here: the workspace publishes the
+    // entire committed split after every pin has handed off its session.
+    publishRuntimeState()
+    emit("session:transferred-to-temporary")
+    return true
   }
 
   /// Requests destruction of exactly one runtime. The session remains in the

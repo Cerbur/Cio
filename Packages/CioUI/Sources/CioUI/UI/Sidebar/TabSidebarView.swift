@@ -1080,7 +1080,8 @@ private struct SidebarTabRow: View {
   var body: some View {
     ZStack(alignment: .trailing) {
       Button(action: onSelect) {
-        SidebarRetainedTabLabel(pageURL: tab.url, session: session, title: tab.displayTitle,
+        SidebarRetainedTabLabel(pageURL: tab.url, faviconData: tab.faviconData,
+          session: session, title: tab.displayTitle,
           fallbackLetter: isTopPin ? tab.pinFallbackLetter : nil,
           compactAmount: isCompact ? 1 : 0, topPinAmount: isTopPin ? 1 : 0)
           // Only reserve title space while the retained close control is visible.

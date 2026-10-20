@@ -82,6 +82,7 @@ def prepare():
           '      "browser/ui/cio/CioDialogs.mm",\n'
           '      "browser/ui/cio/CioPermissions.mm",\n'
           '      "browser/ui/cio/CioWebAuthnDialogs.mm",\n'
+          '      "browser/ui/cio/CioFedCmDialogs.mm",\n'
           '      "browser/ui/cio/CioExtensionUI.mm",\n'
           '      "browser/ui/cio/CioExtensionRemoval.mm",\n'
           '      "browser/ui/cio/CioTabExtensions.mm",\n'
@@ -343,6 +344,80 @@ def prepare():
           '  if (cio::ShowWebAuthnDialog(GetWidget())) return;\n'
           '#endif\n  GetWidget()->Show();')
     patch(auth_view, '    GetWidget()->Show();', '    Show();')
+
+    # FedCM's Views anchors and tab-dialog manager require a BrowserView and
+    # NativeWidgetMac. Keep the actual Chromium dialogs, account decisions,
+    # input protection, PiP occlusion and security tracking; adapt only their
+    # parenting, positioning and visibility for the AppKit shell.
+    fedcm = "chrome/browser/ui/views/webid/fedcm_account_selection_view_desktop.cc"
+    patch(fedcm, '#include <optional>',
+          '#include <optional>\n#include "build/build_config.h"\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioNativeRuntime.h"\n'
+          '#include "chrome/browser/ui/cio/CioFedCmDialogs.h"\n#endif')
+    patch(fedcm, '  tab_subscriptions_.push_back(tab_->RegisterWillDiscardContents(',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) {\n'
+          '    tab_subscriptions_.push_back(tab_->RegisterWillDeactivate(base::BindRepeating(\n'
+          '        [](base::WeakPtr<FedCmAccountSelectionView> self, tabs::TabInterface*) {\n'
+          '          if (self) self->HideDialogWidget();\n'
+          '        }, weak_ptr_factory_.GetWeakPtr())));\n'
+          '  }\n#endif\n'
+          '  tab_subscriptions_.push_back(tab_->RegisterWillDiscardContents(')
+    patch(fedcm, '        GetAnchorView());',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '        cio::IsHostedBrowser() ? nullptr : GetAnchorView());\n'
+          '    if (cio::IsHostedBrowser())\n'
+          '      cio::PrepareFedCmDialog(widget_delegate_->AsDialogDelegate());\n'
+          '#else\n        GetAnchorView());\n#endif')
+    patch(fedcm,
+          '    gfx::NativeWindow top_level_native_window =\n'
+          '        web_contents()->GetTopLevelNativeWindow();',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '    if (cio::IsHostedBrowser()) {\n'
+          '      cio::PrepareFedCmDialog(widget_delegate_->AsDialogDelegate());\n'
+          '      dialog_widget = base::WrapUnique(views::DialogDelegate::CreateDialogWidget(\n'
+          '          widget_delegate_->AsDialogDelegate(), gfx::NativeWindow(),\n'
+          '          gfx::NativeView()));\n'
+          '    } else\n#endif\n    {\n'
+          '    gfx::NativeWindow top_level_native_window =\n'
+          '        web_contents()->GetTopLevelNativeWindow();')
+    patch(fedcm, '        /*parent=*/top_level_widget->GetNativeView()));',
+          '        /*parent=*/top_level_widget->GetNativeView()));\n    }')
+    patch(fedcm, '  extensions::SecurityDialogTracker::GetInstance()->AddSecurityDialog(',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) cio::TrackFedCmDialog(dialog_widget.get());\n'
+          '#endif\n'
+          '  extensions::SecurityDialogTracker::GetInstance()->AddSecurityDialog(')
+    patch(fedcm, 'void FedCmAccountSelectionView::UpdateDialogPosition() {',
+          'void FedCmAccountSelectionView::UpdateDialogPosition() {\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) {\n'
+          '    cio::UpdateFedCmDialogPosition(GetDialogWidget(), web_contents());\n'
+          '    return;\n  }\n#endif')
+    patch(fedcm,
+          '  tab_->GetTabFeatures()->tab_dialog_manager()->ShowDialog(widget,',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) {\n'
+          '    if (params->disable_input && !scoped_ignore_input_events_)\n'
+          '      scoped_ignore_input_events_.emplace(\n'
+          '          web_contents()->IgnoreInputEvents(std::nullopt));\n'
+          '    cio::SetFedCmDialogVisibility(widget, web_contents(), true);\n'
+          '    return;\n  }\n#endif\n'
+          '  tab_->GetTabFeatures()->tab_dialog_manager()->ShowDialog(widget,')
+    patch(fedcm, '    bool requested_visibility) {',
+          '    bool requested_visibility) {\n#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) {\n'
+          '    if (!GetDialogWidget()) return;\n'
+          '    bool visible = requested_visibility && tab_ && tab_->IsActivated();\n'
+          '    if (visible) ShouldShowDialog(visible);\n'
+          '    cio::SetFedCmDialogVisibility(GetDialogWidget(), web_contents(), visible);\n'
+          '    return;\n  }\n#endif')
+    patch(fedcm, 'bool FedCmAccountSelectionView::IsDialogManaged(views::Widget* widget) {',
+          'bool FedCmAccountSelectionView::IsDialogManaged(views::Widget* widget) {\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) return false;\n'
+          '#endif')
 
     # Cio hosts WebContents in AppKit, so its native window deliberately has
     # no Views BrowserView. SadTabController uses this lookup on creation,

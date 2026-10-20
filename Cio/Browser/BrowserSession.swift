@@ -47,9 +47,9 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// tell those two apart.
   let id = UUID()
 
-  /// The BrowserTab this session renders. Stable for the session's lifetime and
-  /// the key the manager files the session under.
-  let tabID: UUID
+  /// The BrowserTab this session renders. A pin-to-temporary handoff changes
+  /// this key while preserving the runtime identity and the running page.
+  private(set) var tabID: UUID
 
   /// URL the session opens when its browser is first created.
   let initialURL: URL
@@ -57,11 +57,12 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
 
   @Published private(set) var title = ""
   @Published private(set) var url: URL?
-  /// Icon URLs reported by Chromium for this live page. Restored tabs without
-  /// a runtime use their page origin's /favicon.ico until activated.
+  /// Icon URLs reported by Chromium for this live page.
   @Published private(set) var faviconURLs: [URL] = []
   /// Chromium handles SVG/CSS, page credentials and multi-scale decoding.
   @Published private(set) var faviconImage: NSImage?
+  /// Encoded native representations saved alongside the tab's title and URL.
+  private(set) var faviconData: Data?
   @Published private(set) var isLoading = false
   @Published private(set) var loadingProgress: Double = 0
   @Published private(set) var canGoBack = false
@@ -195,17 +196,25 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   private var didReceiveMainFrameURL = false
   private var closeState: BrowserSessionCloseState = .open
 
-  init(tabID: UUID, initialURL: URL, initialTitle: String = "") {
+  init(tabID: UUID, initialURL: URL, initialTitle: String = "", initialFaviconData: Data? = nil) {
     self.tabID = tabID
     self.initialURL = initialURL
     self.requestedURL = initialURL
     self.title = initialTitle
     self.url = initialURL
+    self.faviconData = initialFaviconData
+    self.faviconImage = initialFaviconData.flatMap { NSImage(data: $0) }
     super.init()
     addressField.applyBrowserURL(initialURL)
   }
 
   // MARK: - Navigation state
+
+  /// Only the runtime registry reassigns ownership; this never navigates or
+  /// replaces the bridge, native container, address editor or page state.
+  func transferOwnership(to tabID: UUID) {
+    self.tabID = tabID
+  }
 
   /// The state the navigation UI renders. Chromium is the source of truth for
   /// every field.
@@ -965,7 +974,15 @@ extension BrowserSession: BrowserBridgeDelegate {
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateFaviconImage image: NSImage?) {
     guard acceptsCallback(from: bridge) else { return }
+    // Retain restored artwork through bootstrap/loading gaps. Once the page
+    // finishes, Chromium's current result replaces the cache, including nil.
+    guard didReceiveMainFrameURL else { return }
+    guard image != nil || (!isLoading && !lastMainFrameLoadFailed) else { return }
+    let data = image?.tiffRepresentation
+    guard faviconData != data || (faviconImage == nil) != (image == nil) else { return }
+    faviconData = data
     faviconImage = image
+    onTabMetadataChanged?(self)
   }
 
   func browserBridge(_ bridge: BrowserBridge, didUpdateURL url: String) {
@@ -983,9 +1000,12 @@ extension BrowserSession: BrowserBridgeDelegate {
     let isFirstMainFrameURL = !didReceiveMainFrameURL
     didReceiveMainFrameURL = true
     guard isFirstMainFrameURL || value != self.url else { return }
+    if value != self.url {
+      faviconURLs = []
+      faviconData = nil
+      faviconImage = nil
+    }
     self.url = value
-    faviconURLs = []
-    faviconImage = nil
     mainFrameURLChangeCount += 1
     addressField.applyBrowserURL(value)
     // The session keeps the complete URL (the address field mirrors it); only

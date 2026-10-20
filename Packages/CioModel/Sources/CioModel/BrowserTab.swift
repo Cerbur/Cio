@@ -32,6 +32,8 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
   public var title: String
   /// Main-frame URL Chromium last reported.
   public var url: URL?
+  /// Last decoded favicon, retained with the title across lazy restore.
+  public var faviconData: Data?
   /// Whether Chromium is currently loading in this tab.
   public var isLoading: Bool
   /// Captured when entering the Space Pin tier, independent of live navigation.
@@ -49,6 +51,7 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
     id: UUID = UUID(),
     title: String = "",
     url: URL? = nil,
+    faviconData: Data? = nil,
     isLoading: Bool = false,
     spacePinURL: URL? = nil,
     isSpacePinClosed: Bool = false,
@@ -58,6 +61,7 @@ public struct BrowserTab: Identifiable, Equatable, Sendable {
     self.id = id
     self.title = title
     self.url = url
+    self.faviconData = faviconData
     self.isLoading = isLoading
     self.spacePinURL = spacePinURL
     self.isSpacePinClosed = isSpacePinClosed

@@ -232,6 +232,26 @@ public final class BrowserSurfaceHostView: NSView {
     applyPlacements(placements, animatedVisibility: true)
   }
 
+  /// Re-key the already mounted page without retiring its viewport, toolbar
+  /// or in-flight layout. The next presentation supplies the committed split.
+  public func transferPage(from sourceID: UUID, to destinationID: UUID) {
+    guard sourceID != destinationID, pages[destinationID] == nil,
+          let page = pages.removeValue(forKey: sourceID) else { return }
+    pages[destinationID] = page
+    page.transferOwnership(to: destinationID)
+    placements[destinationID] = placements.removeValue(forKey: sourceID)
+    targets[destinationID] = targets.removeValue(forKey: sourceID)
+    previewRenderSizes[destinationID] = previewRenderSizes.removeValue(forKey: sourceID)
+    if selectedTabID == sourceID { selectedTabID = destinationID }
+    if split?.leftTabID == sourceID { split?.leftTabID = destinationID }
+    if split?.middleTabID == sourceID { split?.middleTabID = destinationID }
+    if split?.rightTabID == sourceID { split?.rightTabID = destinationID }
+    if split?.focusedTabID == sourceID { split?.focusedTabID = destinationID }
+    if liftedPaneID == sourceID { liftedPaneID = destinationID }
+    if retainedSidebarPaneID == sourceID { retainedSidebarPaneID = destinationID }
+    if deferredRevealTabIDs.remove(sourceID) != nil { deferredRevealTabIDs.insert(destinationID) }
+  }
+
   public func present(containers: [UUID: BrowserSurfaceAttachment], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
     let pairChanged = self.split?.tabIDs != split?.tabIDs
     let nextVisibleIDs = Set(split?.tabIDs ?? selectedTabID.map { [$0] } ?? [])
@@ -265,10 +285,13 @@ public final class BrowserSurfaceHostView: NSView {
         viewport.isHidden = true
         let page = BrowserPagePresentation(tabID: id, surface: surface, viewport: viewport)
         pages[id] = page
-        page.splitControl.onDrag = { [weak self] event in self?.onSplitPaneDrag?(id, event) ?? false }
-        page.onMinimizeToSidebar = { [weak self] in
-          guard let self else { return }
-          if self.onMinimizeSplitPane?(id) != true { self.workspace?.detachSplitPane(id) }
+        page.splitControl.onDrag = { [weak self, weak page] event in
+          guard let self, let page else { return false }
+          return self.onSplitPaneDrag?(page.tabID, event) ?? false
+        }
+        page.onMinimizeToSidebar = { [weak self, weak page] in
+          guard let self, let page else { return }
+          if self.onMinimizeSplitPane?(page.tabID) != true { self.workspace?.detachSplitPane(page.tabID) }
         }
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
       }
