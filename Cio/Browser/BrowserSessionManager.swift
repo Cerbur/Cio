@@ -51,6 +51,7 @@ final class BrowserSessionManager: ObservableObject {
   /// Popup callback. The workspace store resolves the source session's Space.
   var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
   var onOpenExtensionTabRequest: ((BrowserSession, String, Bool) -> Void)?
+  var onPictureInPictureActivationRequest: ((BrowserSession) -> Void)?
 
   /// Application-level history callback. The manager forwards typed events but
   /// does not own history records.
@@ -184,6 +185,12 @@ final class BrowserSessionManager: ObservableObject {
     }
     session.onOpenExtensionTabRequest = { [weak self] session, url, active in
       self?.onOpenExtensionTabRequest?(session, url, active)
+    }
+    session.onPictureInPictureActivationRequest = { [weak self] session in
+      guard let self, !self.isTerminating,
+            self.sessions[session.tabID] === session,
+            !self.isClosing(tabID: session.tabID) else { return }
+      self.onPictureInPictureActivationRequest?(session)
     }
     session.onMainFrameLoadFinished = { [weak self] session, url in
       self?.onMainFrameLoadFinished?(session, url)

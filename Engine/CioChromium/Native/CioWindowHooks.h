@@ -36,6 +36,7 @@ bool OpenNewTab(Browser* browser, const GURL& url);
 void AdoptExtensionTab(Browser* browser, content::WebContents* contents, bool active);
 bool AdoptPopup(Browser* browser, std::unique_ptr<content::WebContents>& contents, const GURL& url);
 bool CanFocusBrowser(Browser* browser);
+void ActivatePictureInPictureInitiator(content::WebContents* contents);
 void ShowFindBar(Browser* browser, bool focus);
 void HideFindBar(Browser* browser);
 void RestoreFindFocus(Browser* browser);

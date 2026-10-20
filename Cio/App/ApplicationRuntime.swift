@@ -137,6 +137,9 @@ final class ApplicationRuntime: ObservableObject {
       initialTabURL: Self.homeURL,
       sessionStore: sessionStore)
     workspaceStore = store
+    store.onPictureInPictureActivation = { [weak self] in
+      self?.presentedInternalPanel = nil
+    }
     store.onPersistenceFailure = { [weak self] in self?.presentPersistenceFailure() }
     NotificationCenter.default.publisher(for: Notification.Name("CioOpenChromeSettings"))
       .sink { [weak self] notification in

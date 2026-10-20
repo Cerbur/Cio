@@ -23,6 +23,7 @@
 #include "base/message_loop/message_pump_apple.h"
 #include "chrome/app/chrome_main_delegate.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/password_manager/factories/account_password_store_factory.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
@@ -87,6 +88,7 @@ struct Runtime {
   std::unique_ptr<ScopedKeepAlive> keep_alive;
   std::unique_ptr<ScopedProfileKeepAlive> profile_keep_alive;
   std::unique_ptr<CookiePersistence> cookie_persistence;
+  id fullscreen_observer = nil;
   bool initialized = false;
 };
 Runtime& State() {
@@ -168,6 +170,14 @@ int CioNativeStart(int argc, const char **argv) {
     State().profile_keep_alive = std::make_unique<ScopedProfileKeepAlive>(
         profile, ProfileKeepAliveOrigin::kAppWindow);
     State().cookie_persistence = std::make_unique<CookiePersistence>(profile);
+    // BrowserView normally forwards this to PiP on macOS. Cio owns the main
+    // NSWindow, so forward once per native notification for all hosted tabs.
+    State().fullscreen_observer = [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowDidEnterFullScreenNotification object:nil queue:nil
+        usingBlock:^(NSNotification* notification) {
+          if (notification.object == cio::CioMainWindow())
+            PictureInPictureWindowManager::GetInstance()->OnAnyBrowserEnteredFullscreen();
+        }];
     cio::InitializePasswordPreferences(profile);
     auto* preferences = profile->GetPrefs();
     if (!preferences->GetBoolean("cio.language_defaults_initialized")) {
@@ -199,6 +209,11 @@ BOOL CioNativeIsInitialized() { return State().initialized; }
 void CioNativeShutdown() {
   if (!State().content) return;
   State().initialized = false;
+  if (State().fullscreen_observer) {
+    [NSNotificationCenter.defaultCenter removeObserver:State().fullscreen_observer];
+    State().fullscreen_observer = nil;
+  }
+  PictureInPictureWindowManager::GetInstance()->ExitPictureInPicture();
   State().cookie_persistence.reset();
   cio::CancelAllPasswordUI();
   cio::ShutdownPasswordPreferences();

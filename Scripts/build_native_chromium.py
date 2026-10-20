@@ -512,9 +512,65 @@ def prepare():
     patch(browser, '    bool* was_blocked) {',
           '    bool* was_blocked) {\n#if BUILDFLAG(IS_MAC)\n'
           '  auto* cio_popup = new_contents.get();\n'
-          '  if (cio::AdoptPopup(this, new_contents, target_url)) {\n'
+          '  if (disposition != WindowOpenDisposition::NEW_PICTURE_IN_PICTURE &&\n'
+          '      cio::AdoptPopup(this, new_contents, target_url)) {\n'
           '    if (was_blocked) *was_blocked = false;\n'
           '    return cio_popup;\n  }\n#endif')
+    # Document PiP must retain its original child WebContents and Chromium's
+    # lifetime/security handling, without creating another Cio shell Browser.
+    navigator = "chrome/browser/ui/navigator/browser_navigator.cc"
+    patch(navigator, '#include "build/build_config.h"',
+          '#include "build/build_config.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioNativeRuntime.h"\n#endif')
+    patch(navigator,
+          '    if (base::FeatureList::IsEnabled(features::kDocumentPipStandaloneWindow)) {',
+          '    if (\n#if BUILDFLAG(IS_MAC)\n'
+          '        cio::IsHostedBrowser() ||\n#endif\n'
+          '        base::FeatureList::IsEnabled(features::kDocumentPipStandaloneWindow)) {')
+    # Only the explicit PiP return action may select a hidden Cio tab. Keep
+    # ordinary renderer/window focus requests behind the existing focus gate.
+    pip_manager = "chrome/browser/picture_in_picture/picture_in_picture_window_manager.cc"
+    patch(pip_manager, '#include "base/memory/raw_ptr.h"',
+          '#include "base/memory/raw_ptr.h"\n#if BUILDFLAG(IS_MAC)\n'
+          '#include "chrome/browser/ui/cio/CioWindowHooks.h"\n#endif')
+    patch(pip_manager, '    case UiBehavior::kCloseWindowAndFocusOpener:\n',
+          '    case UiBehavior::kCloseWindowAndFocusOpener:\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '      cio::ActivatePictureInPictureInitiator(pip_window_controller_->GetWebContents());\n'
+          '#endif\n')
+    patch(pip_manager, 'void PictureInPictureWindowManager::FocusInitiator() {',
+          'void PictureInPictureWindowManager::FocusInitiator() {\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  cio::ActivatePictureInPictureInitiator(GetWebContents());\n'
+          '#endif')
+    # The upstream standalone host omits the window-manager/occlusion
+    # registration provided by Browser-backed PiP. Restore that contract for
+    # Cio so fullscreen forwarding and security-dialog tucking reach the host.
+    pip_host = "chrome/browser/ui/views/picture_in_picture/document_pip_host.cc"
+    patch(pip_host, '#include "chrome/browser/ui/views/picture_in_picture/document_pip_native_widget_mac.h"',
+          '#include "chrome/browser/ui/views/picture_in_picture/document_pip_native_widget_mac.h"\n'
+          '#include "chrome/browser/ui/cio/CioNativeRuntime.h"\n'
+          '#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"\n'
+          '#include "chrome/browser/picture_in_picture/picture_in_picture_occlusion_tracker.h"')
+    patch(pip_host, '  widget_->Show();',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) {\n'
+          '    if (auto* tracker = PictureInPictureWindowManager::GetInstance()->GetOcclusionTracker())\n'
+          '      tracker->OnPictureInPictureWidgetOpened(widget_.get());\n'
+          '  }\n#endif\n'
+          '  widget_->Show();\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser())\n'
+          '    PictureInPictureWindowManager::GetInstance()->OnPictureInPictureWindowShown(this);\n'
+          '#endif')
+    patch(pip_host, '  modal_dialog_host_observer_list_.Notify(\n'
+          '      &web_modal::ModalDialogHostObserver::OnHostDestroying);',
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser())\n'
+          '    PictureInPictureWindowManager::GetInstance()->OnPictureInPictureWindowHidden(this);\n'
+          '#endif\n'
+          '  modal_dialog_host_observer_list_.Notify(\n'
+          '      &web_modal::ModalDialogHostObserver::OnHostDestroying);')
     downloads = "chrome/browser/download/chrome_download_manager_delegate.cc"
     patch(downloads, '#include "chrome/browser/download/chrome_download_manager_delegate.h"',
           '#include "chrome/browser/download/chrome_download_manager_delegate.h"\n'

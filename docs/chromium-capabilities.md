@@ -35,6 +35,19 @@ support alone is not a playback test, and these two fixtures do not establish
 support for every codec profile, streaming service or DRM system. This build
 does not include Widevine or private Google service integrations.
 
+Video Picture-in-Picture uses Chromium's native floating window, available from
+the video's Chromium context menu or a site's `requestPictureInPicture()` button.
+Document Picture-in-Picture (`documentPictureInPicture.requestWindow()`) uses
+Chromium's standalone document window instead of being adopted into a Cio tab.
+Chromium retains its user-activation, permissions-policy, origin display,
+single-window and opener-lifetime rules. Closing or navigating the opener closes
+the associated PiP session. The return-to-tab control selects the originating
+Space and split pane before restoring page focus. Floating windows follow the
+main window into macOS fullscreen Spaces and close on engine shutdown.
+
+The integration is validated by the required Debug build; interactive PiP
+playback, window controls and site-specific behavior have not been GUI-validated.
+
 Changing user-agent strings cannot add codecs. Rebuilding or upgrading the
 engine uses `Scripts/try_chromium_build.py` and the required repository app build:
 

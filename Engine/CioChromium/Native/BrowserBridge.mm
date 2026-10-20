@@ -88,6 +88,7 @@
 - (void)nativeCancelClose;
 - (void)nativeRendererGone:(NSInteger)status;
 - (BOOL)nativeCanFocus;
+- (void)nativeActivatePictureInPictureInitiator;
 - (void)nativeRefreshDevTools;
 - (void)nativeDevToolsLoaded;
 - (void)nativeDevToolsPainted;
@@ -379,6 +380,25 @@ class PageObserver final : public content::WebContentsObserver,
 - (BOOL)nativeCanFocus {
   return !_closed && !_closing && _parent.window && !_parent.isHiddenOrHasHiddenAncestor &&
       [self.delegate browserBridge:self allowsFocusRequestFromSystem:NO];
+}
+- (void)nativeActivatePictureInPictureInitiator {
+  // Finish the native PiP close callback before a workspace selection can
+  // reparent views or close another page. Never retain a closing session.
+  __weak BrowserBridge* weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    BrowserBridge* bridge = weakSelf;
+    if (!bridge || bridge->_closed || bridge->_closing) return;
+    [bridge.delegate browserBridgeDidRequestPictureInPictureActivation:bridge];
+    NSWindow* window = bridge->_parent.window;
+    if (!window || window.attachedSheet) return;
+    if (window.isMiniaturized) [window deminiaturize:nil];
+    [NSApp activate];
+    [window makeKeyAndOrderFront:nil];
+    // Revealing an internal panel/Spotlight can finish on the next UI pass.
+    // setFocus keeps the existing visibility and editor gate; the session also
+    // schedules page focus after publishing its selection.
+    [bridge setFocus:YES];
+  });
 }
 - (void)capturePagePreviewWithMaximumPixelSize:(NSInteger)maximumPixelSize completion:(void (^)(NSImage *))completion {
   auto* view = _contents && !_closed && !_closing ? _contents->GetRenderWidgetHostView() : nullptr;
@@ -819,6 +839,9 @@ std::map<uint32_t, std::unique_ptr<DownloadObserver>>& Downloads() {
 }
 }
 namespace cio {
+void ActivatePictureInPictureInitiator(content::WebContents* contents) {
+  [BridgeForContents(contents) nativeActivatePictureInPictureInitiator];
+}
 std::optional<base::FilePath> DownloadPath(download::DownloadItem* item) {
   BrowserBridge* bridge = BridgeForContents(content::DownloadItemUtils::GetOriginalWebContents(item));
   if (!bridge) return std::nullopt;

@@ -163,6 +163,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   /// window; the manager decides where the URL opens (Milestone 3 section 26).
   var onOpenNewTabRequest: ((BrowserSession, String) -> Void)?
   var onOpenExtensionTabRequest: ((BrowserSession, String, Bool) -> Void)?
+  var onPictureInPictureActivationRequest: ((BrowserSession) -> Void)?
 
   /// Typed successful top-level load event. This is intentionally not derived
   /// from the address callback: redirects and failed/provisional URLs do not
@@ -1194,6 +1195,11 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, didRequestExtensionTabWithURL url: String, active: Bool) {
     guard acceptsCallback(from: bridge) else { return }
     onOpenExtensionTabRequest?(self, url, active)
+  }
+
+  func browserBridgeDidRequestPictureInPictureActivation(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge), closeState == .open else { return }
+    onPictureInPictureActivationRequest?(self)
   }
 
   func browserBridgeDidClose(_ bridge: BrowserBridge) {

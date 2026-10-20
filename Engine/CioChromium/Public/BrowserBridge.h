@@ -101,6 +101,10 @@ NS_SWIFT_UI_ACTOR
 /// Adopt a tab created by chrome.tabs.create, preserving its WebContents and ID.
 - (void)browserBridge:(BrowserBridge *)bridge
     didRequestExtensionTabWithURL:(NSString *)url active:(BOOL)active;
+/// The user pressed Chromium's PiP return-to-tab control. Select this session,
+/// including its Space/split pane, before restoring page focus.
+- (void)browserBridgeDidRequestPictureInPictureActivation:(BrowserBridge *)bridge
+    NS_SWIFT_NAME(browserBridgeDidRequestPictureInPictureActivation(_:));
 
 /// Chromium is asking for the keyboard.
 ///

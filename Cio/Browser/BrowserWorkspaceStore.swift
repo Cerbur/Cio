@@ -36,6 +36,8 @@ final class BrowserWorkspaceStore: ObservableObject {
   /// events but remains the owner of all domain transitions.
   var onLifecycleEvent: ((String) -> Void)?
   var onPersistenceFailure: (() -> Void)?
+  /// The application reveals Space content when returning from a PiP window.
+  var onPictureInPictureActivation: (() -> Void)?
 
   init(initialTabURL: URL, sessionStore: SessionStore = SessionStore()) {
     homeURL = initialTabURL
@@ -72,6 +74,14 @@ final class BrowserWorkspaceStore: ObservableObject {
     }
     manager.onOpenExtensionTabRequest = { [weak self] session, url, active in
       self?.openPopupInNewTab(url: url, from: session, activate: active)
+    }
+    manager.onPictureInPictureActivationRequest = { [weak self] session in
+      guard let self else { return }
+      self.activateRecentTab(session.tabID)
+      guard self.selectedTabID == session.tabID else { return }
+      self.onPictureInPictureActivation?()
+      self.dismissSpotlight()
+      session.focusPage()
     }
     manager.onCloseAccepted = { [weak self] session in
       self?.commitAcceptedClose(for: session.tabID)
