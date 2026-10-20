@@ -76,6 +76,13 @@ struct BrowserCommands: Commands {
 
     CommandGroup(after: .textEditing) {
       Divider()
+      Button("Copy Current Link") { workspace.focusedPageSession?.copyCurrentLink() }
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .disabled(runtime.presentedInternalPanel != nil || workspace.isSpotlightPresented
+                  || workspace.focusedPageSession?.hasBrowser != true
+                  || workspace.focusedPageSession?.isClosed != false
+                  || workspace.focusedPageSession?.url == nil)
+
       Button("Find in Page…") {
         workspace.dismissSpotlight(focusPage: false)
         workspace.selectedSession?.showFindBar()
@@ -110,15 +117,15 @@ struct BrowserCommands: Commands {
     }
 
     CommandGroup(after: .toolbar) {
-      Button("Zoom In") { workspace.pageZoomSession?.zoomIn() }
+      Button("Zoom In") { workspace.focusedPageSession?.zoomIn() }
         .keyboardShortcut("=", modifiers: .command)
         .disabled(!canZoomPage)
 
-      Button("Zoom Out") { workspace.pageZoomSession?.zoomOut() }
+      Button("Zoom Out") { workspace.focusedPageSession?.zoomOut() }
         .keyboardShortcut("-", modifiers: .command)
         .disabled(!canZoomPage)
 
-      Button("Actual Size") { workspace.pageZoomSession?.resetZoom() }
+      Button("Actual Size") { workspace.focusedPageSession?.resetZoom() }
         .keyboardShortcut("0", modifiers: .command)
         .disabled(!canZoomPage)
 
@@ -212,9 +219,9 @@ struct BrowserCommands: Commands {
 
   private var canZoomPage: Bool {
     runtime.presentedInternalPanel == nil && !workspace.isSpotlightPresented
-      && workspace.pageZoomSession?.isClosed == false
-      && workspace.pageZoomSession?.rendererCrashed == false
-      && workspace.pageZoomSession?.hasBrowser == true
+      && workspace.focusedPageSession?.isClosed == false
+      && workspace.focusedPageSession?.rendererCrashed == false
+      && workspace.focusedPageSession?.hasBrowser == true
   }
 
   private var selectedIsSpacePin: Bool {

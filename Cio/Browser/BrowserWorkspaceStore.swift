@@ -132,7 +132,7 @@ final class BrowserWorkspaceStore: ObservableObject {
 
   /// Resolve at invocation, including keyboard focus that moved independently
   /// of sidebar selection. Pending focus requests are not actual page focus.
-  var pageZoomSession: BrowserSession? {
+  var focusedPageSession: BrowserSession? {
     liveSessions.first { $0.isSurfaceVisible && $0.holdsAppKitKeyboardFocus }
       ?? liveSessions.first { $0.isSurfaceVisible && $0.isEditingAddressField }
       ?? selectedSession

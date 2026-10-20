@@ -24,6 +24,10 @@ public extension Notification.Name {
   /// The notification's object is the BrowserSession whose field should focus.
   static let browserFocusAddressField = Notification.Name("Cio.focusAddressField")
 
+  /// A successful full-URL copy. Only the matching session's compact address
+  /// text reacts; native editors keep their focus and unsubmitted text.
+  static let browserDidCopyCurrentLink = Notification.Name("Cio.didCopyCurrentLink")
+
   /// Posted by the toolbar once it has matched a focus request to its session.
   ///
   /// The notification's object is that session's AddressFieldModel, not the

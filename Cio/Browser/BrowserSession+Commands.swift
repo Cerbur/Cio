@@ -19,6 +19,15 @@ import Foundation
 extension BrowserSession {
   // MARK: - Address field
 
+  /// Copy Chromium's full current URL, independently of the address edit buffer.
+  func copyCurrentLink() {
+    guard hasBrowser, !isClosed, let url else { return }
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    guard pasteboard.setString(url.absoluteString, forType: .string) else { return }
+    NotificationCenter.default.post(name: .browserDidCopyCurrentLink, object: addressField)
+  }
+
   /// ⌘L: focus the address field with the committed URL and select all of it.
   func requestAddressFieldFocus() {
     AppLog.navigation.info("focus address field (command-L)")

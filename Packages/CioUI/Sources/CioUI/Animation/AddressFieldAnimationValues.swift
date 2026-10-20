@@ -15,5 +15,7 @@ extension AnimationValues {
     static let siteInformationDamping = 0.82
     static let hoverScale: CGFloat = 16.0 / 14.0
     static let compactTextOffset: CGFloat = -12
+    @MainActor static var copyScrollDuration: TimeInterval { AnimationValues.duration(0.24) }
+    @MainActor static var copyNoticeHoldDuration: TimeInterval { AnimationValues.duration(1) }
   }
 }

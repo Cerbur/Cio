@@ -188,7 +188,10 @@ struct ToolbarAddressFieldView: View {
       }
       .overlay {
         AddressCompactText(model: session.engineAddressField, isFocused: interaction.isFocused,
+                           allowsCopyNotice: presentation.isVisible && !siteInformation.isPresented
+                             && !workspace.isSpotlightPresented,
                            fontSize: BrowserLayout.addressTextSize)
+          .id(session.id)
       }
       .padding(.leading, textInset)
       .accessibilityIdentifier("address-input")
@@ -290,19 +293,34 @@ struct ToolbarAddressFieldView: View {
 private struct AddressCompactText: View {
   @ObservedEngine var model: any BrowserAddressEditing
   var isFocused: Bool
+  var allowsCopyNotice: Bool
   let fontSize: CGFloat
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var copyRequest: UUID?
+  @State private var showsCopyNotice = false
 
   var body: some View {
     let domain = model.compactDisplayText(for: model.committedURL)
     ZStack {
       if !isFocused {
-        Text(domain.isEmpty ? AddressFieldModel.placeholder : domain)
+        GeometryReader { geometry in
+          ZStack {
+            Text(domain.isEmpty ? AddressFieldModel.placeholder : domain)
+              .foregroundStyle(domain.isEmpty ? Color.secondary : Color.primary)
+              .offset(y: reduceMotion ? 0 : showsCopyNotice ? -geometry.size.height : 0)
+              .opacity(reduceMotion && showsCopyNotice ? 0 : 1)
+            Text("Copied Current Link")
+              .fontWeight(.bold)
+              .foregroundStyle(Color.primary)
+              .offset(y: reduceMotion ? 0 : showsCopyNotice ? 0 : geometry.size.height)
+              .opacity(reduceMotion && !showsCopyNotice ? 0 : 1)
+          }
+          .padding(.horizontal, 2)
+          .frame(width: geometry.size.width, height: geometry.size.height)
           .font(.system(size: fontSize))
-          .foregroundStyle(domain.isEmpty ? Color.secondary : Color.primary)
           .lineLimit(1)
           .truncationMode(.tail)
-          .padding(.horizontal, 2)
+        }
           .transition(reduceMotion ? .opacity
             : .offset(x: AnimationValues.AddressField.compactTextOffset).combined(with: .opacity))
       }
@@ -312,6 +330,46 @@ private struct AddressCompactText: View {
     .animation(reduceMotion ? nil : .easeOut(duration: AnimationValues.AddressField.buttonFocusDuration), value: isFocused)
     .allowsHitTesting(false)
     .accessibilityHidden(true)
+    .onReceive(NotificationCenter.default.publisher(for: .browserDidCopyCurrentLink)) { notice in
+      guard notice.object as AnyObject? === model as AnyObject,
+            !isFocused, allowsCopyNotice else { return }
+      copyRequest = UUID()
+    }
+    .task(id: copyRequest) {
+      guard copyRequest != nil else { return }
+      // Capture the whole flight's clock, including its hold, so a Settings
+      // speed change cannot desynchronise the return from the incoming scroll.
+      let duration = reduceMotion ? 0 : AnimationValues.AddressField.copyScrollDuration
+      let hold = AnimationValues.AddressField.copyNoticeHoldDuration
+      let enteringDuration = showsCopyNotice ? 0 : duration
+      withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
+        showsCopyNotice = true
+      }
+      do {
+        try await Task.sleep(for: .seconds(enteringDuration + hold))
+      } catch { return }
+      guard !Task.isCancelled else { return }
+      withAnimation(reduceMotion ? nil : .easeInOut(duration: duration)) {
+        showsCopyNotice = false
+      }
+    }
+    .onChange(of: isFocused) { _, focused in
+      if focused { resetCopyNotice() }
+    }
+    .onChange(of: allowsCopyNotice) { _, allowed in
+      if !allowed { resetCopyNotice() }
+    }
+    .onChange(of: model.committedURL) { _, _ in resetCopyNotice() }
+    .onDisappear { resetCopyNotice() }
+  }
+
+  private func resetCopyNotice() {
+    var transaction = Transaction()
+    transaction.disablesAnimations = true
+    withTransaction(transaction) {
+      copyRequest = nil
+      showsCopyNotice = false
+    }
   }
 }
 
