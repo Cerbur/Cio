@@ -35,6 +35,8 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/navigation_controller.h"
@@ -95,6 +97,7 @@
 - (void)nativeFindResult:(const find_in_page::FindNotificationDetails&)result
                   query:(const std::u16string&)query;
 - (void)nativeFindInvalidated;
+- (void)nativeWindowFullscreenChanged;
 @end
 
 namespace {
@@ -174,6 +177,12 @@ class PageObserver final : public content::WebContentsObserver,
     else [bridge_ nativeCancelClose];
   }
   void BeforeUnloadDialogCancelled() override { if (!devtools_) [bridge_ nativeCancelClose]; }
+  void DidToggleFullscreenModeForTab(bool fullscreen, bool) override {
+    if (!devtools_) {
+      auto* bridge = bridge_;
+      [bridge.delegate browserBridge:bridge didChangeWebFullscreen:fullscreen];
+    }
+  }
   void PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) override {
     if (!devtools_) [bridge_ nativeRendererGone:static_cast<NSInteger>(status)];
   }
@@ -215,6 +224,7 @@ class PageObserver final : public content::WebContentsObserver,
   BOOL _devtoolsPainted;
   NSInteger _findGeneration;
   int _findRequestID;
+  NSArray* _windowFullscreenObservers;
 }
 @synthesize delegate = _delegate;
 - (instancetype)initWithParentView:(NSView *)view {
@@ -253,6 +263,15 @@ class PageObserver final : public content::WebContentsObserver,
     _pageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _extensions = std::make_unique<cio::TabExtensions>(_browser, _contents, self);
     [self reparentToView:_parent];
+    __weak BrowserBridge* weakSelf = self;
+    NSMutableArray* observers = [NSMutableArray array];
+    for (NSNotificationName name in @[NSWindowDidEnterFullScreenNotification,
+                                      NSWindowDidExitFullScreenNotification]) {
+      [observers addObject:[NSNotificationCenter.defaultCenter
+          addObserverForName:name object:_parent.window queue:nil
+          usingBlock:^(NSNotification*) { [weakSelf nativeWindowFullscreenChanged]; }]];
+    }
+    _windowFullscreenObservers = observers;
     [self.delegate browserBridgeDidCreateBrowser:self];
     [self nativeFaviconChanged];
   }
@@ -270,6 +289,14 @@ class PageObserver final : public content::WebContentsObserver,
 - (void)reload { if (_contents) _contents->GetController().Reload(content::ReloadType::NORMAL, false); }
 - (void)reloadIgnoringCache { if (_contents) _contents->GetController().Reload(content::ReloadType::BYPASSING_CACHE, false); }
 - (void)stopLoading { if (_contents) _contents->Stop(); }
+- (void)exitWebFullscreen {
+  if (_contents && _contents->IsFullscreen()) _contents->ExitFullscreen(true);
+}
+- (void)nativeWindowFullscreenChanged {
+  if (!_browser || _closed) return;
+  _browser->GetFeatures().exclusive_access_manager()->fullscreen_controller()
+      ->WindowFullscreenStateChanged();
+}
 - (NSInteger)changePageZoom:(content::PageZoom)direction {
   if (!_contents || _closed || _closing) return 0;
   auto* controller = zoom::ZoomController::FromWebContents(_contents);
@@ -427,6 +454,7 @@ class PageObserver final : public content::WebContentsObserver,
 }
 - (void)closeForApplicationTermination:(BOOL)applicationTerminating {
   if (_closed || (_closing && !applicationTerminating)) return;
+  [self exitWebFullscreen];
   _terminationRequested = applicationTerminating;
   _closing = YES;
   if (applicationTerminating && _browser) {
@@ -461,6 +489,10 @@ class PageObserver final : public content::WebContentsObserver,
   _closing = YES;
   [self nativeAcceptClose];
   _closed = YES;
+  for (id observer in _windowFullscreenObservers)
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+  _windowFullscreenObservers = nil;
+  [self.delegate browserBridge:self didChangeWebFullscreen:NO];
   _findRequestID = -1;
   _contents = nullptr;
   _extensions.reset();
@@ -499,7 +531,10 @@ class PageObserver final : public content::WebContentsObserver,
   [self nativeLoadingChanged];
 }
 - (void)nativePageLoaded:(NSString *)url { [self.delegate browserBridge:self didFinishMainFrameLoadWithURL:url]; }
-- (void)nativeRendererGone:(NSInteger)status { [self.delegate browserBridge:self didTerminateRendererWithStatus:status errorCode:0]; }
+- (void)nativeRendererGone:(NSInteger)status {
+  [self exitWebFullscreen];
+  [self.delegate browserBridge:self didTerminateRendererWithStatus:status errorCode:0];
+}
 - (BrowserConnectionInfo *)connectionInfo {
   if (!_contents) return nil;
   auto* entry = _contents->GetController().GetVisibleEntry();

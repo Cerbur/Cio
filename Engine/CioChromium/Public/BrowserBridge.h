@@ -124,6 +124,7 @@ NS_SWIFT_UI_ACTOR
                          errorCode:(NSInteger)errorCode;
 
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
+- (void)browserBridge:(BrowserBridge *)bridge didChangeWebFullscreen:(BOOL)fullscreen;
 - (void)browserBridgeDidChangeExtensions:(BrowserBridge *)bridge;
 - (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
 /// Per-WebContents find UI events. Results carry the application's generation
@@ -178,6 +179,7 @@ __attribute__((visibility("default")))
 /// Reloads the current page and its resources bypassing Chromium's cache.
 - (void)reloadIgnoringCache;
 - (void)stopLoading;
+- (void)exitWebFullscreen;
 - (void)viewPageSource;
 
 /// Reads the compositor, never the desktop. Bounded in-memory preview; nil when

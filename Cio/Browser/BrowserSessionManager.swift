@@ -93,6 +93,7 @@ final class BrowserSessionManager: ObservableObject {
     surfaceHost?.previewPaneDrag(tabID, index: index)
   }
   private weak var surfaceHost: BrowserSurfaceHostView?
+  private weak var webFullscreenHost: BrowserWebFullscreenHostView?
   private var selectedSurfaceTabID: UUID?
   private var splitLayout: BrowserSplitLayout?
 
@@ -285,6 +286,7 @@ final class BrowserSessionManager: ObservableObject {
       surfaceHost?.onDarkAppearanceChange = nil
     }
     surfaceHost = host
+    host.webFullscreenHost = webFullscreenHost
     host.onSplitPaneDrag = onSplitPaneDrag
     host.onMinimizeSplitPane = onMinimizeSplitPane
     host.onDarkAppearanceChange = { [weak self] dark in
@@ -292,6 +294,11 @@ final class BrowserSessionManager: ObservableObject {
     }
     syncSurface()
     host.syncChromiumAppearance()
+  }
+
+  func setWebFullscreenHost(_ host: BrowserWebFullscreenHostView) {
+    webFullscreenHost = host
+    surfaceHost?.webFullscreenHost = host
   }
 
   /// Publishes the effective selected tab from the workspace owner. The manager

@@ -135,6 +135,7 @@ final class CioShellController: NSViewController {
   private let mainViewController: BrowserMainViewController
   private let railController: NSHostingController<NavigationRail>
   private let windowChrome = BrowserWindowChromeView()
+  private var shellContentView: BrowserShellView?
   private var sidebarItem: NSSplitViewItem { mainViewController.sidebarItem }
 
   private var spotlightObservation: AnyCancellable?
@@ -213,7 +214,10 @@ final class CioShellController: NSViewController {
     }
     shellView.onLayout = updateGeometry
     mainViewController.onToolbarLayoutChange = updateGeometry
-    view = shellView
+    shellContentView = shellView
+    let fullscreenHost = BrowserWebFullscreenHostView(shellContent: shellView)
+    view = fullscreenHost
+    runtime.surfaceDriver.setWebFullscreenHost(fullscreenHost)
   }
 
   override func viewDidLoad() {
@@ -271,6 +275,7 @@ final class CioShellController: NSViewController {
 
   /// Spotlight covers the content below the toolbar and beside the rail.
   private func updateSpotlightPresentation(_ isPresented: Bool) {
+    if isPresented { runtime.workspaceStore.engineSelectedSession?.exitWebFullscreen() }
     spotlightRemovalTask?.cancel()
     if let hostingView = spotlightHostingView {
       spotlightPresentationState?.isPresented = isPresented
@@ -298,7 +303,7 @@ final class CioShellController: NSViewController {
         at: point, in: self.runtime.workspaceStore.selectedSpaceID)
     }
     hostingView.translatesAutoresizingMaskIntoConstraints = false
-    view.addSubview(hostingView, positioned: .above, relativeTo: mainViewController.view)
+    shellContentView?.addSubview(hostingView, positioned: .above, relativeTo: nil)
     NSLayoutConstraint.activate([
       hostingView.leadingAnchor.constraint(equalTo: mainViewController.view.leadingAnchor),
       hostingView.trailingAnchor.constraint(equalTo: mainViewController.view.trailingAnchor),

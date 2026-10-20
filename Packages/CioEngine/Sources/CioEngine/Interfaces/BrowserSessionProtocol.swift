@@ -20,6 +20,7 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   var canGoBack: Bool { get }
   var canGoForward: Bool { get }
   var rendererCrashed: Bool { get }
+  var isWebFullscreenPublisher: AnyPublisher<Bool, Never> { get }
   var hasFinishedFirstLoad: Bool { get }
   var siteInformation: SiteInformation { get }
   var extensionActions: [BrowserExtensionAction] { get }
@@ -48,6 +49,7 @@ public protocol BrowserSessionProtocol: BrowserEngineObservable {
   func goForward()
   func focusPage()
   func blur()
+  func exitWebFullscreen()
   func addressFieldFocusChanged(_ focused: Bool)
   func submitAddressField(searchEngine: any SearchEngine)
   func cancelAddressEditing()

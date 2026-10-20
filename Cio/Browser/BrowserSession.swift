@@ -69,6 +69,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   @Published private(set) var canGoForward = false
   @Published private(set) var lastErrorCode: Int?
   @Published private(set) var rendererCrashed = false
+  @Published private(set) var isWebFullscreen = false
   @Published private(set) var extensionActions: [BrowserExtensionAction] = []
 
   /// True once the Chromium browser object exists.
@@ -824,6 +825,11 @@ extension BrowserSession: ChromiumContainerViewDelegate {
 // MARK: - BrowserBridgeDelegate
 
 extension BrowserSession: BrowserBridgeDelegate {
+  func browserBridge(_ bridge: BrowserBridge, didChangeWebFullscreen fullscreen: Bool) {
+    guard acceptsCallback(from: bridge) else { return }
+    isWebFullscreen = fullscreen
+  }
+
   func browserBridge(_ bridge: BrowserBridge, didShowFindBarWithFocus focus: Bool) {
     guard acceptsCallback(from: bridge), closeState == .open else { return }
     findState.isVisible = true
@@ -1093,6 +1099,7 @@ extension BrowserSession: BrowserBridgeDelegate {
   ) {
     guard acceptsCallback(from: bridge) else { return }
     rendererCrashed = true
+    isWebFullscreen = false
     resetFindStateForClose()
     AppLog.browser.error(
       "renderer terminated (status=\(status, privacy: .public), code=\(errorCode, privacy: .public))")
@@ -1195,6 +1202,7 @@ extension BrowserSession: BrowserBridgeDelegate {
       notifyCloseAccepted()
     }
     closeState = .closed
+    isWebFullscreen = false
     isClosed = true
     resetFindStateForClose()
     hasBrowser = false
@@ -1237,6 +1245,8 @@ extension BrowserSession: NSWindowDelegate {
 
 // Protocol projections retain the original session, editor and @Published streams.
 extension BrowserSession: BrowserSessionProtocol {
+  var isWebFullscreenPublisher: AnyPublisher<Bool, Never> { $isWebFullscreen.eraseToAnyPublisher() }
+  func exitWebFullscreen() { bridge?.exitWebFullscreen() }
   var extensionActionsPublisher: AnyPublisher<[BrowserExtensionAction], Never> { $extensionActions.eraseToAnyPublisher() }
   var engineAddressField: any BrowserAddressEditing { addressField }
   var canGoBackPublisher: AnyPublisher<Bool, Never> { $canGoBack.eraseToAnyPublisher() }

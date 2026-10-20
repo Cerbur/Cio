@@ -18,6 +18,7 @@ public protocol BrowserSurfaceDriverProtocol: BrowserEngineObservable {
 
   /// Idempotently re-adopts the same host during representable updates.
   func attachSurfaceHost(_ host: BrowserSurfaceHostView)
+  func setWebFullscreenHost(_ host: BrowserWebFullscreenHostView)
 
   var onSplitPaneDrag: ((UUID, BrowserSplitPaneDragEvent) -> Bool)? { get set }
   var onMinimizeSplitPane: ((UUID) -> Bool)? { get set }

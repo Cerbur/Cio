@@ -1,5 +1,6 @@
 import CioEngine
 import AppKit
+import Combine
 
 /// A stable page UI module: one tab-bound toolbar and one Chromium surface.
 /// Single-page, split and preview layouts all refer to the same instance. The
@@ -15,6 +16,7 @@ final class BrowserPagePresentation {
   var onMinimizeToSidebar: (() -> Void)?
   lazy var splitTransition = BrowserSplitPageTransition(page: self)
   private weak var installedWindow: NSWindow?
+  var fullscreenObservation: AnyCancellable?
 
   init(tabID: UUID, surface: any BrowserNativeSurface, viewport: NSView) {
     self.tabID = tabID

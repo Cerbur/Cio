@@ -30,6 +30,7 @@ extension BrowserSession {
 
   /// ⌘L: focus the address field with the committed URL and select all of it.
   func requestAddressFieldFocus() {
+    exitWebFullscreen()
     AppLog.navigation.info("focus address field (command-L)")
     onLifecycleEvent?("navigation:focus-address-field")
     NotificationCenter.default.post(name: .browserFocusAddressField, object: self)

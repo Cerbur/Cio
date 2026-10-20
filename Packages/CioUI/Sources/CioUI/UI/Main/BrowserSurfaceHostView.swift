@@ -10,6 +10,37 @@ public final class BrowserSurfaceHostView: NSView {
   public var onDarkAppearanceChange: ((Bool) -> Void)?
   private var pages: [UUID: BrowserPagePresentation] = [:]
   private var selectedTabID: UUID?
+  public weak var webFullscreenHost: BrowserWebFullscreenHostView?
+  private var webFullscreenTabID: UUID?
+
+  func setWebFullscreen(_ fullscreen: Bool, for id: UUID) {
+    guard let page = pages[id] else { return }
+    if fullscreen {
+      guard !isCovered, selectedTabID == id || split?.contains(id) == true,
+            let webFullscreenHost else {
+        page.surface.browserSession?.exitWebFullscreen()
+        return
+      }
+      guard webFullscreenTabID != id else { return }
+      if let previous = webFullscreenTabID { pages[previous]?.surface.browserSession?.exitWebFullscreen() }
+      page.splitTransition.cancel()
+      webFullscreenTabID = id
+      webFullscreenHost.present(viewport: page.viewport, surface: page.surface.nativeView)
+      page.surface.setSurfaceVisible(true)
+    } else if webFullscreenTabID == id {
+      webFullscreenTabID = nil
+      webFullscreenHost?.present(viewport: nil)
+      applySurfaceLayout(animatedVisibility: false)
+    }
+  }
+
+  private func exitWebFullscreen() {
+    guard let id = webFullscreenTabID else { return }
+    pages[id]?.surface.browserSession?.exitWebFullscreen()
+    // Close/crash and visibility updates must restore even if the renderer can
+    // no longer deliver a fullscreenchange notification.
+    setWebFullscreen(false, for: id)
+  }
   private var split: BrowserSplitLayout?
   private var isCovered = false
   private var previewTarget: BrowserSplitLayout.DropTarget?
@@ -229,12 +260,14 @@ public final class BrowserSurfaceHostView: NSView {
   public func setPresentationCovered(_ covered: Bool) {
     guard isCovered != covered else { return }
     isCovered = covered
+    if covered { exitWebFullscreen() }
     applyPlacements(placements, animatedVisibility: true)
   }
 
   /// Re-key the already mounted page without retiring its viewport, toolbar
   /// or in-flight layout. The next presentation supplies the committed split.
   public func transferPage(from sourceID: UUID, to destinationID: UUID) {
+    if webFullscreenTabID == sourceID { exitWebFullscreen() }
     guard sourceID != destinationID, pages[destinationID] == nil,
           let page = pages.removeValue(forKey: sourceID) else { return }
     pages[destinationID] = page
@@ -253,6 +286,7 @@ public final class BrowserSurfaceHostView: NSView {
   }
 
   public func present(containers: [UUID: BrowserSurfaceAttachment], selectedTabID: UUID?, split: BrowserSplitLayout? = nil) {
+    if let id = webFullscreenTabID, id != selectedTabID || containers[id] == nil { exitWebFullscreen() }
     let pairChanged = self.split?.tabIDs != split?.tabIDs
     let nextVisibleIDs = Set(split?.tabIDs ?? selectedTabID.map { [$0] } ?? [])
     if pairChanged || (isCommittingSplitPreview && self.selectedTabID != selectedTabID) {
@@ -294,6 +328,11 @@ public final class BrowserSurfaceHostView: NSView {
           if self.onMinimizeSplitPane?(page.tabID) != true { self.workspace?.detachSplitPane(page.tabID) }
         }
         addSubview(page.viewport, positioned: .below, relativeTo: divider)
+        page.fullscreenObservation = surface.browserSession?.isWebFullscreenPublisher
+          .removeDuplicates().sink { [weak self, weak page] fullscreen in
+            guard let page else { return }
+            self?.setWebFullscreen(fullscreen, for: page.tabID)
+          }
       }
       if let workspace, let history { pages[id]?.configureToolbar(workspace: workspace, history: history) }
       surface.setSurfaceVisible(nextVisibleIDs.contains(id) || id == retainedSidebarPaneID || pages[id]?.splitTransition.isExiting == true)
@@ -642,6 +681,7 @@ public final class BrowserSurfaceHostView: NSView {
     let canAnimate = window != nil && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     var entries: [UUID: BrowserSplitRevealTransition.Geometry] = [:]
     for (id, placement) in next {
+      if id == webFullscreenTabID { continue }
       // Layout notifications must not interpret the held contraction as a
       // returning page and replace it with a full-size reveal before commit.
       if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
@@ -690,6 +730,7 @@ public final class BrowserSurfaceHostView: NSView {
       view.setIndicatorVisible(splitControlsVisible && !view.isHidden, duration: controlRevealDuration)
     }
     for (id, page) in pages {
+      if id == webFullscreenTabID { continue }
       if id == retainedSidebarPaneID || deferredRevealTabIDs.contains(id) { continue }
       if page.splitTransition.isExiting {
         // Pin the outgoing Chromium size and shared parent while survivors and
