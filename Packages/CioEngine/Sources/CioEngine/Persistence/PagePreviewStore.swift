@@ -55,12 +55,21 @@ public actor PagePreviewStore {
   }
 
   public func touch(tabID: UUID, url: URL?) {
+    touch([Self.key(tabID: tabID, url: url): Date()])
+  }
+
+  /// Coalesced memory-cache reads retain their actual access times, rather than
+  /// assigning every entry the batch's flush time and losing their LRU order.
+  public func touch(_ accesses: [String: Date]) {
     load()
-    let key = Self.key(tabID: tabID, url: url)
-    guard let directory, entries[key] != nil else { return }
-    let now = Date()
-    entries[key]?.accessed = now
-    try? files.setAttributes([.modificationDate: now], ofItemAtPath: directory.appendingPathComponent(key).path)
+    guard let directory else { return }
+    for (key, accessed) in accesses {
+      // A queued read must neither resurrect an invalidated file nor move a
+      // newer capture/read backwards in recency.
+      guard let entry = entries[key], accessed > entry.accessed else { continue }
+      entries[key]?.accessed = accessed
+      try? files.setAttributes([.modificationDate: accessed], ofItemAtPath: directory.appendingPathComponent(key).path)
+    }
   }
 
   public func store(_ data: Data, tabID: UUID, url: URL?) {

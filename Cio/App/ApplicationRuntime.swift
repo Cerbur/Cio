@@ -41,10 +41,6 @@ final class ApplicationRuntime: ObservableObject {
 
   }
 
-  /// Chromium is pumped from the application's own run loop because the app owns
-  /// the NSApplication run loop (SwiftUI) rather than Chromium owning it.
-  private static let messagePumpInterval: TimeInterval = 1.0 / 60.0
-
   /// Milestone 1 opened a single hard-coded page. Milestone 3 opens one tab with
   /// this URL at launch; --home-url is a development override used by the
   /// verification tooling.
@@ -120,7 +116,8 @@ final class ApplicationRuntime: ObservableObject {
 
   private var nativeActionObservations: Set<AnyCancellable> = []
   private let extensionConfirmationCoordinator = ExtensionConfirmationCoordinator()
-  private var messagePumpTimer: Timer?
+  private let messagePumpDriver = BrowserEngineRunLoopDriver()
+  private var terminateInPumpTimer: Timer?
   private var terminationWatchdogTimer: Timer?
   private var terminationWatchdogStartedAt: Date?
   private var didShutDownBrowserEngine = false
@@ -421,40 +418,35 @@ final class ApplicationRuntime: ObservableObject {
     }
   }
 
-  /// Starts pumping Chromium's message loop on the main run loop.
+  /// Drains Chromium before AppKit sleeps. Chromium's native CF sources and
+  /// delayed-task deadlines wake the host; idle pages need no polling timer.
   func startMessagePump() {
-    guard ChromiumProcessHost.isInitialized, messagePumpTimer == nil else { return }
-    let timer = Timer.scheduledTimer(
-      withTimeInterval: Self.messagePumpInterval, repeats: true
-    ) { _ in
-      MainActor.assumeIsolated {
-        ApplicationRuntime.shared.pumpMessageLoop()
-      }
+    guard ChromiumProcessHost.isInitialized, !messagePumpDriver.isRunning else { return }
+    messagePumpDriver.start { [weak self] in
+      self?.pumpMessageLoop()
     }
-    timer.tolerance = Self.messagePumpInterval / 2
-    RunLoop.main.add(timer, forMode: .common)
-    messagePumpTimer = timer
     record("cef:message-pump-started")
-    AppLog.cef.info("CEF message pump started")
+    AppLog.cef.info("Chromium event-driven message pump started")
   }
 
   /// Stops pumping Chromium's message loop. Called before Chromium shuts down so that no
   /// Chromium call is made after native engine shutdown.
   func stopMessagePump() {
-    guard let timer = messagePumpTimer else { return }
-    timer.invalidate()
-    messagePumpTimer = nil
+    terminateInPumpTimer?.invalidate()
+    terminateInPumpTimer = nil
+    guard messagePumpDriver.isRunning else { return }
+    messagePumpDriver.stop()
     record("cef:message-pump-stopped")
     AppLog.cef.info("CEF message pump stopped")
   }
 
-  /// Drives Chromium's message loop once. Chromium callbacks are delivered from here.
+  /// Drives Chromium's message loop once, delivering callbacks before AppKit sleeps.
   ///
   /// Tooling only: requests termination before entering the native task pump.
   /// This checks the coordinator but does not reproduce a native Cmd+Q event
   /// dispatched from inside Chromium. Real-key testing remains necessary.
   func pumpMessageLoop() {
-    guard !isPumpingBrowserEngine else { return }
+    guard ChromiumProcessHost.isInitialized, !isPumpingBrowserEngine else { return }
     isPumpingBrowserEngine = true
     defer {
       isPumpingBrowserEngine = false
@@ -492,6 +484,14 @@ final class ApplicationRuntime: ObservableObject {
   func armTerminateInPump(after delay: TimeInterval, focusAddressField: Bool = false) {
     terminateInPumpDeadline = Date().addingTimeInterval(delay)
     focusAddressFieldForTooling = focusAddressField
+    // This diagnostic previously piggybacked on the production polling timer.
+    // Wake only at its requested deadline, including when the browser is idle.
+    terminateInPumpTimer?.invalidate()
+    let timer = Timer(timeInterval: max(0, delay), repeats: false) { [weak self] _ in
+      MainActor.assumeIsolated { self?.pumpMessageLoop() }
+    }
+    terminateInPumpTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
   }
 
   // MARK: - Shutdown

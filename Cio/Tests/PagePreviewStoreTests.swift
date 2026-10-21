@@ -56,6 +56,52 @@ final class PagePreviewStoreTests: XCTestCase {
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).count, 2)
   }
 
+  func testBatchedTouchesPreserveAccessOrderForLiveAndRelaunchedEviction() async throws {
+    let data = try image(), url = URL(string: "https://example.com")!
+    for relaunch in [false, true] {
+      let root = try directory(), a = UUID(), b = UUID(), c = UUID()
+      let original = PagePreviewStore(directory: root, limits: .init(count: 2))
+      await original.store(data, tabID: a, url: url)
+      await original.store(data, tabID: b, url: url)
+      let aKey = PagePreviewStore.key(tabID: a, url: url)
+      let bKey = PagePreviewStore.key(tabID: b, url: url)
+      for key in [aKey, bKey] {
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)],
+          ofItemAtPath: root.appendingPathComponent(key).path)
+      }
+      let live = PagePreviewStore(directory: root, limits: .init(count: 2))
+      // The final access to A is newer than B, even though one flush delivers
+      // both. Persisting the flush time for both would lose that ordering.
+      let aAccess = Date(timeIntervalSince1970: 30)
+      let bAccess = Date(timeIntervalSince1970: 20)
+      await live.touch([aKey: aAccess, bKey: bAccess])
+      for (key, accessed) in [(aKey, aAccess), (bKey, bAccess)] {
+        let attributes = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(key).path)
+        XCTAssertEqual(attributes[.modificationDate] as? Date, accessed)
+      }
+      let writer = relaunch ? PagePreviewStore(directory: root, limits: .init(count: 2)) : live
+      await writer.store(data, tabID: c, url: url)
+      XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(aKey).path))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(bKey).path))
+    }
+  }
+
+  func testStaleBatchedTouchesDoNotRegressRecencyOrRecreateInvalidatedFiles() async throws {
+    let root = try directory(), data = try image(), id = UUID()
+    let url = URL(string: "https://example.com")!
+    let store = PagePreviewStore(directory: root)
+    await store.store(data, tabID: id, url: url)
+    let key = PagePreviewStore.key(tabID: id, url: url), path = root.appendingPathComponent(key)
+    let before = try FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date
+    await store.touch([key: Date(timeIntervalSince1970: 1)])
+    let after = try FileManager.default.attributesOfItem(atPath: path.path)[.modificationDate] as? Date
+    XCTAssertEqual(after, before)
+    await store.invalidate(tabID: id)
+    await store.touch([key: .distantFuture])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: path.path))
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+  }
+
   func testByteBudgetCorruptionAndURLReplacementDoNotAccumulateFiles() async throws {
     let root = try directory(), data = try image(), a = UUID(), b = UUID()
     let url = URL(string: "https://example.com/a")!, next = URL(string: "https://example.com/b")!

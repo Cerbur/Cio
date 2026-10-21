@@ -113,8 +113,10 @@ actual glyph into the icon bounds, and SF Symbols preserve their aspect ratio.
 
 The Space header's primary button fills the row, so clicking its title or empty
 space toggles collapse as well as clicking the leading icon. The trailing menu
-remains an independent control. The leading icon slot shows disclosure: expanded headers
-show the configured emoji/SF Symbol at rest and a down chevron on hover;
+remains an independent control. During Tab dragging, the header blocks activation
+while keeping its icon and title at their resting appearance. The leading icon
+slot shows disclosure: expanded headers show the configured emoji/SF Symbol at
+rest and a down chevron on hover;
 collapsed headers always show a right chevron. Hover reveals the trailing native
 menu, whose only command is Change Space Icon. The native popover offers Emoji
 categories/search and an SF Symbol grid. Reset restores the default icon. The

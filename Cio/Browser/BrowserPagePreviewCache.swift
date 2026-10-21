@@ -14,6 +14,10 @@ final class BrowserPagePreviewCache {
   private var captures: [UUID: UUID] = [:]
   private let store: PagePreviewStore
   private var diskWork: Task<Void, Never>?
+  // Operational cache bookkeeping, independent of visual animation speed.
+  private static let recencyFlushInterval: Duration = .seconds(1)
+  private var pendingRecency: [String: Date] = [:]
+  private var recencyFlush: Task<Void, Never>?
   private var draining = false
   private var drainCompletion: (@MainActor () -> Void)?
   private var drainTimeout: Task<Void, Never>?
@@ -23,12 +27,13 @@ final class BrowserPagePreviewCache {
   func image(for id: UUID, url: URL?) -> NSImage? {
     let key = PagePreviewStore.key(tabID: id, url: url)
     if let preview = images.value(for: key) {
-      if preview.image != nil { enqueue { await $0.touch(tabID: id, url: url) } }
+      if preview.image != nil { recordAccess(to: key) }
       return preview.image
     }
     guard reads[id] == nil, reads.count < 15 else { return nil }
     let token = UUID()
     reads[id] = token
+    flushRecency()
     let preceding = diskWork
     Task { [weak self, store] in
       await preceding?.value
@@ -58,6 +63,7 @@ final class BrowserPagePreviewCache {
 
   func invalidate(_ id: UUID) {
     for key in images.keys where key.hasPrefix(id.uuidString + "-") { images.remove(key) }
+    pendingRecency = pendingRecency.filter { !$0.key.hasPrefix(id.uuidString + "-") }
     reads[id] = nil
     captures[id] = nil
     enqueue { await $0.invalidate(tabID: id) }
@@ -111,6 +117,7 @@ final class BrowserPagePreviewCache {
 
   private func drainIfIdle() {
     guard drainCompletion != nil, captures.isEmpty else { return }
+    flushRecency()
     let pending = diskWork
     Task { [weak self] in
       await pending?.value
@@ -126,7 +133,38 @@ final class BrowserPagePreviewCache {
     completion()
   }
 
+  private func recordAccess(to key: String) {
+    guard !draining else { return }
+    // A burst can visit more images than fit in memory. Flush before adding a
+    // new identity rather than letting the pending batch grow without bound.
+    if pendingRecency[key] == nil, pendingRecency.count >= images.countLimit {
+      flushRecency()
+    }
+    pendingRecency[key] = Date()
+    guard recencyFlush == nil else { return }
+    recencyFlush = Task { [weak self] in
+      try? await Task.sleep(for: Self.recencyFlushInterval)
+      guard !Task.isCancelled else { return }
+      self?.flushRecency()
+    }
+  }
+
+  private func flushRecency() {
+    recencyFlush?.cancel()
+    recencyFlush = nil
+    guard !pendingRecency.isEmpty else { return }
+    let updates = pendingRecency
+    pendingRecency.removeAll(keepingCapacity: true)
+    appendDiskWork { await $0.touch(updates) }
+  }
+
   private func enqueue(_ operation: @escaping @Sendable (PagePreviewStore) async -> Void) {
+    // Apply recency before an operation that can evict or replace entries.
+    flushRecency()
+    appendDiskWork(operation)
+  }
+
+  private func appendDiskWork(_ operation: @escaping @Sendable (PagePreviewStore) async -> Void) {
     let preceding = diskWork
     diskWork = Task { [store] in
       await preceding?.value

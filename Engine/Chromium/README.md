@@ -47,6 +47,12 @@ Scripts/verify_bundle.sh
   下载活跃页面图标，避免丢失网页会话或由 AppKit 错误解析 SVG 的内嵌 CSS。
 - `NativeLoader/ChromiumProcessHost.mm` 提供不包含 Chromium C++ 头文件的生命周期
   接口，并在首次使用时复制旧 CEF profile。迁移保留旧目录，拒绝复制正在使用的 profile。
+- `Cio/App/BrowserEngineRunLoopDriver.swift` 在 AppKit 即将休眠时运行一次有重入保护的
+  Chromium 任务处理。即时任务由引擎 CF source 唤醒，延迟任务沿用引擎的原生 deadline；
+  不再用固定 60 Hz timer 轮询所有页面。退出前移除 observer，保留原生菜单泵和关闭屏障。
+  `PYTHONDONTWRITEBYTECODE=1 python3 Scripts/verify_browser_engine_run_loop.py` 将实际
+  Swift driver 与固定版本 Chromium 消息泵一起运行，检查空闲休眠、即时／延迟／跨线程任务、
+  tracking 模式、重入保护与停止后不再回调；不启动 Cio 应用。
 - 用户目录为 `~/Library/Application Support/Cio/Chromium/Default`；
   `CIO_DATA_DIR` 可用于隔离开发数据。持久化包括 session cookie，但仍受 Chromium
   的 cookie 过期和清理策略约束。系统语言仅用于第一次初始化，以后尊重 Chrome Settings 的修改。
@@ -85,6 +91,20 @@ Scripts/verify_bundle.sh
   `Native/CioDialogs.mm` 使用原生 AppKit sheet，保留本地化提示、默认取消、
   按来源记住选择和原始启动逻辑；请求页面导航或销毁时取消。避免 Chrome Views
   子模态窗口依赖不存在的 NativeWidgetMac 父窗口而闪退。
+
+## Headless 与性能
+
+`launchctl setenv CHROME_HEADLESS 1` 并不是 Chromium 的渲染性能设置。固定版本源码
+`chrome/common/env_vars.h` 将其定义为无人值守测试标记，`logging_chrome.cc` 用它抑制
+错误对话框，crash reporter 用它判断无人值守运行。它不会启用 `--headless`，也不会
+关闭 GPU 或减少网页的渲染工作。Cio 不默认设置该测试标记，不修改用户的 launchctl 环境。
+真正的 `--headless` 使用 Chromium 的无界面窗口路径，不适合作为 Cio 原生交互页面的默认模式。
+性能改动保留正常硬件加速、视频与 WebGL，并优先减少宿主空转、重复任务和缓存 I/O。
+独立测试结果不代表真实网站的加载时间、总 CPU/GPU 占用或能耗基准。
+
+预览图的内存命中立即更新内存 LRU，但磁盘访问时间按最多 15 项、1 秒窗口合并；
+会保留每项的实际访问时间，并在可能淘汰／替换缓存的磁盘操作和正常退出前提交。
+减少 SwiftUI 重复读取同一预览图时产生的 actor 任务和文件元数据写入。
 
 ## 打包与升级边界
 

@@ -18,7 +18,10 @@ struct SidebarSpaceRow: View {
 
   var body: some View {
     SidebarRowContainer(showsAction: showsMenu) {
-      Button(action: onToggle) {
+      Button {
+        guard !isTabDragActive else { return }
+        onToggle()
+      } label: {
         SidebarRowLabel(title: space.name, titleWeight: .semibold) { size in
           ZStack {
             SpaceIconView(icon: space.icon, size: size)
@@ -44,7 +47,9 @@ struct SidebarSpaceRow: View {
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
-      .disabled(isTabDragActive)
+      // Suppress drag-time activation without dimming the Space icon and title.
+      .allowsHitTesting(!isTabDragActive)
+      .accessibilityRespondsToUserInteraction(!isTabDragActive)
       .help(isCollapsed ? "Expand Space Pins" : "Collapse Space Pins")
       .accessibilityLabel("Space: \(space.name)")
       .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
