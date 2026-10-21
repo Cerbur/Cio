@@ -18,6 +18,7 @@ UI 组件负责状态和交互，这个包负责动画参数、速度偏好以�
 | `SpaceOverviewAnimationValues.swift` | `AnimationValues.SpaceOverview` | Space 整体右移退场、Manager 从左进入、原生层共用显示刷新时钟；逐帧不发布 SwiftUI 状态、不移动分割线、不遍历页面布局；固定 Chromium 渲染宽度只改变裁切；双向手势跟随、回弹和中途反向保留进度与速度 |
 | `GlassComponentAnimationValues.swift` | `AnimationValues.GlassComponent` | 一级玻璃聚拢/扩散、移动与弹性尺寸模板 |
 | `PageZoomAnimationValues.swift` | `AnimationValues.PageZoom` | 页面缩放提示的连续操作消失计时；材质显隐复用一级玻璃模板 |
+| `FullscreenDisclosureAnimationValues.swift` | `AnimationValues.FullscreenDisclosure` | 全屏单行玻璃提示的短暂停留和显隐清理时钟 |
 | `ToolbarAnimationValues.swift` | `AnimationValues.Toolbar` | 工具栏一级控件出现、消失和销毁等待 |
 | `AddressFieldAnimationValues.swift` | `AnimationValues.AddressField` | 地址胶囊、焦点环、站点信息、按钮反馈和复制链接提示的双向滚动 / 停留 |
 | `SpotlightAnimationValues.swift` | `AnimationValues.Spotlight` | 新标签页玻璃与建议列表动画、宿主移除等待 |

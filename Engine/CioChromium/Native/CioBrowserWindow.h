@@ -12,6 +12,7 @@
 
 #include "base/observer_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/gfx/range/range.h"
 #include <string>
 #include <vector>
@@ -157,9 +158,9 @@ class CioExclusiveAccessContext : public ExclusiveAccessContext {
   void HideFullscreenDisclosure(ExclusiveAccessBubbleHideReason reason);
 
   raw_ptr<Browser> browser_;
-  raw_ptr<void> fullscreen_disclosure_ = nullptr;
-  ExclusiveAccessBubbleHideCallback fullscreen_disclosure_hide_callback_;
+  std::vector<ExclusiveAccessBubbleHideCallback> fullscreen_disclosure_hide_callbacks_;
   bool exclusive_access_bubble_visible_ = false;
+  base::WeakPtrFactory<CioExclusiveAccessContext> weak_factory_{this};
 };
 
 // Hosts Chrome's constrained (tab-modal) dialogs — JS alerts, HTTP auth,

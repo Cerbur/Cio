@@ -1,3 +1,3 @@
 #import "CioChromium.h"
 
-const NSInteger CioChromiumInterfaceVersion = 6;
+const NSInteger CioChromiumInterfaceVersion = 7;

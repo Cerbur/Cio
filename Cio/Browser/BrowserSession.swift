@@ -70,6 +70,7 @@ final class BrowserSession: NSObject, ObservableObject, Identifiable {
   @Published private(set) var lastErrorCode: Int?
   @Published private(set) var rendererCrashed = false
   @Published private(set) var isWebFullscreen = false
+  private let fullscreenDisclosure = BrowserFullscreenDisclosure()
   @Published private(set) var extensionActions: [BrowserExtensionAction] = []
 
   /// True once the Chromium browser object exists.
@@ -829,6 +830,19 @@ extension BrowserSession: BrowserBridgeDelegate {
   func browserBridge(_ bridge: BrowserBridge, didChangeWebFullscreen fullscreen: Bool) {
     guard acceptsCallback(from: bridge) else { return }
     isWebFullscreen = fullscreen
+    if !fullscreen { fullscreenDisclosure.dismiss() }
+  }
+
+  func browserBridge(_ bridge: BrowserBridge, showFullscreenDisclosure originLabel: String,
+                     completion: @escaping () -> Void) -> Bool {
+    guard acceptsCallback(from: bridge), closeState == .open,
+          let window = containerView?.window else { return false }
+    return fullscreenDisclosure.show(in: window, completion: completion)
+  }
+
+  func browserBridgeHideFullscreenDisclosure(_ bridge: BrowserBridge) {
+    guard acceptsCallback(from: bridge) else { return }
+    fullscreenDisclosure.dismiss()
   }
 
   func browserBridge(_ bridge: BrowserBridge, didShowFindBarWithFocus focus: Bool) {
@@ -1101,6 +1115,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     guard acceptsCallback(from: bridge) else { return }
     rendererCrashed = true
     isWebFullscreen = false
+    fullscreenDisclosure.dismiss()
     resetFindStateForClose()
     AppLog.browser.error(
       "renderer terminated (status=\(status, privacy: .public), code=\(errorCode, privacy: .public))")
@@ -1209,6 +1224,7 @@ extension BrowserSession: BrowserBridgeDelegate {
     }
     closeState = .closed
     isWebFullscreen = false
+    fullscreenDisclosure.dismiss()
     isClosed = true
     resetFindStateForClose()
     hasBrowser = false

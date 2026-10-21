@@ -741,6 +741,17 @@ bool CanFocusBrowser(Browser* browser) {
   auto found = Browsers().find(browser);
   return found != Browsers().end() && [found->second nativeCanFocus];
 }
+bool ShowFullscreenDisclosure(Browser* browser, NSString* origin_label, void (^dismissed)(void)) {
+  auto found = Browsers().find(browser);
+  if (found == Browsers().end()) return false;
+  BrowserBridge* bridge = found->second;
+  return [bridge.delegate browserBridge:bridge showFullscreenDisclosure:origin_label completion:dismissed];
+}
+void HideFullscreenDisclosure(Browser* browser) {
+  auto found = Browsers().find(browser);
+  if (found != Browsers().end())
+    [found->second.delegate browserBridgeHideFullscreenDisclosure:found->second];
+}
 content::WebContents* PasswordContentsForExtensionTab(int tab_id) {
   for (auto& [browser, bridge] : Browsers()) {
     auto* contents = [bridge nativeContents];

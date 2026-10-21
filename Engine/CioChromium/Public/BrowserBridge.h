@@ -129,6 +129,13 @@ NS_SWIFT_UI_ACTOR
 
 - (void)browserBridgeDidClose:(BrowserBridge *)bridge;
 - (void)browserBridge:(BrowserBridge *)bridge didChangeWebFullscreen:(BOOL)fullscreen;
+/// The shell owns the compact glass hint and its speed-scaled dismissal clock.
+/// Completion runs only after automatic dismissal; explicit hiding cancels it.
+- (BOOL)browserBridge:(BrowserBridge *)bridge
+    showFullscreenDisclosure:(NSString *)originLabel
+    completion:(void (^)(void))completion
+    NS_SWIFT_NAME(browserBridge(_:showFullscreenDisclosure:completion:));
+- (void)browserBridgeHideFullscreenDisclosure:(BrowserBridge *)bridge;
 - (void)browserBridgeDidChangeExtensions:(BrowserBridge *)bridge;
 - (void)browserBridgeDidCloseDevTools:(BrowserBridge *)bridge;
 /// Per-WebContents find UI events. Results carry the application's generation

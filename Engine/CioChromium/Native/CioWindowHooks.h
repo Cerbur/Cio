@@ -46,6 +46,8 @@ void UpdateFindResult(Browser* browser,
                       const std::u16string& query);
 #ifdef __OBJC__
 NSWindow* CioMainWindow();
+bool ShowFullscreenDisclosure(Browser* browser, NSString* origin_label, void (^dismissed)(void));
+void HideFullscreenDisclosure(Browser* browser);
 void SetCreatingHostView(NSView* view);
 #endif
 }

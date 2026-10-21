@@ -479,10 +479,7 @@ bool CioExclusiveAccessContext::IsExclusiveAccessBubbleDisplayed() const {
 }
 
 void CioExclusiveAccessContext::OnExclusiveAccessUserInput() {
-  NSPanel* panel = (__bridge NSPanel*)fullscreen_disclosure_.get();
-  if (panel) {
-    [panel orderFront:nil];
-  }
+  // Ordinary pointer/keyboard input must not extend or resurrect the hint.
 }
 
 content::WebContents* CioExclusiveAccessContext::GetWebContentsForExclusiveAccess() {
@@ -500,52 +497,30 @@ bool CioExclusiveAccessContext::CanUserExitFullscreen() const {
 void CioExclusiveAccessContext::ShowFullscreenDisclosure(
     const url::Origin& origin,
     ExclusiveAccessBubbleHideCallback first_hide_callback) {
-  NSWindow* parent = cio::CioMainWindow();
-  if (!parent) {
-    if (first_hide_callback) {
-      std::move(first_hide_callback)
-          .Run(ExclusiveAccessBubbleHideReason::kNotShown);
-    }
-    return;
-  }
-
-  HideFullscreenDisclosure(ExclusiveAccessBubbleHideReason::kInterrupted);
-
-  NSPanel* panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 72)
-      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskNonactivatingPanel
-      backing:NSBackingStoreBuffered defer:NO];
-  panel.title = @"全屏浏览";
-  panel.ignoresMouseEvents = YES;
-  panel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
-  NSTextField* label = [NSTextField labelWithString:
-      [NSString stringWithFormat:@"%@ · 按 Esc 退出全屏", OriginDisclosureLabel(origin)]];
-  label.frame = NSInsetRect(panel.contentView.bounds, 16, 16);
-  label.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  [panel.contentView addSubview:label];
-  [panel center];
-  [parent addChildWindow:panel ordered:NSWindowAbove];
-  [panel orderFront:nil];
-
-  fullscreen_disclosure_ = (__bridge_retained void*)panel;
-  fullscreen_disclosure_hide_callback_ = std::move(first_hide_callback);
+  // EnterFullscreen and the subsequent webpage/browser state update describe
+  // one hint. Keep its material and original dismissal clock mounted.
+  if (first_hide_callback)
+    fullscreen_disclosure_hide_callbacks_.push_back(std::move(first_hide_callback));
+  if (exclusive_access_bubble_visible_) return;
   exclusive_access_bubble_visible_ = true;
+  auto weak = weak_factory_.GetWeakPtr();
+  if (!cio::ShowFullscreenDisclosure(browser_, OriginDisclosureLabel(origin), ^{
+        if (weak) weak->HideFullscreenDisclosure(ExclusiveAccessBubbleHideReason::kTimeout);
+      })) {
+    HideFullscreenDisclosure(ExclusiveAccessBubbleHideReason::kNotShown);
+  }
 }
 
 void CioExclusiveAccessContext::HideFullscreenDisclosure(
     ExclusiveAccessBubbleHideReason reason) {
-  NSPanel* panel = (__bridge_transfer NSPanel*)fullscreen_disclosure_.get();
-  fullscreen_disclosure_ = nullptr;
+  weak_factory_.InvalidateWeakPtrs();
   exclusive_access_bubble_visible_ = false;
+  cio::HideFullscreenDisclosure(browser_);
 
-  if (panel) {
-    [panel.parentWindow removeChildWindow:panel];
-    [panel orderOut:nil];
-    [panel close];
-  }
-
-  if (fullscreen_disclosure_hide_callback_) {
-    std::move(fullscreen_disclosure_hide_callback_).Run(reason);
-  }
+  // Callbacks may re-enter or destroy the context. Drain a local snapshot.
+  auto callbacks = std::move(fullscreen_disclosure_hide_callbacks_);
+  fullscreen_disclosure_hide_callbacks_.clear();
+  for (auto& callback : callbacks) std::move(callback).Run(reason);
 }
 
 CioBrowserWindow::~CioBrowserWindow() {
