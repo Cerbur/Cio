@@ -1,8 +1,118 @@
 @testable import CioUI
+import AppKit
 import CioModel
+import SwiftUI
 import XCTest
 
 final class SpaceTabPanelRowTests: XCTestCase {
+  @MainActor
+  func testEveryContainerAnimatesBetweenSlotsAndPinsAnimateInBothDirections() throws {
+    _ = NSApplication.shared
+    let space = UUID(), pin = UUID(), left = UUID(), right = UUID()
+    let group = BrowserSplitLayout(leftTabID: left, rightTabID: right)
+    let drag = SidebarTabDrag()
+    var samples: [String: [CGFloat]] = [:]
+    func marker(_ key: String) -> some View {
+      Color.clear.onGeometryChange(for: CGFloat.self) { geometry in
+        geometry.frame(in: .named("row-motion-test")).minY
+      } action: { samples[key, default: []].append($0) }
+    }
+    func panel(gap: Bool = false, hidden: Set<UUID> = []) -> some View {
+      let rows = SpaceTabPanelRow.make(spaceID: space, pinnedIDs: [pin],
+        temporaryIDs: [left, right], groups: [group],
+        drop: gap ? .init(tier: .space(space), before: pin) : nil)
+      return VStack(spacing: 0) {
+        SpaceTabPanel(rows: rows, drag: drag, hiddenTabIDs: hidden, containerFeedback: { _ in }) { row in
+          marker("row-\(row.id)")
+        } tabContent: { _, id in
+          marker("tab-\(id)")
+        } rowBackground: { row in
+          marker("surface-\(row.id)")
+        }
+        // A fixed Space header below a Top Pin panel must be displaced by the
+        // panel's presentation height, not its final model height.
+        marker("header").frame(height: BrowserLayout.sidebarTabRowHeight)
+        Spacer(minLength: 0)
+      }
+      .frame(width: 200, height: 500, alignment: .topLeading)
+      .coordinateSpace(name: "row-motion-test")
+    }
+    let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 500),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let host = NSHostingView(rootView: panel())
+    window.contentView = host
+    window.orderFrontRegardless()
+    func flush(_ duration: TimeInterval) {
+      host.layoutSubtreeIfNeeded()
+      RunLoop.main.run(until: Date().addingTimeInterval(duration))
+    }
+    flush(0.1)
+    func assertFlight(_ key: String, from start: CGFloat, to end: CGFloat,
+                      file: StaticString = #filePath, line: UInt = #line) {
+      let values = samples[key] ?? []
+      XCTAssertTrue(values.contains { $0 > min(start, end) + 0.5 && $0 < max(start, end) - 0.5 },
+        "\(key) must have presentation frames between \(start) and \(end): \(values)", file: file, line: line)
+      XCTAssertEqual(values.last ?? .nan, end, accuracy: 0.5, file: file, line: line)
+    }
+    let stride = BrowserLayout.sidebarTabRowHeight + BrowserLayout.sidebarRowSpacing
+    let panelHeight = 5 * BrowserLayout.sidebarTabRowHeight + 4 * BrowserLayout.sidebarRowSpacing
+    samples.removeAll()
+    host.rootView = panel(gap: true)
+    flush(AnimationValues.Sidebar.reorderDuration + 0.15)
+    assertFlight("tab-\(pin)", from: 0, to: stride)
+    assertFlight("row-\(SpaceTabPanelRow.ID.divider(space))", from: stride, to: 2 * stride)
+    assertFlight("row-\(SpaceTabPanelRow.ID.newTab(space))", from: 2 * stride, to: 3 * stride)
+    assertFlight("tab-\(left)", from: 3 * stride, to: 4 * stride)
+    assertFlight("tab-\(right)", from: 3 * stride, to: 4 * stride)
+    assertFlight("surface-\(SpaceTabPanelRow.ID.group(group.id))", from: 3 * stride, to: 4 * stride)
+    assertFlight("header", from: panelHeight, to: panelHeight + stride)
+    host.rootView = panel()
+    flush(AnimationValues.Sidebar.reorderDuration + 0.15)
+    samples.removeAll()
+    host.rootView = panel(hidden: [pin])
+    flush(AnimationValues.Sidebar.spacePinToggleDuration + 0.15)
+    assertFlight("tab-\(pin)", from: 0, to: -stride)
+    assertFlight("row-\(SpaceTabPanelRow.ID.newTab(space))", from: 2 * stride, to: stride)
+    assertFlight("header", from: panelHeight, to: panelHeight - stride)
+    samples.removeAll()
+    host.rootView = panel()
+    flush(AnimationValues.Sidebar.spacePinToggleDuration + 0.15)
+    assertFlight("tab-\(pin)", from: -stride, to: 0)
+    assertFlight("row-\(SpaceTabPanelRow.ID.newTab(space))", from: stride, to: 2 * stride)
+    assertFlight("header", from: panelHeight - stride, to: panelHeight)
+  }
+
+  func testCollapsedPinsKeepContainerOrderAndSplitGeometryAboveHeader() throws {
+    let space = UUID(), first = UUID(), left = UUID(), right = UUID(), active = UUID(), temporary = UUID()
+    let group = BrowserSplitLayout(leftTabID: left, rightTabID: right)
+    let hidden: Set<UUID> = [first, left, right]
+    let rows = SpaceTabPanelRow.make(spaceID: space, pinnedIDs: [first, left, right, active],
+      temporaryIDs: [temporary], groups: [group], hiddenTabIDs: hidden)
+    let expanded = SidebarTabPanelLayout(rows: rows)
+    let collapsed = SidebarTabPanelLayout(rows: rows, hiddenTabIDs: hidden)
+    let a = expanded.frames(width: 200), b = collapsed.frames(width: 200)
+    let firstFrame = try XCTUnwrap(b[.tab(first)])
+    let groupFrame = try XCTUnwrap(b[.row(.group(group.id))])
+    let stride = BrowserLayout.sidebarTabRowHeight + BrowserLayout.sidebarRowSpacing
+    // Hidden containers travel as an ordered block; they must never converge
+    // onto one overlapping slot while their labels are still visible.
+    XCTAssertEqual(groupFrame.minY - firstFrame.minY, stride)
+    XCTAssertLessThanOrEqual(groupFrame.maxY, 0)
+    XCTAssertEqual(b[.tab(left)]?.minY, groupFrame.minY)
+    XCTAssertEqual(b[.tab(right)]?.minY, groupFrame.minY)
+    XCTAssertEqual(b[.tab(left)]?.width, a[.tab(left)]?.width)
+    XCTAssertEqual(b[.tab(right)]?.width, a[.tab(right)]?.width)
+    XCTAssertEqual(b[.tab(active)]?.minY, 0)
+    for id: SidebarTabPanelItem.ID in [.row(.divider(space)), .row(.newTab(space)), .tab(temporary)] {
+      XCTAssertEqual(try XCTUnwrap(a[id]).minY - (try XCTUnwrap(b[id])).minY, 2 * stride)
+    }
+    XCTAssertEqual(expanded.height - collapsed.height, 2 * stride)
+    XCTAssertEqual(SidebarTabPanelItem.make(expanded.rows).map(\.id),
+                   SidebarTabPanelItem.make(collapsed.rows).map(\.id))
+  }
+
   @MainActor
   func testWebPagePreviewReservesTemporaryRowAndHandoffKeepsNeighboursInPlace() throws {
     let space = UUID(), pinned = UUID(), left = UUID(), right = UUID(), other = UUID(), incoming = UUID()

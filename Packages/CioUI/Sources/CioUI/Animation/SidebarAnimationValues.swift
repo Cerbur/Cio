@@ -15,7 +15,6 @@ extension AnimationValues {
       let fade = min(1, max(0, (hiddenProgress - spacePinFadeStart) / (1 - spacePinFadeStart)))
       return Double(1 - fade * fade * (3 - 2 * fade))
     }
-    static let spacePinHiddenRowOffset: CGFloat = -1
     static let spacePinExpandedDisclosureAngle: Double = 90
     @MainActor static var clearHoverDuration: TimeInterval { AnimationValues.duration(0.18) }
     @MainActor static var clearTiltDuration: TimeInterval { AnimationValues.duration(0.14) }

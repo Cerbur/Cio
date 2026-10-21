@@ -94,12 +94,14 @@ struct SidebarTabPanelLayout {
     let width = max(0, width - CGFloat(columns - 1) * columnSpacing) / CGFloat(columns)
     var frames: [SidebarTabPanelItem.ID: CGRect] = [:]
     var index = 0
+    var hiddenIndex = 0
+    let hiddenCount = rows.filter(isHidden).count
     for row in rows {
       let hidden = isHidden(row)
       let origin = CGPoint(x: CGFloat(index % columns) * (width + columnSpacing),
-        y: hidden ? (rowHeight + rowSpacing) * AnimationValues.Sidebar.spacePinHiddenRowOffset
+        y: hidden ? CGFloat(hiddenIndex - hiddenCount) * (rowHeight + rowSpacing)
           : CGFloat(index / columns) * (rowHeight + rowSpacing))
-      if !hidden { index += 1 }
+      if hidden { hiddenIndex += 1 } else { index += 1 }
       frames[.row(row.id)] = CGRect(origin: origin, size: CGSize(width: width, height: rowHeight))
       let count = row.tabIDs.count
       guard count > 0 else { continue }

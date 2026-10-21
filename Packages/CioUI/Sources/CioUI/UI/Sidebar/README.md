@@ -14,6 +14,14 @@ motion; ordered member IDs are part of the destination so pane swaps animate.
 Moving between Space Pin and Temporary also retains the same controls.
 Dimensions come from `BrowserShellLayout.swift`.
 
+`SidebarRowMotion` owns interpolated container frames and reveal progress in
+the animation package. Each retained surface, decoration and member receives
+the same local transaction after the GeometryReader resolves its destination;
+native-control opacity rules cannot cancel container movement. Divider and
+New Tab use this exact path. `SidebarPanelHeightMotion` interpolates occupied
+height too, so Top Pin reservations continuously displace the Space header and
+viewport. Unchanged frame destinations do not restart motion.
+
 Tab titles keep regular weight, including the stable selection. Idle titles use
 the full row width; only hovering a row reserves room for its retained close
 button. The close icon uses the address reload control's scale, color and timing
@@ -77,13 +85,13 @@ Space Pin collapse still snapshots the hidden tab IDs. Selecting another tab
 does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native
 sidebar toggle.
-Hidden pins keep their native controls mounted above the panel without reserving
+Hidden pins keep their native controls mounted in their original row order above the panel without reserving
 row space or participating in hit testing, accessibility or drag registration.
 Collapse first moves them upward, then fades them near the header; expansion reverses that path downward,
 while the divider and following rows reflow on the same clock. The retained
 disclosure chevron rotates between right and down. Both effects use
 `AnimationValues.Sidebar.spacePinToggleDuration`, respect the speed setting and
-skip motion under Reduce Motion. `SpacePinVisibilityMotion` derives opacity from
+skip motion under Reduce Motion. `SidebarRowMotion` derives opacity from
 the interpolated reveal clock so the header's spatial fade and tab opacity do
 not erase the visible movement in the first half of the flight.
 

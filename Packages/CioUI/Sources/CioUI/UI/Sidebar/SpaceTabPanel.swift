@@ -21,16 +21,17 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
     let layout = SidebarTabPanelLayout(rows: rows, columns: columns, rowHeight: rowHeight,
       rowSpacing: rowSpacing, columnSpacing: columnSpacing, hiddenTabIDs: hiddenTabIDs)
     let items = SidebarTabPanelItem.make(rows)
+    let motion = reduceMotion ? nil : drag.panelLayoutAnimation
+    let revealMotion = reduceMotion ? nil : AnimationValues.Sidebar.spacePinToggleAnimation
     GeometryReader { geometry in
       let frames = layout.frames(width: geometry.size.width)
       ZStack(alignment: .topLeading) {
         ForEach(rows) { row in
           let frame = frames[.row(row.id)] ?? .zero
           rowBackground(row)
-            .frame(width: frame.width, height: frame.height)
-            .offset(x: frame.minX, y: frame.minY)
             .opacity(drag.isExpandingIntoSplit ? 1 : (row.draggableTabID.map(drag.sourceOpacity) ?? 1))
-            .modifier(SpacePinVisibilityMotion(isHidden: layout.isHidden(row)))
+            .sidebarRowMotion(frame: frame, isHidden: layout.isHidden(row), hiddenTabIDs: hiddenTabIDs,
+                              animation: motion, revealAnimation: revealMotion)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .zIndex(-1)
@@ -39,9 +40,8 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
         ForEach(items) { item in
           let frame = frames[item.id] ?? .zero
           itemContent(item)
-            .frame(width: frame.width, height: frame.height)
-            .offset(x: frame.minX, y: frame.minY)
-            .modifier(SpacePinVisibilityMotion(isHidden: layout.isHidden(item.row)))
+            .sidebarRowMotion(frame: frame, isHidden: layout.isHidden(item.row), hiddenTabIDs: hiddenTabIDs,
+                              animation: motion, revealAnimation: revealMotion)
             .allowsHitTesting(!layout.isHidden(item.row))
             .accessibilityHidden(layout.isHidden(item.row))
             .environment(\.sidebarDragRegistrationEnabled, registrationEnabled && !layout.isHidden(item.row))
@@ -51,10 +51,10 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    .frame(height: layout.height)
+    .modifier(SidebarPanelHeightMotion(height: layout.height))
     // Focus/title updates cannot restart a layout flight. Member order is part
     // of the destination, so swapping panes also moves their retained controls.
-    .animation(drag.panelLayoutAnimation, value: layout.destinations)
+    .animation(reduceMotion ? nil : drag.panelLayoutAnimation, value: layout.destinations)
     .animation(reduceMotion ? nil : AnimationValues.Sidebar.spacePinToggleAnimation,
                value: hiddenTabIDs)
     .onChange(of: layout.feedbackSnapshot) { previous, current in
