@@ -9,15 +9,17 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
   var rowHeight = BrowserLayout.sidebarTabRowHeight
   var rowSpacing = BrowserLayout.sidebarRowSpacing
   var columnSpacing = BrowserLayout.sidebarTopPinSpacing
+  var hiddenTabIDs: Set<UUID> = []
   var containerFeedback: @MainActor (BrowserDragHaptics.Feedback) -> Void = BrowserDragHaptics.perform
   @ViewBuilder let content: (SpaceTabPanelRow) -> Content
   @ViewBuilder let tabContent: (SpaceTabPanelRow, UUID) -> TabContent
   @ViewBuilder let rowBackground: (SpaceTabPanelRow) -> RowBackground
   @Environment(\.sidebarDragRegistrationEnabled) private var registrationEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     let layout = SidebarTabPanelLayout(rows: rows, columns: columns, rowHeight: rowHeight,
-      rowSpacing: rowSpacing, columnSpacing: columnSpacing)
+      rowSpacing: rowSpacing, columnSpacing: columnSpacing, hiddenTabIDs: hiddenTabIDs)
     let items = SidebarTabPanelItem.make(rows)
     GeometryReader { geometry in
       let frames = layout.frames(width: geometry.size.width)
@@ -28,6 +30,7 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
             .frame(width: frame.width, height: frame.height)
             .offset(x: frame.minX, y: frame.minY)
             .opacity(drag.isExpandingIntoSplit ? 1 : (row.draggableTabID.map(drag.sourceOpacity) ?? 1))
+            .modifier(SpacePinVisibilityMotion(isHidden: layout.isHidden(row)))
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .zIndex(-1)
@@ -38,6 +41,10 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
           itemContent(item)
             .frame(width: frame.width, height: frame.height)
             .offset(x: frame.minX, y: frame.minY)
+            .modifier(SpacePinVisibilityMotion(isHidden: layout.isHidden(item.row)))
+            .allowsHitTesting(!layout.isHidden(item.row))
+            .accessibilityHidden(layout.isHidden(item.row))
+            .environment(\.sidebarDragRegistrationEnabled, registrationEnabled && !layout.isHidden(item.row))
             .zIndex(item.tabID == nil ? 1 : 0)
             .transition(.identity)
         }
@@ -48,6 +55,8 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
     // Focus/title updates cannot restart a layout flight. Member order is part
     // of the destination, so swapping panes also moves their retained controls.
     .animation(drag.panelLayoutAnimation, value: layout.destinations)
+    .animation(reduceMotion ? nil : AnimationValues.Sidebar.spacePinToggleAnimation,
+               value: hiddenTabIDs)
     .onChange(of: layout.feedbackSnapshot) { previous, current in
       guard registrationEnabled else { return }
       if let feedback = current.feedback(from: previous) { containerFeedback(feedback) }

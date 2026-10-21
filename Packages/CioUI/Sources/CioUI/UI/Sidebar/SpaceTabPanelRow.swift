@@ -42,9 +42,10 @@ struct SpaceTabPanelRow: Identifiable, Equatable {
   static func make(spaceID: UUID, pinnedIDs: [UUID], temporaryIDs: [UUID],
                    groups: [BrowserSplitLayout], liftedID: UUID? = nil,
                    liftedIDs: Set<UUID>? = nil, drop: DropPosition? = nil,
-                   paneCollapse: PaneCollapse? = nil) -> [Self] {
+                   paneCollapse: PaneCollapse? = nil, hiddenTabIDs: Set<UUID> = []) -> [Self] {
     let pins = makeTabs(pinnedIDs, spaceID: spaceID, tier: .space(spaceID), groups: groups,
-      liftedID: liftedID, liftedIDs: liftedIDs, drop: drop, paneCollapse: paneCollapse)
+      liftedID: liftedID, liftedIDs: liftedIDs, drop: drop, paneCollapse: paneCollapse,
+      hiddenTabIDs: hiddenTabIDs)
     let temporary = makeTabs(temporaryIDs, spaceID: spaceID, tier: .temporary(spaceID), groups: groups,
       liftedID: liftedID, liftedIDs: liftedIDs, drop: drop, paneCollapse: paneCollapse)
     return pins + [
@@ -60,7 +61,7 @@ struct SpaceTabPanelRow: Identifiable, Equatable {
   static func makeTabs(_ ids: [UUID], spaceID: UUID, tier: WorkspaceCollection.TabTier,
                        groups: [BrowserSplitLayout], liftedID: UUID? = nil,
                        liftedIDs: Set<UUID>? = nil, drop: DropPosition? = nil,
-                       paneCollapse: PaneCollapse? = nil) -> [Self] {
+                       paneCollapse: PaneCollapse? = nil, hiddenTabIDs: Set<UUID> = []) -> [Self] {
     let available = ids.filter { id in
       // Hide only the captured source, not survivors of a newly committed group
       // that happens to contain that source during the drag/page handoff.
@@ -72,7 +73,8 @@ struct SpaceTabPanelRow: Identifiable, Equatable {
     var emitted = Set<UUID>()
     var rows: [Self] = []
     for id in available where !emitted.contains(id) {
-      if let group = groups.first(where: { $0.contains(id) }), group.tabIDs.allSatisfy(members.contains) {
+      if let group = groups.first(where: { $0.contains(id) }), group.tabIDs.allSatisfy(members.contains),
+         group.tabIDs.allSatisfy({ hiddenTabIDs.contains($0) == hiddenTabIDs.contains(id) }) {
         rows.append(Self(id: .group(group.id), elements: group.tabIDs.map(Element.tab),
                          tier: tier, splitGroup: group))
         emitted.formUnion(group.tabIDs)

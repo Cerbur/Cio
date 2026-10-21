@@ -385,8 +385,8 @@ struct TabSidebarView: View {
   }
 
   private func spacePage(_ space: BrowserSpace, isOverview: Bool) -> some View {
-    let pinnedTabs = isOverview
-      ? space.pinnedTabIDs.compactMap(workspace.tab(withID:)) : visiblePinnedTabs(in: space)
+    let pinnedTabs = space.pinnedTabIDs.compactMap(workspace.tab(withID:))
+    let hiddenIDs: Set<UUID> = isOverview ? [] : (hiddenSpacePinIDs[space.id] ?? [])
     let globalIDs = Set(workspace.globalPinnedTabs.map(\.id))
     let temporaryTabs = space.tabIDs
       .filter { !space.pinnedTabIDs.contains($0) && !globalIDs.contains($0) }
@@ -397,12 +397,13 @@ struct TabSidebarView: View {
       groups: space.splitGroups, liftedID: tabDrag.sidebarLiftedTabID,
       liftedIDs: tabDrag.sidebarLiftedTabIDs,
       drop: tabDrag.panelDropTarget.map { .init(tier: $0.tier, before: $0.before) },
-      paneCollapse: tabDrag.paneCollapse)
+      paneCollapse: tabDrag.paneCollapse, hiddenTabIDs: hiddenIDs)
     let spotlightIsActive = workspace.isSpotlightPresented && space.id == workspace.selectedSpaceID
     let newTabIsHovered = hoveredNewTabSpaceID == space.id && tabDrag.tabID == nil
 
     return ScrollView {
-      SpaceTabPanel(rows: panelRows, drag: tabDrag) { panelRow in
+      SpaceTabPanel(rows: panelRows, drag: tabDrag,
+                    hiddenTabIDs: hiddenIDs) { panelRow in
         panelElement(panelRow, space: space, clearableCount: clearableCount,
                      spotlightIsActive: spotlightIsActive, newTabIsHovered: newTabIsHovered)
       } tabContent: { row, id in
@@ -429,7 +430,7 @@ struct TabSidebarView: View {
           chromeLayout.setSpaceOverview(false)
           return
         }
-        withAnimation(reduceMotion ? nil : .smooth(duration: AnimationValues.Sidebar.reorderDuration)) {
+        withAnimation(reduceMotion ? nil : AnimationValues.Sidebar.spacePinToggleAnimation) {
           if hiddenSpacePinIDs[space.id] != nil {
             hiddenSpacePinIDs.removeValue(forKey: space.id)
           } else {
@@ -502,14 +503,18 @@ struct TabSidebarView: View {
       chromeLayout.setSpaceOverview(false)
       workspace.presentSpotlight()
     } label: {
-      Label("New Tab", systemImage: "plus")
+      SidebarRowLabel(title: "New Tab") { size in
+        Image(systemName: "plus")
+          .font(.system(size: BrowserLayout.sidebarTabLabelFontSize))
+          .frame(width: size, height: size)
+      }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
         .frame(maxHeight: .infinity)
         .contentShape(SidebarTabAppearance.glassShape)
         .modifier(SidebarScrollEdge())
     }
     .buttonStyle(.plain)
+    .accessibilityLabel("New Tab")
     .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
     .modifier(SidebarTabSurface(isStable: spotlightIsActive, isHovered: newTabIsHovered))
     .onHover { isHovered in
@@ -602,11 +607,6 @@ struct TabSidebarView: View {
     .padding(.horizontal, BrowserLayout.sidebarContentInset)
     .frame(height: topPinHeight)
     .padding(.bottom, BrowserLayout.spaceOverviewColumnSpacing)
-  }
-
-  private func visiblePinnedTabs(in space: BrowserSpace) -> [BrowserTab] {
-    let hiddenIDs = hiddenSpacePinIDs[space.id] ?? []
-    return space.pinnedTabIDs.filter { !hiddenIDs.contains($0) }.compactMap(workspace.tab(withID:))
   }
 
   @ViewBuilder

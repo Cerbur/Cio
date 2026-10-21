@@ -56,6 +56,15 @@ struct SidebarTabPanelLayout {
   var rowHeight = BrowserLayout.sidebarTabRowHeight
   var rowSpacing = BrowserLayout.sidebarRowSpacing
   var columnSpacing = BrowserLayout.sidebarTopPinSpacing
+  // Hidden pins retain their controls and frames above the panel, but reserve
+  // no row space. The same geometry reverses on expansion or rapid retargeting.
+  var hiddenTabIDs: Set<UUID> = []
+
+  func isHidden(_ row: SpaceTabPanelRow) -> Bool {
+    !row.tabIDs.isEmpty && row.tabIDs.allSatisfy(hiddenTabIDs.contains)
+  }
+
+  private var visibleRows: [SpaceTabPanelRow] { rows.filter { !isHidden($0) } }
 
   var destinations: [RowDestination] {
     rows.map { RowDestination(id: $0.id, members: $0.tabIDs) }
@@ -64,7 +73,7 @@ struct SidebarTabPanelLayout {
   var feedbackSnapshot: FeedbackSnapshot {
     var slots: [UUID: FeedbackSnapshot.Slot] = [:]
     let columns = max(1, columns)
-    for (index, row) in rows.enumerated() {
+    for (index, row) in visibleRows.enumerated() {
       for (member, id) in row.tabIDs.enumerated() {
         slots[id] = .init(row: index / columns, column: index % columns,
                          member: member, memberCount: row.tabIDs.count)
@@ -76,7 +85,7 @@ struct SidebarTabPanelLayout {
   }
 
   var height: CGFloat {
-    let count = (rows.count + max(1, columns) - 1) / max(1, columns)
+    let count = (visibleRows.count + max(1, columns) - 1) / max(1, columns)
     return CGFloat(count) * rowHeight + CGFloat(max(0, count - 1)) * rowSpacing
   }
 
@@ -84,9 +93,13 @@ struct SidebarTabPanelLayout {
     let columns = max(1, columns)
     let width = max(0, width - CGFloat(columns - 1) * columnSpacing) / CGFloat(columns)
     var frames: [SidebarTabPanelItem.ID: CGRect] = [:]
-    for (index, row) in rows.enumerated() {
+    var index = 0
+    for row in rows {
+      let hidden = isHidden(row)
       let origin = CGPoint(x: CGFloat(index % columns) * (width + columnSpacing),
-        y: CGFloat(index / columns) * (rowHeight + rowSpacing))
+        y: hidden ? (rowHeight + rowSpacing) * AnimationValues.Sidebar.spacePinHiddenRowOffset
+          : CGFloat(index / columns) * (rowHeight + rowSpacing))
+      if !hidden { index += 1 }
       frames[.row(row.id)] = CGRect(origin: origin, size: CGSize(width: width, height: rowHeight))
       let count = row.tabIDs.count
       guard count > 0 else { continue }

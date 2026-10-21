@@ -11,6 +11,7 @@ struct SidebarSpaceRow: View {
   @State private var isPickerPresented = false
   @State private var isMenuHovered = false
   @FocusState private var isMenuFocused: Bool
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var showsDisclosure: Bool { isCollapsed || (isHovered && !isTabDragActive) }
   private var showsMenu: Bool { !isTabDragActive && (isHovered || isMenuFocused || isPickerPresented) }
@@ -22,8 +23,11 @@ struct SidebarSpaceRow: View {
           ZStack {
             SpaceIconView(icon: space.icon, size: size)
               .opacity(showsDisclosure ? 0 : 1)
-            Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+            Image(systemName: "chevron.right")
               .font(.system(size: BrowserLayout.sidebarTabDisclosureSymbolSize, weight: .semibold))
+              .rotationEffect(.degrees(isCollapsed ? 0 : AnimationValues.Sidebar.spacePinExpandedDisclosureAngle))
+              .animation(reduceMotion ? nil : AnimationValues.Sidebar.spacePinToggleAnimation,
+                         value: isCollapsed)
               .opacity(showsDisclosure ? 1 : 0)
           }
           .frame(width: size, height: size)
@@ -36,6 +40,8 @@ struct SidebarSpaceRow: View {
             }
           }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .disabled(isTabDragActive)

@@ -77,6 +77,15 @@ Space Pin collapse still snapshots the hidden tab IDs. Selecting another tab
 does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native
 sidebar toggle.
+Hidden pins keep their native controls mounted above the panel without reserving
+row space or participating in hit testing, accessibility or drag registration.
+Collapse first moves them upward, then fades them near the header; expansion reverses that path downward,
+while the divider and following rows reflow on the same clock. The retained
+disclosure chevron rotates between right and down. Both effects use
+`AnimationValues.Sidebar.spacePinToggleDuration`, respect the speed setting and
+skip motion under Reduce Motion. `SpacePinVisibilityMotion` derives opacity from
+the interpolated reveal clock so the header's spatial fade and tab opacity do
+not erase the visible movement in the first half of the flight.
 
 Space and Tab rows share `SidebarRowContainer`, `SidebarRowLabel` and
 `SidebarRowActionSymbol`: the same icon bounds, title origin, trailing action
@@ -85,7 +94,9 @@ supplies disclosure/menu actions. Native menus use the plain button style so
 platform menu padding cannot shift the shared action center. Emoji fit their
 actual glyph into the icon bounds, and SF Symbols preserve their aspect ratio.
 
-The Space header uses its leading icon slot for disclosure: expanded headers
+The Space header's primary button fills the row, so clicking its title or empty
+space toggles collapse as well as clicking the leading icon. The trailing menu
+remains an independent control. The leading icon slot shows disclosure: expanded headers
 show the configured emoji/SF Symbol at rest and a down chevron on hover;
 collapsed headers always show a right chevron. Hover reveals the trailing native
 menu, whose only command is Change Space Icon. The native popover offers Emoji
