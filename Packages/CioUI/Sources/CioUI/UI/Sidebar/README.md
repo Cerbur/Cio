@@ -78,6 +78,28 @@ does not change that snapshot, and newly pinned tabs remain visible. Command-D
 and the context menu share the row move/landing path; Command-S uses the native
 sidebar toggle.
 
+Space and Tab rows share `SidebarRowContainer`, `SidebarRowLabel` and
+`SidebarRowActionSymbol`: the same icon bounds, title origin, trailing action
+center, 29pt hit slot and 3pt trailing inset. Space changes the title weight and
+supplies disclosure/menu actions. Native menus use the plain button style so
+platform menu padding cannot shift the shared action center. Emoji fit their
+actual glyph into the icon bounds, and SF Symbols preserve their aspect ratio.
+
+The Space header uses its leading icon slot for disclosure: expanded headers
+show the configured emoji/SF Symbol at rest and a down chevron on hover;
+collapsed headers always show a right chevron. Hover reveals the trailing native
+menu, whose only command is Change Space Icon. The native popover offers Emoji
+categories/search and an SF Symbol grid. Reset restores the default icon. The
+header and footer indicator read the same live Space metadata.
+
+`BrowserSpace.metadata` contains personalization. `SpaceMetadataStore` writes
+names and icons to `space-metadata-v1.json`, independently of the tab-only
+`session-v1.json` projection. SessionStore joins the files by Space UUID and
+migrates legacy embedded names/icons before removing their session copy.
+Metadata has its own recovery copy and survives tab-session backup recovery;
+damaged metadata never invalidates the tab graph. Future Space colors belong
+in BrowserSpaceMetadata and this metadata file.
+
 Animation tuning lives in `Packages/CioUI/Sources/CioUI/Animation/`, under
 `AnimationValues.Sidebar` and `AnimationValues.TabDrag`. Timing properties
 already apply the Settings speed ratio. New effects must reference these named

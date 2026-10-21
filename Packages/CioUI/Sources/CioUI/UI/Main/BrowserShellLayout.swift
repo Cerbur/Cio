@@ -99,6 +99,8 @@ public enum BrowserLayout {
   public static let sidebarTopPinSpacing = sidebarRowSpacing
   public static let sidebarTabRowHeight: CGFloat = 36
   public static let sidebarTabCloseButtonWidth: CGFloat = 29
+  public static let sidebarTabActionSymbolSize: CGFloat = 10
+  public static let sidebarTabDisclosureSymbolSize: CGFloat = 11
   public static let sidebarTabTrailingInset: CGFloat = 3
   public static let sidebarSplitMemberSpacing: CGFloat = 5
   public static let sidebarSplitSeparatorHeight: CGFloat = 18

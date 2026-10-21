@@ -438,8 +438,8 @@ struct TabSidebarView: View {
             hiddenSpacePinIDs[space.id] = Set(space.pinnedTabIDs).subtracting(stageIDs)
           }
         }
-      } onRename: {
-        promptRename(space)
+      } onChangeIcon: { icon in
+        _ = workspace.setSpaceIcon(id: space.id, icon: icon)
       }
       .padding(.horizontal, BrowserLayout.sidebarContentInset)
       .padding(.top, BrowserLayout.sidebarSpaceHeaderTopInset)
@@ -990,60 +990,26 @@ private struct SidebarSplitTabDecoration: View {
   }
 }
 
-private struct SpaceIconView: View {
+struct SpaceIconView: View {
   let icon: BrowserSpaceIcon
   let size: CGFloat
 
   var body: some View {
     Group {
       switch icon {
-      case .emoji(let emoji): Text(emoji)
-      case .systemImage(let name): Image(systemName: name)
+      case .emoji(let emoji):
+        Text(emoji)
+          .font(.system(size: size))
+          .lineLimit(1)
+          .minimumScaleFactor(0.1)
+      case .systemImage(let name):
+        Image(systemName: name)
+          .resizable()
+          .scaledToFit()
       }
     }
-    .font(.system(size: size))
     .frame(width: size, height: size)
     .accessibilityHidden(true)
-  }
-}
-
-private struct SidebarSpaceRow: View {
-  let space: BrowserSpace
-  let isCollapsed: Bool
-  let isTabDragActive: Bool
-  let onToggle: () -> Void
-  let onRename: () -> Void
-  @State private var isHovered = false
-
-  var body: some View {
-    Button(action: onToggle) {
-      HStack(spacing: 0) {
-        SidebarRowLabel(title: space.name) {
-          SpaceIconView(icon: space.icon, size: SidebarTabAppearance.faviconSize)
-        }
-        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(.secondary)
-          .frame(width: 29, height: 32)
-          .opacity(isCollapsed || isHovered ? 1 : 0)
-          .accessibilityHidden(true)
-      }
-      .padding(.trailing, 3)
-      .frame(height: BrowserLayout.sidebarTabRowHeight)
-      .contentShape(SidebarTabAppearance.glassShape)
-    }
-    .buttonStyle(.plain)
-    .background {
-      if isHovered && !isTabDragActive {
-        SidebarTabAppearance.glassShape.fill(.primary.opacity(0.06))
-      }
-    }
-    .onHover { isHovered = $0 }
-    .contextMenu { Button("Rename Space", action: onRename) }
-    .help(isCollapsed ? "Expand Space Pins" : "Collapse Space Pins")
-    .accessibilityLabel("Space: \(space.name)")
-    .accessibilityValue(isCollapsed ? "Collapsed" : "Expanded")
-    .accessibilityIdentifier("space-row-\(space.id.uuidString)")
   }
 }
 
@@ -1065,8 +1031,6 @@ private struct SidebarTabRow: View {
   let onSwap: () -> Void
   @StateObject private var interaction = BrowserInteractionState()
   @State private var isCloseHovered = false
-  @Environment(\.colorScheme) private var colorScheme
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var isTopPin: Bool { tier == .global }
   private var showsCloseButton: Bool {
@@ -1078,40 +1042,28 @@ private struct SidebarTabRow: View {
   private var highlightsCloseButton: Bool { showsCloseButton && isCloseHovered }
 
   var body: some View {
-    ZStack(alignment: .trailing) {
+    SidebarRowContainer(showsAction: showsCloseButton, actionWidth: closeButtonWidth,
+      trailingInset: isTopPin ? 0 : BrowserLayout.sidebarTabTrailingInset) {
       Button(action: onSelect) {
         SidebarRetainedTabLabel(pageURL: tab.url, faviconData: tab.faviconData,
           session: session, title: tab.displayTitle,
           fallbackLetter: isTopPin ? tab.pinFallbackLetter : nil,
           compactAmount: isCompact ? 1 : 0, topPinAmount: isTopPin ? 1 : 0)
-          // Only reserve title space while the retained close control is visible.
-          .padding(.trailing, showsCloseButton ? closeButtonWidth : 0)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel(tab.displayTitle)
+    } action: {
       Button(action: onClose) {
-        Image(systemName: "xmark")
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(highlightsCloseButton
-            ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
-          .scaleEffect(highlightsCloseButton ? AnimationValues.Sidebar.closeButtonHoverScale : 1)
-          .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.Sidebar.closeButtonHoverDuration),
-            value: highlightsCloseButton)
-          .frame(width: closeButtonWidth)
-          .frame(maxHeight: .infinity)
-          .contentShape(Rectangle())
+        SidebarRowActionSymbol(name: "xmark", isHovered: highlightsCloseButton)
       }
       .buttonStyle(.plain)
-      .opacity(showsCloseButton ? 1 : 0)
-      .allowsHitTesting(showsCloseButton)
       .accessibilityHidden(!showsCloseButton)
       .onHover { isCloseHovered = $0 }
       .help("Close Tab")
       .accessibilityLabel("Close \(tab.displayTitle)")
     }
-    .padding(.trailing, isTopPin ? 0 : BrowserLayout.sidebarTabTrailingInset)
     .modifier(SidebarScrollEdge(isEnabled: !isTopPin))
     .modifier(SidebarTabSurface(isStable: selected && group == nil,
       isHovered: group == nil && interaction.isHovered && !isTabDragActive,

@@ -29,6 +29,9 @@ public protocol BrowserWorkspaceProtocol: BrowserEngineObservable {
   @discardableResult
   func renameSpace(id: UUID, name: String) -> Bool
 
+  @discardableResult
+  func setSpaceIcon(id: UUID, icon: BrowserSpaceIcon) -> Bool
+
   func selectSpace(id: UUID)
   func selectTab(id: UUID, focusingPage: Bool)
   func closeTab(id: UUID)

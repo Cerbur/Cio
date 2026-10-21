@@ -98,38 +98,61 @@ struct SidebarTabSurface: ViewModifier {
   }
 }
 
-/// Keeps Space and Tab titles, icons and hit areas on the same grid.
-struct SidebarRowLabel<Icon: View>: View {
-  let title: String
-  var selected = false
-  @ViewBuilder let icon: () -> Icon
+/// Tabs and Spaces are presentations of the same row. Keep the primary control
+/// full-width and retain its trailing action in one fixed slot, independent of
+/// the native button/menu's intrinsic dimensions.
+struct SidebarRowContainer<Primary: View, Action: View>: View {
+  var showsAction: Bool
+  var actionWidth = BrowserLayout.sidebarTabCloseButtonWidth
+  var trailingInset = BrowserLayout.sidebarTabTrailingInset
+  @ViewBuilder let primary: () -> Primary
+  @ViewBuilder let action: () -> Action
 
   var body: some View {
-    HStack(spacing: BrowserLayout.sidebarTabLabelSpacing) {
-      icon().frame(width: BrowserLayout.sidebarTabIconSlotWidth)
-      Text(title)
-        .font(.callout.weight(selected ? .semibold : .regular))
-        .lineLimit(1)
-      Spacer(minLength: 0)
+    ZStack(alignment: .trailing) {
+      primary()
+        .padding(.trailing, showsAction ? actionWidth : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      action()
+        .frame(width: actionWidth)
+        .frame(maxHeight: .infinity)
+        .opacity(showsAction ? 1 : 0)
+        .allowsHitTesting(showsAction)
     }
-    .padding(.leading, BrowserLayout.sidebarTabLabelInset)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .contentShape(Rectangle())
+    .padding(.trailing, trailingInset)
   }
 }
 
-/// Keep one icon and title mounted while a tab contracts into a split member.
-/// Numeric label geometry interpolates along the panel's transaction; there is
-/// no separate compact text subtree or appearance/disappearance transition.
-struct SidebarRetainedTabLabel: View, Animatable {
-  let pageURL: URL?
-  let faviconData: Data?
-  let session: (any BrowserSessionProtocol)?
+/// The same glyph sizing, center and hover feedback for close and menu actions.
+struct SidebarRowActionSymbol: View {
+  let name: String
+  var isHovered = false
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    Image(systemName: name)
+      .font(.system(size: BrowserLayout.sidebarTabActionSymbolSize, weight: .semibold))
+      .foregroundStyle(isHovered
+        ? (colorScheme == .dark ? Color.white : Color.black) : Color.secondary)
+      .scaleEffect(isHovered ? AnimationValues.Sidebar.closeButtonHoverScale : 1)
+      .animation(reduceMotion ? nil : .easeInOut(duration: AnimationValues.Sidebar.closeButtonHoverDuration),
+        value: isHovered)
+      .frame(width: BrowserLayout.sidebarTabCloseButtonWidth)
+      .frame(maxHeight: .infinity)
+      .contentShape(Rectangle())
+  }
+}
+
+/// Shared icon, title and presentation geometry. A Space only changes title
+/// weight and icon content; tab split/card motion keeps its retained labels.
+struct SidebarRowLabel<Icon: View>: View, Animatable {
   let title: String
-  let fallbackLetter: String?
-  nonisolated var compactAmount: CGFloat
-  nonisolated var topPinAmount: CGFloat
+  var titleWeight: Font.Weight = .regular
+  nonisolated var compactAmount: CGFloat = 0
+  nonisolated var topPinAmount: CGFloat = 0
   nonisolated var cardAmount: CGFloat = 0
+  @ViewBuilder let icon: (CGFloat) -> Icon
 
   nonisolated var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
     get { AnimatablePair(AnimatablePair(compactAmount, topPinAmount), cardAmount) }
@@ -155,20 +178,18 @@ struct SidebarRetainedTabLabel: View, Animatable {
       let titleWidth = max(0, geometry.size.width - titleLeading)
       let iconX = leading + iconWidth / 2
       ZStack(alignment: .topLeading) {
-        TabFaviconView(pageURL: pageURL, session: session,
-          size: SidebarTabAppearance.faviconSize + 22 * card,
-          fallbackLetter: fallbackLetter, cachedData: faviconData)
+        icon(SidebarTabAppearance.faviconSize + 22 * card)
           .position(x: iconX + (geometry.size.width / 2 - iconX) * centered, y: geometry.size.height / 2)
         Text(title)
           .font(.system(size: BrowserLayout.sidebarTabLabelFontSize
             + (BrowserLayout.sidebarSplitLabelFontSize - BrowserLayout.sidebarTabLabelFontSize) * compact,
-            weight: .regular))
+            weight: titleWeight))
           .lineLimit(1)
           .frame(width: titleWidth, alignment: .leading)
           .position(x: titleLeading + titleWidth / 2, y: geometry.size.height / 2)
           .opacity(1 - centered)
         Text(title)
-          .font(.callout.weight(.regular))
+          .font(.callout.weight(titleWeight))
           .multilineTextAlignment(.center)
           .lineLimit(3)
           .frame(width: max(geometry.size.width - 24, 1), height: max(geometry.size.height * 0.3, 1))
@@ -177,5 +198,24 @@ struct SidebarRetainedTabLabel: View, Animatable {
       }
     }
     .accessibilityHidden(true)
+  }
+}
+
+struct SidebarRetainedTabLabel: View {
+  let pageURL: URL?
+  let faviconData: Data?
+  let session: (any BrowserSessionProtocol)?
+  let title: String
+  let fallbackLetter: String?
+  var compactAmount: CGFloat
+  var topPinAmount: CGFloat
+  var cardAmount: CGFloat = 0
+
+  var body: some View {
+    SidebarRowLabel(title: title, compactAmount: compactAmount,
+      topPinAmount: topPinAmount, cardAmount: cardAmount) { size in
+      TabFaviconView(pageURL: pageURL, session: session, size: size,
+        fallbackLetter: fallbackLetter, cachedData: faviconData)
+    }
   }
 }

@@ -64,3 +64,5 @@ Control-arrow / smaller-preview follow-up:
   survive the policy change.
 - `verify_tab_shortcuts.sh` also verifies active/inactive arrow dispatch, repeat,
   function/numeric-pad flags, modifiers, key-up and observer removal.
+- The held-Control lifetime fix, production replay command and computer-use
+  evidence are recorded in [recent-tab-input-validation.md](recent-tab-input-validation.md).

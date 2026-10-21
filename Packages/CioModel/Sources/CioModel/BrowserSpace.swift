@@ -16,15 +16,34 @@ public enum BrowserSpaceIcon: Codable, Equatable, Sendable {
   public static let placeholder = Self.emoji("🧸")
 }
 
+/// Personalization is independent of tab membership and has its own durable file.
+/// Future Space appearance settings belong here.
+public struct BrowserSpaceMetadata: Codable, Equatable, Sendable {
+  public var name: String
+  public var icon: BrowserSpaceIcon
+
+  public init(name: String, icon: BrowserSpaceIcon = .placeholder) {
+    self.name = name
+    self.icon = icon
+  }
+}
+
 /// A logical group of tabs.
 ///
-/// A Space contains only domain identity and ordering. Runtime objects and
+/// A Space contains domain identity, personalization and ordering. Runtime objects and
 /// platform views deliberately do not appear here so the workspace rules can
 /// be tested without starting CEF.
 public struct BrowserSpace: Identifiable, Equatable, Sendable {
   public let id: UUID
-  public var name: String
-  public var icon: BrowserSpaceIcon
+  public var metadata: BrowserSpaceMetadata
+  public var name: String {
+    get { metadata.name }
+    set { metadata.name = newValue }
+  }
+  public var icon: BrowserSpaceIcon {
+    get { metadata.icon }
+    set { metadata.icon = newValue }
+  }
   public var tabIDs: [UUID]
   public var pinnedTabIDs: [UUID]
   public var selectedTabID: UUID?
@@ -44,8 +63,7 @@ public struct BrowserSpace: Identifiable, Equatable, Sendable {
     splitGroups: [BrowserSplitLayout] = []
   ) {
     self.id = id
-    self.name = name
-    self.icon = icon
+    self.metadata = BrowserSpaceMetadata(name: name, icon: icon)
     self.tabIDs = tabIDs
     self.pinnedTabIDs = pinnedTabIDs
     self.selectedTabID = selectedTabID

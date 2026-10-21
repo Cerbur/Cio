@@ -26,6 +26,8 @@ public final class SessionStore {
   public private(set) var needsRepair = false
 
   private let fileManager: FileManager
+  private let spaceMetadataStore: SpaceMetadataStore
+  public var spaceMetadataFileURL: URL { spaceMetadataStore.fileURL }
   private var protectsUnreadablePrimary = false
 
   public init(
@@ -52,6 +54,7 @@ public final class SessionStore {
     }
     sessionFileURL = root.appendingPathComponent(Self.fileName, isDirectory: false)
     backupFileURL = root.appendingPathComponent("session-v1.backup.json", isDirectory: false)
+    spaceMetadataStore = SpaceMetadataStore(directory: root, fileManager: fileManager)
   }
 
   /// Restore only a validated UUID graph. Preserve damaged input before any
@@ -64,7 +67,7 @@ public final class SessionStore {
     let hadPrimary = fileManager.fileExists(atPath: sessionFileURL.path)
     if let snapshot = try? readSnapshot(at: sessionFileURL).snapshot {
       AppLog.session.info("workspace session snapshot restored")
-      return snapshot
+      return restoringMetadata(in: snapshot)
     }
     if hadPrimary {
       // If preservation fails, refuse subsequent writes to the original file.
@@ -82,13 +85,30 @@ public final class SessionStore {
         } catch { /* Retry through the normal save/error path. */ }
       }
       AppLog.session.warning("workspace restored from validated backup")
-      return backup.snapshot
+      return restoringMetadata(in: backup.snapshot)
     }
     if hadPrimary || fileManager.fileExists(atPath: backupFileURL.path) {
       recoveryStatus = .startedFresh
       AppLog.session.warning("workspace recovery unavailable; original files preserved")
     }
     return nil
+  }
+
+  private func restoringMetadata(in snapshot: WorkspaceSessionSnapshot) -> WorkspaceSessionSnapshot {
+    let spaces = snapshot.spaces.map { space in
+      let metadata = spaceMetadataStore.metadata(for: space.id)
+        ?? BrowserSpaceMetadata(name: space.name, icon: space.icon)
+      return PersistedSpace(id: space.id, name: metadata.name, selectedTabID: space.selectedTabID,
+        tabs: space.tabs, pinnedTabIDs: space.pinnedTabIDs, stableTabStack: space.stableTabStack,
+        splitGroups: space.splitGroups, icon: metadata.icon)
+    }
+    // Legacy metadata must be durable before its embedded copy is removed.
+    needsRepair = needsRepair || spaceMetadataStore.requiresSave(spaces)
+    var restored = WorkspaceSessionSnapshot(schemaVersion: snapshot.schemaVersion,
+      selectedSpaceID: snapshot.selectedSpaceID, spaces: spaces)
+    restored.globalPinnedTabIDs = snapshot.globalPinnedTabIDs
+    restored.selectedGlobalTabID = snapshot.selectedGlobalTabID
+    return restored
   }
 
   private func readSnapshot(at url: URL) throws -> (snapshot: WorkspaceSessionSnapshot, data: Data) {
@@ -153,7 +173,13 @@ public final class SessionStore {
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
       encoder.dateEncodingStrategy = .iso8601
-      let data = try encoder.encode(snapshot)
+      // Save personalization first so migrating a legacy session cannot lose it.
+      try spaceMetadataStore.save(snapshot.spaces)
+      let data = try encoder.encode(WorkspaceTabSessionFile(snapshot))
+      if let previous = try? readSnapshot(at: sessionFileURL), previous.data == data {
+        needsRepair = false
+        return true
+      }
       if let previous = try? readSnapshot(at: sessionFileURL) {
         try writePrivate(previous.data, to: backupFileURL)
       } else if fileManager.fileExists(atPath: sessionFileURL.path) {

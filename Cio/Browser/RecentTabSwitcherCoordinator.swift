@@ -14,9 +14,15 @@ final class RecentTabSwitcherCoordinator {
   private var originSpaceID: UUID?
   private weak var parent: NSWindow?
   private var eventMonitor: Any?
-  private var waitsForControlRelease = false
-  private var activation = RecentTabSwitcherActivation()
-  private var pendingReveal: DispatchWorkItem?
+  private lazy var arrowKeys = RecentTabSwitcherArrowKeys(
+    isEligible: { [weak self] in
+      guard let self else { return false }
+      return self.selection != nil && NSApp.isActive && self.parent?.isKeyWindow == true
+    },
+    onAdvance: { [weak self] forward in self?.advance(forward: forward) })
+  private lazy var input = RecentTabSwitcherInputSession(
+    onReveal: { [weak self] in self?.showPanel() },
+    onCommit: { [weak self] in self?.finish(commit: true) })
   private var observations = Set<AnyCancellable>()
   private var workspaceObservation: AnyCancellable?
   private lazy var panel = RecentTabSwitcherPanel { [weak self] id in
@@ -44,7 +50,7 @@ final class RecentTabSwitcherCoordinator {
                                    currentID: workspace.selectedTabID, forward: forward)
     // A menu click opens the same chooser, latched until Return/click/Escape.
     // Keyboard invocation instead commits on the initiating Control release.
-    waitsForControlRelease = NSApp.currentEvent?.modifierFlags.contains(.control) == true
+    let controlDown = NSApp.currentEvent?.modifierFlags.contains(.control) == true
       || NSEvent.modifierFlags.contains(.control)
     originID = workspace.selectedTabID
     originSpaceID = workspace.selectedSpaceID
@@ -52,34 +58,11 @@ final class RecentTabSwitcherCoordinator {
     selection = state
     workspace.dismissSpotlight(focusPage: false)
     installInput(in: window)
-    let token = activation.begin(at: ProcessInfo.processInfo.systemUptime,
-                                 waitsForControl: waitsForControlRelease)
-    if activation.isVisible {
-      showPanel()
-    } else {
-      // Match Firefox's quick-chord strategy: release commits immediately;
-      // only a sustained hold creates/orders the chooser. Repeats do not reset
-      // this deadline, and cancellation invalidates both work and flight token.
-      let reveal = DispatchWorkItem { [weak self] in
-        guard let self, self.selection != nil, self.activation.token == token else { return }
-        guard NSEvent.modifierFlags.contains(.control) else { self.finish(commit: true); return }
-        guard self.activation.reveal(token: token, at: ProcessInfo.processInfo.systemUptime) else { return }
-        self.showPanel()
-      }
-      pendingReveal = reveal
-      DispatchQueue.main.asyncAfter(deadline: .now() + RecentTabSwitcherActivation.holdThreshold, execute: reveal)
-    }
-    // A very quick chord may have released before its native menu action ran.
-    DispatchQueue.main.async { [weak self] in
-      if self?.activation.token == token, self?.waitsForControlRelease == true, !NSEvent.modifierFlags.contains(.control) {
-        self?.finish(commit: true)
-      }
-    }
+    input.begin(controlDown: controlDown)
   }
 
   private func showPanel() {
-    guard activation.isVisible, let parent, selection != nil else { return }
-    pendingReveal = nil
+    guard input.isVisible, let parent, selection != nil else { return }
     refreshPanel()
     panel.present(in: parent)
     let ids = workspace.selectedTabID.map { workspace.splitGroup(containing: $0)?.tabIDs ?? [$0] } ?? []
@@ -91,6 +74,7 @@ final class RecentTabSwitcherCoordinator {
   }
 
   private func installInput(in window: NSWindow) {
+    arrowKeys.begin()
     // Chromium can receive raw key events through its own pump rather than
     // NSApplication's local monitor. Acknowledge only while this flight owns
     // input, through the same handler used by native controls and editors.
@@ -119,7 +103,7 @@ final class RecentTabSwitcherCoordinator {
     }.store(in: &observations)
     NotificationCenter.default.publisher(for: NSWindow.didResizeNotification, object: window).sink { [weak self] _ in
       MainActor.assumeIsolated {
-        if let self, self.activation.isVisible, let parent = self.parent { self.panel.layout(in: parent) }
+        if let self, self.input.isVisible, let parent = self.parent { self.panel.layout(in: parent) }
       }
     }.store(in: &observations)
   }
@@ -127,16 +111,15 @@ final class RecentTabSwitcherCoordinator {
   private func handle(_ event: NSEvent) -> NSEvent? {
     guard selection != nil else { return event }
     if event.type == .flagsChanged {
-      if event.modifierFlags.contains(.control) { waitsForControlRelease = true }
-      else if waitsForControlRelease { finish(commit: true) }
+      input.controlChanged(isDown: event.modifierFlags.contains(.control))
       return event
     }
     if event.type == .leftMouseDown {
-      if !activation.isVisible || event.window !== panel.window { finish(commit: false) }
+      if !input.isVisible || event.window !== panel.window { finish(commit: false) }
       return event
     }
     let eventWindow = event.window ?? NSApp.keyWindow
-    guard eventWindow === parent || (activation.isVisible && eventWindow === panel.window) else {
+    guard eventWindow === parent || (input.isVisible && eventWindow === panel.window) else {
       finish(commit: false); return event
     }
     switch event.keyCode {
@@ -170,7 +153,7 @@ final class RecentTabSwitcherCoordinator {
   }
 
   private func refreshPanel() {
-    guard activation.isVisible, let selection else { return }
+    guard input.isVisible, let selection else { return }
     let candidates = selection.candidateIDs.compactMap { id -> RecentTabCandidate? in
       guard workspace.tab(withID: id) != nil else { return nil }
       let ids = workspace.splitGroup(containing: id)?.tabIDs ?? [id]
@@ -189,12 +172,10 @@ final class RecentTabSwitcherCoordinator {
 
   private func finish(commit: Bool) {
     guard let selection else { return }
-    let wasVisible = activation.isVisible
-    pendingReveal?.cancel()
-    pendingReveal = nil
-    activation.end()
+    let wasVisible = input.isVisible
+    arrowKeys.end()
+    input.end()
     self.selection = nil
-    waitsForControlRelease = false
     if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
     eventMonitor = nil
     observations.removeAll()

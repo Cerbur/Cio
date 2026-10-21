@@ -99,7 +99,9 @@ public struct PersistedSpace: Codable, Equatable, Sendable {
   public init(from decoder: Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(UUID.self, forKey: .id)
-    name = try values.decode(String.self, forKey: .name)
+    // New session files contain tab state only; SpaceMetadataStore supplies
+    // personalization. Keep decoding embedded metadata for one-way migration.
+    name = try values.decodeIfPresent(String.self, forKey: .name) ?? "Space"
     selectedTabID = try values.decodeIfPresent(UUID.self, forKey: .selectedTabID)
     tabs = try values.decode([PersistedTab].self, forKey: .tabs)
     pinnedTabIDs = try values.decodeIfPresent([UUID].self, forKey: .pinnedTabIDs) ?? []
