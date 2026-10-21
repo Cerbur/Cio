@@ -51,6 +51,10 @@ struct SpaceTabPanel<Content: View, TabContent: View, RowBackground: View>: View
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+    // Resolve destinations once at the target size. Only the outer occupied
+    // height interpolates: feeding every height sample back into this reader
+    // rebuilds every retained tab and its glass/label hierarchy each frame.
+    .frame(height: layout.height, alignment: .top)
     .modifier(SidebarPanelHeightMotion(height: layout.height))
     // Focus/title updates cannot restart a layout flight. Member order is part
     // of the destination, so swapping panes also moves their retained controls.

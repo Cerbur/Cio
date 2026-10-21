@@ -299,6 +299,85 @@ final class SidebarTabDragOverviewTests: XCTestCase {
   }
 
   @MainActor
+  func testNormalModeReservationDoesNotChaseAnimatedNeighbours() throws {
+    let fixture = Fixture()
+    fixture.drag.isSpaceOverview = false
+    let next = UUID()
+    fixture.layout.temporaryTabIDs.append(next)
+    fixture.drag.register(next, in: .temporary(fixture.selected),
+      frame: CGRect(x: 10, y: 230, width: 180, height: 36), token: UUID())
+    fixture.move(to: CGPoint(x: 100, y: 225))
+    let target = try XCTUnwrap(fixture.drag.target)
+    XCTAssertEqual(target, .init(tier: .temporary(fixture.selected), before: next))
+    let gap = try XCTUnwrap(SpaceTabPanelRow.make(spaceID: fixture.selected,
+      pinnedIDs: [], temporaryIDs: [fixture.selectedTab, next], groups: [],
+      liftedID: fixture.selectedTab, drop: .init(tier: target.tier, before: target.before))
+      .first { $0.id == .gap(fixture.selected) })
+    fixture.drag.register(gap, frame: CGRect(x: 10, y: 210, width: 180, height: 36), token: UUID())
+    for y: CGFloat in [200, 205, 210, 205, 200] {
+      fixture.drag.register(next, in: .temporary(fixture.selected),
+        frame: CGRect(x: 10, y: y, width: 180, height: 36), token: UUID())
+      fixture.drag.listDidScroll()
+      fixture.move(to: CGPoint(x: 100, y: 225))
+      XCTAssertEqual(fixture.drag.target, target, "A stationary pointer must not reverse a row's flight")
+    }
+    fixture.move(to: CGPoint(x: 100, y: 280))
+    XCTAssertEqual(fixture.drag.target, .init(tier: .temporary(fixture.selected), before: nil),
+      "Leaving the reservation must still select another boundary immediately")
+  }
+
+  @MainActor
+  func testReservationKeepsTierWhenAnimatedDividerCrossesPointer() throws {
+    for overview in [false, true] {
+      let fixture = Fixture()
+      fixture.drag.isSpaceOverview = overview
+      fixture.move(to: CGPoint(x: 100, y: 225))
+      let target = try XCTUnwrap(fixture.drag.target)
+      XCTAssertEqual(target.tier, .temporary(fixture.selected))
+      let gap = try XCTUnwrap(SpaceTabPanelRow.make(spaceID: fixture.selected,
+        pinnedIDs: [], temporaryIDs: [fixture.selectedTab], groups: [],
+        liftedID: fixture.selectedTab, drop: .init(tier: target.tier, before: target.before))
+        .first { $0.id == .gap(fixture.selected) })
+      fixture.drag.register(gap, frame: CGRect(x: 10, y: 210, width: 180, height: 36), token: UUID())
+      let divider = SpaceTabPanelRow(id: .divider(fixture.selected), elements: [.divider], tier: nil)
+      fixture.drag.register(divider, frame: CGRect(x: 10, y: 235, width: 180, height: 20), token: UUID())
+      fixture.drag.listDidScroll()
+      fixture.move(to: CGPoint(x: 100, y: 225))
+      XCTAssertEqual(fixture.drag.target, target)
+      fixture.move(to: CGPoint(x: 100, y: 150))
+      XCTAssertEqual(fixture.drag.target?.tier, .space(fixture.selected),
+        "Leaving the gap must allow crossing the divider without waiting for animation")
+    }
+  }
+
+  @MainActor
+  func testTopPinReservationDoesNotChaseAnimatedTiles() throws {
+    let fixture = Fixture()
+    fixture.drag.isSpaceOverview = false
+    fixture.drag.topPinFrame = CGRect(x: 0, y: 0, width: 200, height: 80)
+    let next = UUID()
+    fixture.layout.globalTabIDs = [next]
+    fixture.drag.register(next, in: .global,
+      frame: CGRect(x: 10, y: 20, width: 80, height: 40), token: UUID())
+    fixture.move(to: CGPoint(x: 30, y: 35))
+    let target = try XCTUnwrap(fixture.drag.target)
+    XCTAssertEqual(target, .init(tier: .global, before: next))
+    let gap = try XCTUnwrap(SpaceTabPanelRow.makeTabs([next], spaceID: fixture.selected, tier: .global,
+      groups: [], liftedID: fixture.selectedTab, drop: .init(tier: target.tier, before: target.before))
+      .first { $0.id == .gap(fixture.selected) })
+    fixture.drag.register(gap, frame: CGRect(x: 10, y: 20, width: 80, height: 40), token: UUID())
+    for x: CGFloat in [-40, -20, -10, -40] {
+      fixture.drag.register(next, in: .global,
+        frame: CGRect(x: x, y: 20, width: 80, height: 40), token: UUID())
+      fixture.drag.listDidScroll()
+      fixture.move(to: CGPoint(x: 30, y: 35))
+      XCTAssertEqual(fixture.drag.target, target)
+    }
+    fixture.move(to: CGPoint(x: 130, y: 35))
+    XCTAssertEqual(fixture.drag.target, .init(tier: .global, before: nil))
+  }
+
+  @MainActor
   func testNormalModeKeepsSelectedSpaceViewportAndTierTargeting() {
     let fixture = Fixture()
     fixture.drag.isSpaceOverview = false

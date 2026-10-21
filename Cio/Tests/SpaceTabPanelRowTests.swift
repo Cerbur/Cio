@@ -1,10 +1,52 @@
 @testable import CioUI
 import AppKit
 import CioModel
+import Darwin
 import SwiftUI
 import XCTest
 
 final class SpaceTabPanelRowTests: XCTestCase {
+  @MainActor
+  func testReservationAnimationDoesNotRebuildEveryTabOnEveryHeightFrame() {
+    _ = NSApplication.shared
+    let space = UUID()
+    let tabs = (0..<48).map { _ in UUID() }
+    let drag = SidebarTabDrag()
+    var evaluations = 0
+    func panel(gap: Bool) -> some View {
+      let rows = SpaceTabPanelRow.make(spaceID: space, pinnedIDs: [], temporaryIDs: tabs,
+        groups: [], drop: gap ? .init(tier: .temporary(space), before: tabs[0]) : nil)
+      return SpaceTabPanel(rows: rows, drag: drag, containerFeedback: { _ in }) { _ in
+        Color.clear
+      } tabContent: { _, _ in
+        let _ = evaluations += 1
+        Text("A retained tab title").frame(maxWidth: .infinity, maxHeight: .infinity)
+      } rowBackground: { _ in
+        Color.clear
+      }
+      .frame(width: 200, height: 600, alignment: .topLeading)
+    }
+    let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 600),
+      styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let host = NSHostingView(rootView: panel(gap: false))
+    window.contentView = host
+    window.orderFrontRegardless()
+    host.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    evaluations = 0
+    let cpuStart = clock()
+    host.rootView = panel(gap: true)
+    host.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(AnimationValues.Sidebar.reorderDuration + 0.15))
+    let cpuMilliseconds = Double(clock() - cpuStart) / Double(CLOCKS_PER_SEC) * 1_000
+    print("Sidebar reservation: \(evaluations) tab content evaluations for \(tabs.count) tabs; CPU \(cpuMilliseconds) ms")
+    // One target update, with room for SwiftUI's initial sizing pass. Work
+    // must depend on the changed destination, not display-refresh count.
+    XCTAssertLessThanOrEqual(evaluations, tabs.count * 3)
+  }
+
   @MainActor
   func testEveryContainerAnimatesBetweenSlotsAndPinsAnimateInBothDirections() throws {
     _ = NSApplication.shared

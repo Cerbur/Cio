@@ -14,13 +14,17 @@ motion; ordered member IDs are part of the destination so pane swaps animate.
 Moving between Space Pin and Temporary also retains the same controls.
 Dimensions come from `BrowserShellLayout.swift`.
 
-`SidebarRowMotion` owns interpolated container frames and reveal progress in
+`SidebarRowMotion` uses a SwiftUI affine geometry effect for container position;
+only actual size changes and Pin reveal opacity use custom interpolation in
 the animation package. Each retained surface, decoration and member receives
 the same local transaction after the GeometryReader resolves its destination;
 native-control opacity rules cannot cancel container movement. Divider and
 New Tab use this exact path. `SidebarPanelHeightMotion` interpolates occupied
 height too, so Top Pin reservations continuously displace the Space header and
 viewport. Unchanged frame destinations do not restart motion.
+The inner GeometryReader stays at the target height while the outer occupied
+height animates, anchored at the top. Presentation-height samples must not flow
+back into destination calculation or rebuild every retained tab on every frame.
 
 Tab titles keep regular weight, including the stable selection. Idle titles use
 the full row width; only hovering a row reserves room for its retained close
@@ -55,6 +59,11 @@ Pane-to-card flights retain their separate page morph and lift treatment.
 supplies one draggable row; registered divider/New Tab/footer frames define tier
 drop regions. The original lifted member IDs are captured at drag start: a split
 commit cannot accidentally hide the existing members of the destination group.
+While the pointer remains inside its registered reservation, that reservation
+owns the drop boundary, in ordinary Space lists, overview columns and Top Pins.
+Animated neighbours and dividers cannot reverse its flight or change its tier;
+leaving the reservation resumes targeting immediately without a timed debounce.
+An old gap from another tier cannot retain the new target.
 Sidebar split entry captures the page reveal duration and curve, while ordinary
 reorders use the named Sidebar motion. Dropping on the browser retains the
 existing split-preview callbacks.

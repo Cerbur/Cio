@@ -1,36 +1,65 @@
 import SwiftUI
 
-/// Own presentation geometry resolved by the panel's GeometryReader. A layout
-/// pass may replace its target frames without carrying the parent's animation
-/// transaction into the reader's children. Animate the container itself, not
-/// the native controls, labels or split decorations inside it.
-struct SidebarRowMotion: ViewModifier, Animatable {
-  nonisolated var frame: CGRect
-  nonisolated var hiddenProgress: CGFloat
+/// Translate with an affine geometry effect. Ordinary reordering keeps
+/// the row's size and visibility unchanged, so it must not evaluate a custom
+/// five-scalar modifier and relayout native controls on every display frame.
+struct SidebarRowMotion: ViewModifier {
+  let frame: CGRect
+  var isHidden = false
 
-  init(frame: CGRect, isHidden: Bool = false) {
-    self.frame = frame
-    hiddenProgress = isHidden ? 1 : 0
+  func body(content: Content) -> some View {
+    content
+      .modifier(SidebarRowSizeMotion(size: frame.size))
+      .modifier(SidebarPinVisibilityMotion(hiddenProgress: isHidden ? 1 : 0))
+      .modifier(SidebarRowTranslationMotion(origin: frame.origin))
+  }
+}
+
+/// Update only the render transform, while reporting presentation geometry to
+/// the retained drag registrations. A plain offset reports its final geometry
+/// immediately; row targeting and native landing need the intermediate frames.
+private struct SidebarRowTranslationMotion: GeometryEffect {
+  nonisolated var origin: CGPoint
+
+  nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+    get { .init(origin.x, origin.y) }
+    set { origin = CGPoint(x: newValue.first, y: newValue.second) }
   }
 
-  nonisolated var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
-    AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat>> {
-    get {
-      .init(.init(frame.origin.x, frame.origin.y),
-            .init(.init(frame.width, frame.height), hiddenProgress))
-    }
+  nonisolated func effectValue(size: CGSize) -> ProjectionTransform {
+    ProjectionTransform(CGAffineTransform(translationX: origin.x, y: origin.y))
+  }
+}
+
+/// Only splitting/grouping/resizing changes layout dimensions. Preserve the
+/// native control and its text layout; never scale a rendered row or its glass.
+private struct SidebarRowSizeMotion: ViewModifier, Animatable {
+  nonisolated var size: CGSize
+
+  nonisolated var animatableData: AnimatablePair<CGFloat, CGFloat> {
+    get { .init(size.width, size.height) }
     set {
-      frame = CGRect(x: newValue.first.first, y: newValue.first.second,
-                     width: newValue.second.first.first, height: newValue.second.first.second)
-      hiddenProgress = newValue.second.second
+      size = CGSize(width: newValue.first, height: newValue.second)
     }
   }
 
   func body(content: Content) -> some View {
-    content
-      .frame(width: max(0, frame.width), height: max(0, frame.height))
-      .opacity(AnimationValues.Sidebar.spacePinOpacity(hiddenProgress: hiddenProgress))
-      .offset(x: frame.minX, y: frame.minY)
+    content.frame(width: max(0, size.width), height: max(0, size.height))
+  }
+}
+
+/// The nonlinear fade is active only for Pin reveal/collapse, independently of
+/// ordinary position changes. Keep the late fade that preserves upward travel.
+private struct SidebarPinVisibilityMotion: ViewModifier, Animatable {
+  nonisolated var hiddenProgress: CGFloat
+
+  nonisolated var animatableData: CGFloat {
+    get { hiddenProgress }
+    set { hiddenProgress = newValue }
+  }
+
+  func body(content: Content) -> some View {
+    content.opacity(AnimationValues.Sidebar.spacePinOpacity(hiddenProgress: hiddenProgress))
   }
 }
 
@@ -46,7 +75,7 @@ struct SidebarPanelHeightMotion: ViewModifier, Animatable {
   }
 
   func body(content: Content) -> some View {
-    content.frame(height: max(0, height))
+    content.frame(height: max(0, height), alignment: .top)
   }
 }
 

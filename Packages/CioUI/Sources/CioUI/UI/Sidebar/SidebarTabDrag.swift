@@ -963,6 +963,9 @@ public final class SidebarTabDrag {
       || layout.globalPinnedTabCount + requiredPins <= WorkspaceCollection.globalPinnedTabLimit else {
       return nil
     }
+    if let target, target.tier == .global,
+       let gap = panelRows[.gap(layout.spaceID)], gap.row.tier == target.tier,
+       gap.frame.contains(pointer) { return target }
     let tiles = ids.filter { $0 != id && !paneSourceTabIDs.contains($0) }.compactMap { tileID in
       frame(of: tileID, in: .global).map { (id: tileID, frame: $0) }
     }
@@ -980,6 +983,14 @@ public final class SidebarTabDrag {
     guard let spaceID = isSpaceOverview ? hoveredSpaceID : layout.spaceID else { return nil }
     let visible = visibleSpaceFrame(in: spaceID)
     guard visible.height > 0 else { return nil }
+    // A reservation owns its boundary until the pointer leaves it. During
+    // reflow both neighbours and the pin divider can cross a stationary
+    // pointer; using those presentation frames would reverse the flight.
+    // Check membership as well: the retained gap can still report its old
+    // tier for a frame after moving to another tier or the Top Pin grid.
+    if let target, target.tier == .space(spaceID) || target.tier == .temporary(spaceID),
+       let gap = panelRows[.gap(spaceID)], gap.row.tier == target.tier,
+       visible.contains(pointer), gap.frame.contains(pointer) { return target }
     let y = min(max(pointer.y, visible.minY), visible.maxY)
     let pinTier = WorkspaceCollection.TabTier.space(spaceID)
     let inHeader = isSpaceOverview && spaceHeaders[spaceID]?.frame.contains(pointer) == true
@@ -988,8 +999,6 @@ public final class SidebarTabDrag {
       : tierFrames[pinTier]?.maxY
     let inPins = inHeader || (pinBoundary.map { y <= $0 } ?? false)
     let tier = inPins ? pinTier : .temporary(spaceID)
-    if isSpaceOverview, let target, target.tier == tier,
-       panelRows[.gap(spaceID)]?.frame.contains(pointer) == true { return target }
     // The source group remains visible, but dropping onto one of its members
     // is rejected by the workspace. Reserve the next valid list boundary.
     let excluded = isPaneDrag ? paneSourceTabIDs : liftedSourceTabIDs
