@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct NavigationRail: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject var runtime: BrowserUIContext
 
   @ObservedObject private var chrome = BrowserChromePreferences.shared
@@ -32,6 +33,7 @@ struct NavigationRail: View {
     symbol: String,
     panel: BrowserInternalPanel?
   ) -> some View {
+    let component: ThemeComponent = panel == .history ? .railHistory : panel == .downloads ? .railDownloads : .railSpace
     let isSelected = runtime.presentedInternalPanel == panel
     return Button {
       switch panel {
@@ -49,12 +51,14 @@ struct NavigationRail: View {
     .foregroundStyle(isSelected ? Color.primary : Color.secondary)
     .background {
       if isSelected {
-        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+        Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape, component: component)
       }
     }
     .overlay {
       if isSelected {
-        SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(0.5), lineWidth: 1)
+        SidebarTabAppearance.glassShape.strokeBorder(
+          (themes.active.customAccent(for: component) == nil ? Color.white : themes.active.accentColor(for: component))
+            .opacity(themes.active.component(component).highlightOpacity), lineWidth: 1)
       }
     }
     .help(title)

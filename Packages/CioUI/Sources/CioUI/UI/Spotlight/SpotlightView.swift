@@ -16,6 +16,7 @@ final class SpotlightPresentationState: ObservableObject {
 }
 
 struct SpotlightView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   private typealias Values = AnimationValues.Spotlight
   @ObservedObject var presentation: SpotlightPresentationState
   @ObservedObject var autocomplete: SpotlightAutocompleteService
@@ -97,7 +98,8 @@ struct SpotlightView: View {
                 .fill(.thinMaterial).opacity(0.1)
             }
             // Keep this backdrop fixed so its blur stays stable while suggestions grow.
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: expandedCornerRadius, style: .continuous))
+            .glassEffect(themes.active.component(.spotlight).glass(), in: RoundedRectangle(cornerRadius: expandedCornerRadius, style: .continuous))
+            .modifier(ComponentGlassAppearance(theme: themes.active.component(.spotlight)))
             // Flatten the native glass before masking; otherwise its backdrop
             // can still draw outside the capsule on top of the browser page.
             .compositingGroup()
@@ -119,7 +121,8 @@ struct SpotlightView: View {
           // The native refractive edge follows the same spring as the visible outline.
           Color.clear
             .frame(width: glassWidth, height: glassHeight)
-            .glassEffect(.clear, in: panelShape)
+            .glassEffect(themes.active.component(.spotlightEdge).glass(), in: panelShape)
+            .modifier(ComponentGlassAppearance(theme: themes.active.component(.spotlightEdge)))
             .offset(y: glassOffset)
             .opacity(glassOpacity)
             .allowsHitTesting(false)
@@ -245,7 +248,7 @@ struct SpotlightView: View {
                   .background {
                     if index == selectedIndex {
                       RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous)
-                        .fill(Color.accentColor.opacity(0.24))
+                        .fill(themes.active.highlight(for: .spotlightSuggestions))
                     }
                   }
                   .contentShape(RoundedRectangle(cornerRadius: suggestionCornerRadius, style: .continuous))

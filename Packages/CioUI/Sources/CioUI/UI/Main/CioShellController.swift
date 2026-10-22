@@ -145,6 +145,7 @@ final class CioShellController: NSViewController {
   private var spotlightRemovalTask: Task<Void, Never>?
   init(runtime: BrowserUIContext) {
     self.runtime = runtime
+    BrowserThemePreferences.shared.follow(runtime.workspaceStore)
     mainViewController = BrowserMainViewController(
       runtime: runtime, sidebarChromeLayout: sidebarChromeLayout)
     railController = NSHostingController(rootView: NavigationRail(runtime: runtime))

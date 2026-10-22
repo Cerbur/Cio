@@ -47,6 +47,7 @@ enum AddressCapsuleLayout {
 }
 
 struct ToolbarAddressFieldView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedEngine var workspace: any BrowserWorkspaceProtocol
   /// Nil follows workspace selection; a UUID keeps every address action bound
@@ -80,7 +81,18 @@ struct ToolbarAddressFieldView: View {
   }
 
   private var focusRingOpacity: Double {
-    interaction.isFocused ? 1 : isActiveSplitPane ? 0.5 : 0
+    interaction.isFocused ? themes.active.component(.addressFocus).highlightOpacity
+      : isActiveSplitPane ? themes.active.component(.splitStable).highlightOpacity : 0
+  }
+
+  private func themedFocusRing(cornerRadius: CGFloat) -> some View {
+    NativeAddressFocusRing(cornerRadius: cornerRadius)
+      .overlay {
+        if let accent = themes.active.customAccent(for: interaction.isFocused ? .addressFocus : .splitStable) {
+          accent.color.blendMode(.sourceAtop)
+        }
+      }
+      .compositingGroup()
   }
 
   var body: some View {
@@ -122,7 +134,7 @@ struct ToolbarAddressFieldView: View {
         .shadow(color: .black.opacity(rowCount > 0 || siteInformation.isPresented ? 0.18 : 0),
                 radius: 16, y: 8)
         .overlay {
-          NativeAddressFocusRing(cornerRadius: radius)
+          themedFocusRing(cornerRadius: radius)
             .padding(-NativeAddressFocusRing.inset)
             // Keep the native ring mounted so losing focus can finish fading
             // out. Scope the animation to opacity, preserving capsule geometry.
@@ -249,7 +261,7 @@ struct ToolbarAddressFieldView: View {
       .frame(maxWidth: .infinity, minHeight: AddressCapsuleLayout.rowHeight, alignment: .leading)
       .background {
         if index == autocomplete.selectedIndex {
-          RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.accentColor.opacity(0.24))
+          RoundedRectangle(cornerRadius: 12, style: .continuous).fill(themes.active.highlight(for: .addressSuggestions))
         }
       }
       .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

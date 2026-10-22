@@ -1,0 +1,17 @@
+Theme preview photographs
+
+PreviewForest.jpg
+Photographer: CHUTTERSNAP
+Photo: Aerial photography of green forest
+Source: https://unsplash.com/photos/aerial-photography-of-green-forest-90fArTCswjQ
+Image: https://images.unsplash.com/photo-1525177356521-6056d3866e61
+
+PreviewValley.jpg
+Photographer: Paul Pastourmatzis
+Photo: Mountain valley in the autumn, Vipiteno, Italy
+Source: https://unsplash.com/photos/aerial-landscape-photography-of-green-trees-filled-mountains-under-blue-calm-sky-y3goGHCPylY
+Image: https://images.unsplash.com/photo-1478466406421-ff7174ac07f5
+
+Both photographs are provided under the Unsplash License.
+License: https://unsplash.com/license
+Resized JPEGs are bundled locally for the offline appearance preview.

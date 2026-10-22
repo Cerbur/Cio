@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import Combine
 
 /// Window-coordinate events let the Main View bridge a pane to the sidebar's
 /// existing glass drag without reparenting Chromium or committing on lift.
@@ -16,6 +17,7 @@ public enum BrowserSplitPaneDragEvent: Sendable {
 final class BrowserSplitPaneControl: NSView {
   private let handle = SplitPaneHandleButton()
   private let capsule = NSGlassEffectView()
+  private var themeObservation: AnyCancellable?
   private let actionContent = SplitPaneActionContentView()
   nonisolated(unsafe) private var dismissalMonitor: Any?
   private var expanded = false
@@ -90,7 +92,9 @@ final class BrowserSplitPaneControl: NSView {
     handle.onMove = { [weak self] point in _ = self?.onDrag?(.move(point)) }
     handle.onEnd = { [weak self] cancelled in _ = self?.onDrag?(cancelled ? .cancel : .end) }
     addSubview(handle)
-    capsule.style = .regular
+    applyTheme()
+    themeObservation = BrowserThemePreferences.shared.objectWillChange.receive(on: RunLoop.main)
+      .sink { [weak self] _ in MainActor.assumeIsolated { self?.applyTheme() } }
     capsule.cornerRadius = BrowserLayout.fittedCornerRadius(
       BrowserLayout.splitPaneCapsuleCornerRadius, in: BrowserLayout.splitPaneCapsuleSize)
     let content = actionContent
@@ -230,6 +234,14 @@ final class BrowserSplitPaneControl: NSView {
       self.handle.isHidden = isExpanding
       self.capsule.isHidden = !isExpanding
     }
+  }
+
+  private func applyTheme() {
+    let theme = BrowserThemePreferences.shared.active.component(.splitActions)
+    capsule.appearance = theme.appearance.native
+    capsule.style = theme.glassStyle == .regular ? .regular : .clear
+    capsule.tintColor = theme.glassTintOpacity > 0
+      ? NSColor(theme.glassTint.color).withAlphaComponent(theme.glassTintOpacity) : nil
   }
 
   private func handleFrame(in size: CGSize) -> CGRect {

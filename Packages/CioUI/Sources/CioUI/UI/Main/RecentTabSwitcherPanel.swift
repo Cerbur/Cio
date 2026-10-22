@@ -73,6 +73,7 @@ private final class RecentTabsPresentation: ObservableObject {
 }
 
 private struct RecentTabsView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject var presentation: RecentTabsPresentation
 
   var body: some View {
@@ -128,7 +129,7 @@ private struct RecentTabsView: View {
           }
           .padding(RecentTabSwitcherLayout.cardInset)
           .frame(width: layout.cardWidth, height: layout.cardHeight)
-          .background(candidate.id == presentation.selectedID ? Color.accentColor.opacity(0.22) : .clear,
+          .background(candidate.id == presentation.selectedID ? themes.active.highlight(for: .recentSelection) : .clear,
                       in: RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius))
           .contentShape(RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius))
         }
@@ -163,6 +164,7 @@ private struct RecentTabsView: View {
 }
 
 private struct RecentTabsGlass: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   let isVisible: Bool
   @Namespace private var glass
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -171,7 +173,8 @@ private struct RecentTabsGlass: View {
     GlassEffectContainer(spacing: 0) {
       if isVisible {
         Color.clear
-          .glassEffect(.regular, in: RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius))
+          .glassEffect(themes.active.component(.recentTabs).glass(), in: RoundedRectangle(cornerRadius: BrowserLayout.contentCornerRadius))
+          .modifier(ComponentGlassAppearance(theme: themes.active.component(.recentTabs)))
           .glassEffectID("recent-tabs", in: glass)
           .glassEffectTransition(reduceMotion ? .identity : .materialize)
       }

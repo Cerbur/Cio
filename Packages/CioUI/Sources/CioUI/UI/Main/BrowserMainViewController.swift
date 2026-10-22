@@ -657,6 +657,7 @@ final class BrowserMainViewController: NSViewController {
 
 /// Keeps the Chromium surface mounted across library section changes.
 private struct BrowserShellContentView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject var runtime: BrowserUIContext
   @ObservedEngine var workspace: any BrowserWorkspaceProtocol
 
@@ -669,11 +670,12 @@ private struct BrowserShellContentView: View {
             // Join the sidebar with a straight leading edge, like Chromium.
             // Main View still clips the outer corners when the sidebar closes.
             Color.clear
-              .glassEffect(.regular, in: UnevenRoundedRectangle(
+              .glassEffect(themes.active.component(.emptyPage).glass(), in: UnevenRoundedRectangle(
                 topLeadingRadius: 0, bottomLeadingRadius: 0,
                 bottomTrailingRadius: BrowserLayout.contentCornerRadius,
                 topTrailingRadius: BrowserLayout.contentCornerRadius,
                 style: .continuous))
+              .modifier(ComponentGlassAppearance(theme: themes.active.component(.emptyPage)))
               .allowsHitTesting(false)
               .accessibilityHidden(true)
           }

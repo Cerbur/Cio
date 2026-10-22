@@ -43,12 +43,16 @@ extension EnvironmentValues {
 /// Native glass for stable tabs/groups, floating cards and the New Tab action.
 /// Top Pins retain their idle fill; split members have no nested backgrounds.
 struct SidebarTabSurface: ViewModifier {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
+  @Environment(\.browserSpaceTheme) private var spaceTheme
+  private var theme: SpaceTheme { spaceTheme ?? themes.active }
+  var component: ThemeComponent = .tab
+  private var componentID: ThemeComponent { presentation.isFloating ? .floatingTab : component }
+  private var appearance: ComponentTheme { theme.component(componentID) }
   var isStable = false
   var isHovered = false
-  var idleFill: Double = 0
+  var allowsIdleFill = true
   var usesScrollEdge = true
-  var stableBorderOpacity: Double = 0.35
-  var hoverBorderOpacity: Double = 0
   @Environment(\.sidebarTabPresentation) private var presentation
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -63,7 +67,8 @@ struct SidebarTabSurface: ViewModifier {
         // separate background effect in GlassEffectContainer samples the
         // detached label as backdrop, blurring it beneath the glass surface.
         // The native effect also owns the edge; another stroke doubles it.
-        .glassEffect(.regular, in: SidebarTabAppearance.glassShape)
+        .glassEffect(appearance.glass(), in: SidebarTabAppearance.glassShape)
+        .modifier(ComponentGlassAppearance(theme: appearance))
         .glassEffectTransition(reduceMotion || presentation.preservesGlassContinuity ? .identity : .materialize)
         .scaleEffect(presentation.preservesLiftAppearance
                      ? (presentation.placement == .topPin && isStable ? AnimationValues.Sidebar.selectedTopPinScale : 1)
@@ -81,16 +86,18 @@ struct SidebarTabSurface: ViewModifier {
       content
         .background {
           if showsGlass {
-            Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape)
+            Color.clear.browserChromeGlassSurface(in: SidebarTabAppearance.glassShape, component: componentID)
               .modifier(SidebarScrollEdgeSurface(isEnabled: usesScrollEdge))
-          } else if isHovered || idleFill > 0 {
-            SidebarTabAppearance.glassShape.fill(.primary.opacity(isHovered ? 0.06 : idleFill))
+          } else if isHovered || (allowsIdleFill && appearance.idleOpacity > 0) {
+            SidebarTabAppearance.glassShape.fill(.primary.opacity(isHovered ? appearance.hoverOpacity : appearance.idleOpacity))
               .modifier(SidebarScrollEdge(isEnabled: usesScrollEdge))
           }
         }
         .overlay {
-          if showsGlass || (isHovered && hoverBorderOpacity > 0) {
-            SidebarTabAppearance.glassShape.strokeBorder(.white.opacity(showsGlass ? stableBorderOpacity : hoverBorderOpacity), lineWidth: 1)
+          if showsGlass || (isHovered && appearance.hoverBorderOpacity > 0) {
+            SidebarTabAppearance.glassShape.strokeBorder(
+              (isStable && theme.customAccent(for: componentID) != nil ? theme.accentColor(for: componentID) : .white)
+                .opacity(showsGlass ? appearance.highlightOpacity : appearance.hoverBorderOpacity), lineWidth: 1)
               .modifier(SidebarScrollEdge(isEnabled: usesScrollEdge))
           }
         }

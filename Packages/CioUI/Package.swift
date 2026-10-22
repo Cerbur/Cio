@@ -9,7 +9,8 @@ let package = Package(
   targets: [
     .target(name: "CioUI", dependencies: ["CioModel", "CioEngine"],
       exclude: ["Animation/README.md", "Animation/GLASS_COMPONENT_MOTION.md", "UI/Sidebar/README.md"],
-      resources: [.process("UI/Sidebar/SidebarScrollEdge.metal")]),
+      resources: [.process("UI/Sidebar/SidebarScrollEdge.metal"),
+                  .process("UI/Settings/ThemePreviewMedia")]),
   ],
   swiftLanguageModes: [.v6]
 )

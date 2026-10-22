@@ -45,6 +45,7 @@ struct CioApp: App {
     // AppKit dispatches even while Chromium owns the browser's first responder.
     Settings {
       BrowserSettingsView(
+        workspace: runtime.workspaceStore,
         readPasswordSettings: {
           let settings = ChromiumProcessHost.passwordSettings()
           return ((settings["provider"] as? NSNumber)?.intValue ?? 1,

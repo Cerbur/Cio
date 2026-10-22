@@ -210,6 +210,7 @@ private struct SidebarSurfaceDrag: ViewModifier {
 }
 
 struct TabSidebarView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedEngine var workspace: any BrowserWorkspaceProtocol
   @EnvironmentObject private var chromeLayout: SidebarChromeLayout
   @State private var pageSwipeState = SpacePageSwipeState()
@@ -264,7 +265,7 @@ struct TabSidebarView: View {
       .contentShape(Rectangle())
       .onHover { isSidebarHovered = $0 }
       .background {
-        SidebarGlass()
+        SidebarGlass(theme: themes.theme(for: workspace.selectedSpaceID))
       }
       // The local scroll monitor receives trackpad swipes before Spotlight's
       // shell overlay handles pointer clicks.
@@ -447,6 +448,10 @@ struct TabSidebarView: View {
       .padding(.bottom, BrowserLayout.sidebarSpaceHeaderSpacing)
       .sidebarDragGeometry(.header(space.id, isSelected: space.id == workspace.selectedSpaceID), drag: tabDrag)
     }
+    .background {
+      if isOverview { SidebarGlass(theme: themes.theme(for: space.id)) }
+    }
+    .environment(\.browserSpaceTheme, themes.theme(for: space.id))
     .coordinateSpace(name: SidebarScrollEdge.coordinateSpace)
     .sidebarDragGeometry(.viewport(space.id), drag: tabDrag)
     .modifier(SidebarTabDragAutoscroll(drag: tabDrag, isActive: isOverview
@@ -516,7 +521,7 @@ struct TabSidebarView: View {
     .buttonStyle(.plain)
     .accessibilityLabel("New Tab")
     .foregroundStyle(spotlightIsActive ? Color.primary : Color.secondary)
-    .modifier(SidebarTabSurface(isStable: spotlightIsActive, isHovered: newTabIsHovered))
+    .modifier(SidebarTabSurface(component: .newTab, isStable: spotlightIsActive, isHovered: newTabIsHovered))
     .onHover { isHovered in
       if isHovered {
         hoveredNewTabSpaceID = space.id
@@ -634,9 +639,9 @@ struct TabSidebarView: View {
       let selected = group.contains(workspace.selectedTabID) && !workspace.isSpotlightPresented
       let isTopPin = row.tier == .global
       Color.clear
-        .modifier(SidebarTabSurface(isStable: selected,
+        .modifier(SidebarTabSurface(component: isTopPin ? .topPin : .splitGroup, isStable: selected,
           isHovered: row.tabIDs.contains { hoveredTabIDs.contains($0) } && tabDrag.tabID == nil,
-          idleFill: isTopPin ? 0.04 : 0, usesScrollEdge: !isTopPin))
+          usesScrollEdge: !isTopPin))
         .scaleEffect(isTopPin && selected ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     }
   }
@@ -1065,11 +1070,9 @@ private struct SidebarTabRow: View {
       .accessibilityLabel("Close \(tab.displayTitle)")
     }
     .modifier(SidebarScrollEdge(isEnabled: !isTopPin))
-    .modifier(SidebarTabSurface(isStable: selected && group == nil,
+    .modifier(SidebarTabSurface(component: isTopPin ? .topPin : .tab, isStable: selected && group == nil,
       isHovered: group == nil && interaction.isHovered && !isTabDragActive,
-      idleFill: group == nil && isTopPin ? 0.04 : 0, usesScrollEdge: !isTopPin,
-      stableBorderOpacity: isTopPin ? 0.5 : 0.35,
-      hoverBorderOpacity: isTopPin ? 0.25 : 0))
+      allowsIdleFill: group == nil, usesScrollEdge: !isTopPin))
     .scaleEffect(isTopPin && selected && group == nil ? AnimationValues.Sidebar.selectedTopPinScale : 1)
     .onHover { interaction.isHovered = $0 }
     .onChange(of: showsCloseButton) { _, shows in

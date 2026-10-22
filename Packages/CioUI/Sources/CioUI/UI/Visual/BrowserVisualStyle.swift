@@ -13,31 +13,83 @@ import SwiftUI
 
 /// The window-wide, highly translucent glass underneath the shell.
 struct GlassBackdrop: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   var body: some View {
-    WindowBackdropEffect()
-      .allowsHitTesting(false)
+    WindowBackdropEffect(theme: themes.shell).allowsHitTesting(false)
   }
 }
 
-/// A separate, medium-translucency glass surface for the Space sidebar.
+/// Mixed sidebars share the shell's Clear glass instead of stacking a fixed
+/// regular material on top of the clarity slider.
 struct SidebarGlass: View {
+  var theme: SpaceTheme
+  var previewShell: ShellTheme? = nil
+  @ObservedObject private var themes = BrowserThemePreferences.shared
+  @Environment(\.colorScheme) private var colorScheme
+
+  private var localBackdrop: ShellTheme? {
+    let backdrop = theme.component(.sidebar).backdrop
+    return backdrop.colorMix == nil ? nil : backdrop
+  }
+
   var body: some View {
-    Rectangle()
-      .fill(.regularMaterial)
-      .allowsHitTesting(false)
+    Group {
+      if let previewShell {
+        preview(shell: previewShell)
+      } else if let localBackdrop {
+        SidebarBackdropRegion(theme: localBackdrop)
+      } else if themes.shell.colorMix != nil {
+        // Inherit the one shared window backdrop, including its paint.
+        Color.clear
+      } else {
+        legacySurface
+      }
+    }
+    .environment(\.colorScheme, theme.sidebarAppearance.scheme ?? colorScheme)
+    .allowsHitTesting(false)
+  }
+
+  @ViewBuilder private func preview(shell: ShellTheme) -> some View {
+    if let local = localBackdrop {
+      WindowBackdropEffect(theme: withinWindow(local))
+    } else {
+      ZStack {
+        WindowBackdropEffect(theme: shell)
+        if shell.colorMix == nil { legacySurface }
+      }
+    }
+  }
+
+  private func withinWindow(_ theme: ShellTheme) -> ShellTheme {
+    var preview = theme
+    preview.blending = .withinWindow
+    return preview
+  }
+
+  private var legacySurface: some View {
+    ZStack {
+      switch theme.sidebarGlassSurface {
+      case .frosted, .colorMix:
+        Rectangle().fill(theme.sidebarMaterial.material).opacity(theme.sidebarOpacity)
+      case .liquid:
+        Color.clear.glassEffect(theme.component(.sidebar).glass(), in: Rectangle())
+          .modifier(ComponentGlassAppearance(theme: theme.component(.sidebar)))
+          .opacity(theme.sidebarOpacity)
+      case .transparent:
+        Color.clear
+      }
+      theme.sidebarColor.color.opacity(theme.sidebarColorOpacity)
+    }
   }
 }
 
-private struct WindowBackdropEffect: NSViewRepresentable {
-  func makeNSView(context: Context) -> NSVisualEffectView {
-    let view = NSVisualEffectView()
-    view.material = .underWindowBackground
-    view.blendingMode = .behindWindow
-    view.state = .active
-    return view
+struct WindowBackdropEffect: NSViewRepresentable {
+  let theme: ShellTheme
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+  func makeNSView(context: Context) -> ThemeBackdropView { ThemeBackdropView() }
+  func updateNSView(_ view: ThemeBackdropView, context: Context) {
+    view.apply(theme, reduceTransparency: reduceTransparency)
   }
-
-  func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 /// Ephemeral presentation state shared by the hover and focus surfaces. It
@@ -51,9 +103,9 @@ final class BrowserInteractionState: ObservableObject {
 extension View {
   /// Applies a single system glass surface to the address control.
   @ViewBuilder
-  func browserChromeGlassSurface<S: Shape>(in shape: S) -> some View {
+  func browserChromeGlassSurface<S: Shape>(in shape: S, component: ThemeComponent = .tab) -> some View {
     if #available(macOS 26.0, *) {
-      glassEffect(.regular, in: shape)
+      modifier(ThemedGlassSurface(shape: shape, component: component))
     } else {
       background(.regularMaterial, in: shape)
     }
@@ -66,8 +118,19 @@ extension View {
     let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
     background {
       Color.clear
-        .browserChromeGlassSurface(in: shape)
+        .browserChromeGlassSurface(in: shape, component: .addressBar)
         .allowsHitTesting(false)
     }
+  }
+}
+
+private struct ThemedGlassSurface<S: Shape>: ViewModifier {
+  @Environment(\.browserSpaceTheme) private var spaceTheme
+  let shape: S
+  let component: ThemeComponent
+  @ObservedObject private var themes = BrowserThemePreferences.shared
+  func body(content: Content) -> some View {
+    content.glassEffect((spaceTheme ?? themes.active).component(component).glass(), in: shape)
+      .modifier(ComponentGlassAppearance(theme: (spaceTheme ?? themes.active).component(component)))
   }
 }

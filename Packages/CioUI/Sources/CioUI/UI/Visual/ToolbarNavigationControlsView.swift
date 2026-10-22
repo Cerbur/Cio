@@ -15,6 +15,7 @@ final class ToolbarNavigationState: ObservableObject {
 /// One material owns the complete capsule. The stable AppKit container owns
 /// its two independent native buttons and keeps them in one responder chain.
 struct ToolbarNavigationControlsView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject private var chrome = BrowserChromePreferences.shared
   @ObservedObject var state: ToolbarNavigationState
   @ObservedObject var presentation: ToolbarPresentationState
@@ -26,10 +27,13 @@ struct ToolbarNavigationControlsView: View {
   var body: some View {
     GlassEffectContainer(spacing: 0) {
       ToolbarNavigationButtons(canGoBack: state.canGoBack, canGoForward: state.canGoForward,
-                               onBack: onBack, onForward: onForward)
+                               onBack: onBack, onForward: onForward,
+                               backTint: themes.active.customAccent(for: .backButton),
+                               forwardTint: themes.active.customAccent(for: .forwardButton))
         .frame(width: 2 * BrowserLayout.chromeControlSize, height: BrowserLayout.chromeControlSize)
         .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
-        .glassEffect(presentation.isVisible ? .regular.interactive() : .identity, in: Capsule())
+        .glassEffect(presentation.isVisible ? themes.active.component(.navigation).glass(interactive: true) : .identity, in: Capsule())
+        .modifier(ComponentGlassAppearance(theme: themes.active.component(.navigation)))
         .glassEffectID("navigation", in: glassNamespace)
         .glassEffectTransition(reduceMotion ? .identity : .materialize)
     }
@@ -44,10 +48,14 @@ private struct ToolbarNavigationButtons: NSViewRepresentable {
   let canGoForward: Bool
   let onBack: () -> Void
   let onForward: () -> Void
+  let backTint: ThemeColor?
+  let forwardTint: ThemeColor?
 
   func makeNSView(context: Context) -> NavigationButtonsView { NavigationButtonsView() }
 
   func updateNSView(_ view: NavigationButtonsView, context: Context) {
+    view.back.contentTintColor = backTint.map { NSColor($0.color) }
+    view.forward.contentTintColor = forwardTint.map { NSColor($0.color) }
     view.back.isEnabled = canGoBack
     view.forward.isEnabled = canGoForward
     view.onBack = onBack

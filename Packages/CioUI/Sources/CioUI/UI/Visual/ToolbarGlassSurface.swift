@@ -55,8 +55,10 @@ final class ToolbarPresentationState: ObservableObject {
 /// Only the glass enters and leaves the hierarchy. Keeping its container alive
 /// lets SwiftUI finish the native materialize transition in both directions.
 struct ToolbarGlassSurface: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject var presentation: ToolbarPresentationState
   let cornerRadius: CGFloat
+  var component: ThemeComponent = .addressBar
   var interactive = false
   @Namespace private var glassNamespace
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -65,8 +67,9 @@ struct ToolbarGlassSurface: View {
     GlassEffectContainer(spacing: 0) {
       if presentation.isVisible {
         Color.clear
-          .glassEffect(.regular.interactive(interactive),
+          .glassEffect(themes.active.component(component).glass(interactive: interactive),
                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+          .modifier(ComponentGlassAppearance(theme: themes.active.component(component)))
           .glassEffectID("surface", in: glassNamespace)
           .glassEffectTransition(reduceMotion ? .identity : .materialize)
       }
@@ -80,6 +83,7 @@ struct ToolbarGlassSurface: View {
 /// Keep native AppKit buttons mounted over one SwiftUI-owned native glass
 /// surface, so all three toolbar components can use the same materialize API.
 struct ToolbarNativeControlsView: View {
+  @ObservedObject private var themes = BrowserThemePreferences.shared
   @ObservedObject private var chrome = BrowserChromePreferences.shared
   let content: NSView
   @ObservedObject var presentation: ToolbarPresentationState
@@ -88,13 +92,13 @@ struct ToolbarNativeControlsView: View {
   }
 
   var body: some View {
-    ToolbarNativeControl(view: content)
+    ToolbarNativeControl(view: content, tint: themes.active.customAccent(for: .sidebarButton))
       .frame(width: size.width, height: size.height)
       .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
       .background {
         // Interaction belongs to the native glass buttons above this surface.
         // A hit-test-disabled SwiftUI background cannot own their press state.
-        ToolbarGlassSurface(presentation: presentation, cornerRadius: size.height / 2)
+        ToolbarGlassSurface(presentation: presentation, cornerRadius: size.height / 2, component: .sidebarButton)
       }
       .modifier(ToolbarComponentVisibility(presentation: presentation))
   }
@@ -102,7 +106,10 @@ struct ToolbarNativeControlsView: View {
 
 private struct ToolbarNativeControl: NSViewRepresentable {
   let view: NSView
+  let tint: ThemeColor?
 
   func makeNSView(context: Context) -> NSView { view }
-  func updateNSView(_ view: NSView, context: Context) {}
+  func updateNSView(_ view: NSView, context: Context) {
+    (view as? NSButton)?.contentTintColor = tint.map { NSColor($0.color) }
+  }
 }

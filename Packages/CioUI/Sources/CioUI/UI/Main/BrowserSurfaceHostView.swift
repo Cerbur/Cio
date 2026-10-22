@@ -1,6 +1,7 @@
 import CioEngine
 import CioModel
 import AppKit
+import Combine
 
 /// Stable page registry and outer layout container. Each tab keeps one page UI
 /// instance; this host only chooses its placement, crop and toolbar visibility.
@@ -843,7 +844,8 @@ public final class BrowserSurfaceHostView: NSView {
 /// radius even where its outer edges touch the shell clip. Rounding only the
 /// divider-facing corners leaves a square border for Main View to cut off.
 private final class BrowserSplitPreviewView: NSView {
-  private let material = NSVisualEffectView()
+  private let backdropView = ThemeBackdropView()
+  private var themeObservation: AnyCancellable?
   public override var isFlipped: Bool { true }
 
   override init(frame: NSRect) {
@@ -856,23 +858,31 @@ private final class BrowserSplitPreviewView: NSView {
                             .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
     layer?.masksToBounds = true
     layer?.borderWidth = 1.5
-    layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
-    material.material = .hudWindow
-    material.blendingMode = .withinWindow
-    material.state = .active
-    material.autoresizingMask = []
-    addSubview(material)
+    applyTheme()
+    themeObservation = BrowserThemePreferences.shared.objectWillChange.receive(on: RunLoop.main)
+      .sink { [weak self] _ in MainActor.assumeIsolated { self?.applyTheme() } }
+    backdropView.autoresizingMask = []
+    addSubview(backdropView)
+  }
+
+  private func applyTheme() {
+    let space = BrowserThemePreferences.shared.active
+    let component = space.component(.splitPreview)
+    let backdrop = component.backdrop
+    layer?.borderColor = NSColor(space.accentColor(for: .splitPreview))
+      .withAlphaComponent(component.highlightOpacity).cgColor
+    backdropView.apply(backdrop, reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
   }
 
   func prepareMaterial(size: CGSize) {
     // Retain the largest region width so shrinking/cancelling never rebuilds
     // the backdrop. Only a larger target or a window-height change resizes it.
-    let frame = CGRect(origin: .zero, size: CGSize(width: max(material.frame.width, size.width), height: size.height))
-    if material.frame != frame { material.frame = frame }
+    let frame = CGRect(origin: .zero, size: CGSize(width: max(backdropView.frame.width, size.width), height: size.height))
+    if backdropView.frame != frame { backdropView.frame = frame }
   }
 
   func setMaterialVisible(_ visible: Bool) {
-    material.isHidden = !visible
+    backdropView.isHidden = !visible
   }
 
   @available(*, unavailable)

@@ -142,7 +142,7 @@ private struct FullscreenDisclosureContent: View {
       .frame(width: width, height: 36)
       .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
       .background {
-        ToolbarGlassSurface(presentation: presentation, cornerRadius: BrowserLayout.contentCornerRadius)
+        ToolbarGlassSurface(presentation: presentation, cornerRadius: BrowserLayout.contentCornerRadius, component: .fullscreenDisclosure)
       }
       .modifier(GlassComponentVisibility(isVisible: presentation.isVisible))
       .accessibilityHidden(!presentation.isVisible)

@@ -74,7 +74,7 @@ private struct PageZoomIndicatorContent: View {
       .frame(width: 80, height: 36)
       .modifier(GlassComponentContentVisibility(isVisible: presentation.isVisible))
       .background {
-        ToolbarGlassSurface(presentation: presentation, cornerRadius: BrowserLayout.contentCornerRadius)
+        ToolbarGlassSurface(presentation: presentation, cornerRadius: BrowserLayout.contentCornerRadius, component: .zoomIndicator)
       }
       .modifier(GlassComponentVisibility(isVisible: presentation.isVisible))
       .accessibilityLabel("Page zoom")
