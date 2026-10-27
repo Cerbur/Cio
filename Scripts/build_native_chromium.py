@@ -435,6 +435,20 @@ def prepare():
           '  if (cio::IsHostedBrowser()) return nullptr;\n'
           '#endif')
 
+    # Chrome toasts require a Views anchor that the AppKit shell does not own.
+    # Reject them before ShowToast starts a timer or installs toast state;
+    # CreateToast otherwise aborts at CHECK_IS_TEST when no anchor exists.
+    # Clipboard operations and their enterprise checks remain upstream-owned.
+    toast = "chrome/browser/ui/toasts/toast_controller.cc"
+    patch(toast, '#include "chrome/browser/ui/fullscreen_util_mac.h"',
+          '#include "chrome/browser/ui/fullscreen_util_mac.h"\n'
+          '#include "chrome/browser/ui/cio/CioNativeRuntime.h"')
+    patch(toast, 'bool ToastController::CanShowToast(ToastId toast_id) const {',
+          'bool ToastController::CanShowToast(ToastId toast_id) const {\n'
+          '#if BUILDFLAG(IS_MAC)\n'
+          '  if (cio::IsHostedBrowser()) return false;\n'
+          '#endif')
+
     # Native installers know standard Chrome/Chromium directories, not Cio's
     # custom user-data directory. Resolve their manifests without copying them
     # or changing origin, executable, enterprise-policy or host validation.

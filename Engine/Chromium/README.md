@@ -129,6 +129,16 @@ DevTools 使用 Cio 容器，当前固定为停靠模式。
 
 ## 验证记录
 
+2026-10-22：右键复制图片后，Chromium 的图片已复制 Toast 在 Cio 中没有
+Chrome Views 锚点，`CreateToast` 触发 `CHECK_IS_TEST`，导致主进程 SIGABRT。
+宿主模式现通过 `CanShowToast` 拒绝 Chrome 外壳专属 Toast，在设置显示状态、
+启动定时器之前返回；图片复制及企业剪贴板策略仍由 Chromium 原实现处理。
+此入口也覆盖复制链接、视频帧等同类提示，普通 Chrome 的 Toast 保持原行为。
+`PYTHONDONTWRITEBYTECODE=1 python3 Scripts/verify_clipboard_toast.py` 提取实际
+图片复制、Toast 准入和锚点检查代码进行隔离回归：修复前退出 -6；修复后
+覆盖重复复制、无 frame／controller、普通 Chrome 提示与策略准入。
+此检查不启动应用或访问系统剪贴板，不代表端到端图片粘贴验收。
+
 2026-10-20：FedCM 登录账号选择气泡在没有 Views 页面锚点的 Cio 窗口中
 触发 `CreateBubbleWidget` 的父窗口断言，导致主进程 SIGABRT。
 `Native/CioFedCmDialogs.*` 保留 Chromium 原有气泡／模态内容与账号决策，
